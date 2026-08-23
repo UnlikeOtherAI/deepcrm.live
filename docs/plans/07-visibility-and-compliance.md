@@ -97,7 +97,7 @@ Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surf
 
 **Depends on:** T48. **Spec:** `docs/schema-engine.md` §3a.
 
-**Files:** edit `packages/schema-engine/src/schema/mutate.ts` — normalize-affecting config changes refused without the key-recompute backfill Task (`worker/src/jobs/key-recompute.ts`, create); select/status option archive (never delete while referenced; archived = valid stored, invalid new); bounds-tightening MRTR + grandfathering; sensitivity-raise/archive/toSearchText-change ⇒ bulk `record.reindex` Task in the same commit. Tests (DB): defaultRegion change without backfill refused, with backfill re-hashes keys; archived option readable/filterable but unwritable; sensitivity raise reindexes (search content loses the value); grandfathered over-length value survives until its attribute is next written.
+**Files:** edit `packages/schema-engine/src/schema/mutate.ts` — normalize-affecting config changes refused without the key-recompute backfill Task (`worker/src/jobs/key-recompute.ts`, create); select/status option archive (never delete while referenced; archived = valid stored, invalid new); bounds-tightening MRTR + grandfathering; sensitivity-raise/archive/toSearchText-change ⇒ bulk `record.reindex` Task in the same commit. Tests (DB): text-normalisation change without backfill refused, with backfill re-hashes keys; archived option readable/filterable but unwritable; sensitivity raise reindexes (search content loses the value); grandfathered over-length value survives until its attribute is next written.
 
 **Acceptance:** engine + worker tests green.
 

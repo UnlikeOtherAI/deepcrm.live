@@ -35,8 +35,8 @@ export type Actor = z.infer<typeof Actor>
 
 ```ts
 export const CurrencyValue = z.object({
-  amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/).describe('decimal as string, up to 4 dp'),
-  currency: z.string().length(3).toUpperCase().describe('ISO 4217'),
+  amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/).describe('canonical non-exponent decimal string; never rounded'),
+  currency: z.string().regex(/^[A-Z]{3}$/).describe('ISO 4217 uppercase code'),
 })
 export const LocationValue = z.object({
   line1: z.string().max(200).optional(), line2: z.string().max(200).optional(),
@@ -71,18 +71,18 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rich_text') }),
   z.object({ type: z.literal('number'), precision: z.number().int().min(0).max(10).optional(),
              min: z.number().optional(), max: z.number().optional() }),
-  z.object({ type: z.literal('currency'), defaultCurrency: z.string().length(3).default('USD'),
-             fixedCurrency: z.string().length(3).optional()
+  z.object({ type: z.literal('currency'), defaultCurrency: z.string().regex(/^[A-Z]{3}$/).default('USD'),
+             fixedCurrency: z.string().regex(/^[A-Z]{3}$/).optional()
                .describe('pin every value to one currency so range filters are comparable') }),
   z.object({ type: z.literal('percent') }),
   z.object({ type: z.literal('boolean') }),
   z.object({ type: z.literal('date') }),
   z.object({ type: z.literal('datetime') }),
-  z.object({ type: z.literal('select'), options: z.array(SelectOption).min(1).max(200) }),
-  z.object({ type: z.literal('status'), options: z.array(StatusOption).min(2).max(50) }),
+  z.object({ type: z.literal('select'), options: z.array(SelectOption).min(1).max(200).describe('option ids are unique') }),
+  z.object({ type: z.literal('status'), options: z.array(StatusOption).min(2).max(50).describe('ids unique; positions contiguous from zero') }),
   z.object({ type: z.literal('rating'), max: z.number().int().min(1).max(10).default(5) }),
   z.object({ type: z.literal('email') }),
-  z.object({ type: z.literal('phone'), defaultRegion: z.string().length(2).default('GB') }),
+  z.object({ type: z.literal('phone') }),
   z.object({ type: z.literal('url') }),
   z.object({ type: z.literal('domain') }),
   z.object({ type: z.literal('registry_id'), jurisdiction: z.string().length(2).optional() }),
@@ -96,7 +96,7 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('timestamp_system'),
              source: z.enum(['created_at','updated_at','last_activity_at']) }),
   z.object({ type: z.literal('json'), schema: z.record(z.unknown()).optional()
-             .describe('optional JSON Schema the value must satisfy') }),
+             .describe('optional Draft 2020-12 JSON Schema; Ajv v8, no external refs; value max 64 KiB') }),
 ])
 ```
 

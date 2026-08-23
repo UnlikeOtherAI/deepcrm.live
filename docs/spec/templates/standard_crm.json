@@ -36,10 +36,7 @@
           "type": "phone",
           "is_multi": true,
           "sensitivity": "confidential",
-          "config": {
-            "type": "phone",
-            "defaultRegion": "GB"
-          }
+          "config": { "type": "phone" }
         },
         {
           "slug": "title",

@@ -866,7 +866,7 @@ type AttributeTypeDef = {
 | `status` | option id | `{options: [{id, label, category: open\|won\|lost\|neutral, position}]}` | option id | pipeline stages; never `isMulti` |
 | `rating` | int 0–`max` | `{max: 5}` | — | |
 | `email` | RFC 5322 address | — | lower-case, strip display name | unique-capable |
-| `phone` | E.164 string | `{defaultRegion}` | E.164 via `libphonenumber-js` | unique-capable |
+| `phone` | international number (`+` required; whitespace accepted) | — | canonical E.164 via `libphonenumber-js`; no regional guessing | unique-capable |
 | `url` | absolute http(s) URL | — | lower host, strip trailing slash | |
 | `domain` | hostname | — | registrable domain (`tldts`), lower | unique-capable |
 | `registry_id` | company/registry number string | `{jurisdiction?}` | uppercase; strip spaces, hyphens, dots; strip leading zeros | unique-capable; the one normalizer for Companies-House-style ids (R19) |
@@ -879,11 +879,15 @@ type AttributeTypeDef = {
 
 Registry notes: `currency`, `percent`, `rating` and `location` have no `normalize` and therefore cannot back a unique key or a matching rule — stated here so nobody designs a match rule on money (R19). `isMulti` is **immutable after define**, like `type` and `slug` (R19). Each type's `toSearchText` follows its `normalize` where present; `rich_text` **is** included in search content as stripped markdown truncated to 2 KiB per value (R14); composite quantity values (number + unit + tolerance) are an open question (brief §9).
 
+Capability matrix (`multi`, `unique`, `indexed`): text Y/Y/Y; rich_text Y/N/N; number Y/Y/Y; currency Y/N/N; percent Y/N/Y; boolean Y/Y/Y; date Y/Y/Y; datetime Y/Y/Y; select Y/Y/Y; status N/N/Y; rating Y/N/Y; email Y/Y/Y; phone Y/Y/Y; url Y/Y/Y; domain Y/Y/Y; registry_id Y/Y/Y; location Y/N/N; personal_name Y/Y/N; actor_reference Y/Y/N; record_reference Y/N/Y; timestamp_system N/N/N; json Y/N/N. `record_reference` indexing is satisfied only by the existing `record_links` indexes and `EXISTS` compilation; it creates no JSON expression index.
+
+Validation details: number precision rejects excess fractional precision rather than rounding, uses `decimal.js`, and stores canonical non-exponent decimals. Dates are real Gregorian `YYYY-MM-DD`; datetimes require RFC3339 with `Z` or an explicit offset and normalize to UTC millisecond `Z`. Currency codes are ISO4217; `fixedCurrency` requires that code and comparisons otherwise remain explicitly currency-agnostic. Select ids are unique; status ids and positions are unique, positions contiguous from zero. URLs require absolute http(s), lowercase host, remove a trailing slash only from an otherwise empty path, and preserve meaningful path/query. Domains accept a hostname or absolute http(s) URL and normalize with `tldts` to lowercase registrable domain. JSON Schema validation uses Draft 2020-12 with Ajv v8, no external references; Ajv is a direct T09 dependency.
+
 Reserved attribute slugs on every object type (system, not stored in `data`): `id`, `created_at`, `updated_at`, `last_activity_at`, `display_name`, `owner`.
 
 ## 3a. Schema evolution over live data (R9)
 
-- **Config changes that alter `normalize`** (`phone.defaultRegion`, text normalisation, select option ids) are refused with `SCHEMA_CONFLICT` unless run with a **key-recompute backfill Task** (MRTR states the affected row count) that rewrites `record_unique_keys`/`record_match_keys` hashes — a silent config change would strand every stored hash and make asserts mint duplicates.
+- **Config changes that alter `normalize`** (text normalisation, select option ids) are refused with `SCHEMA_CONFLICT` unless run with a **key-recompute backfill Task** (MRTR states the affected row count) that rewrites `record_unique_keys`/`record_match_keys` hashes — a silent config change would strand every stored hash and make asserts mint duplicates.
 - **Select/status options are archivable, never deletable while referenced.** An archived option remains a valid *stored* value (reads, filters, history) and an invalid value for *new writes*; `crm_attribute_update` reports the live-value count via MRTR before archiving an option.
 - **Tightening bounds** (`maxLength`, `min`/`max`, `rating.max`) over existing values: MRTR reports violations; stored values are **grandfathered** — they stay valid until the next write touches that attribute on that record.
 - **Raising `sensitivity` past `internal`, or archiving an attribute with values, enqueues a bulk `record.reindex` Task for the object type in the same commit** (MRTR states the record count; the tool result names the Task) — stored search content and embeddings must stop carrying the now-sensitive value (R5a). The same trigger applies to config changes that alter `toSearchText`.

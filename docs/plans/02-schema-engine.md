@@ -8,12 +8,12 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 **Files (create) in `packages/schema-engine/src/attribute-types/`:**
 - `types.ts` — `AttributeTypeDef`, `FilterOp` union (`eq neq in not_in is_null is_not_null contains starts_with gt gte lt lte between`).
-- One file per type listed in §3 (`text.ts`, `rich-text.ts`, `number.ts`, `currency.ts`, `percent.ts`, `boolean.ts`, `date.ts`, `datetime.ts`, `select.ts`, `status.ts`, `rating.ts`, `email.ts`, `phone.ts`, `url.ts`, `domain.ts`, `location.ts`, `personal-name.ts`, `actor-reference.ts`, `record-reference.ts`, `timestamp-system.ts`, `json.ts`), each exporting `const def: AttributeTypeDef`.
-- `registry.ts` — `export const attributeTypes: Record<AttributeType, AttributeTypeDef>`; `getAttributeType(type)`.
+- Exactly 22 per-type files: `text`, `rich-text`, `number`, `currency`, `percent`, `boolean`, `date`, `datetime`, `select`, `status`, `rating`, `email`, `phone`, `url`, `domain`, `registry-id`, `location`, `personal-name`, `actor-reference`, `record-reference`, `timestamp-system`, `json`; plus `types.ts`, `registry.ts`, `index.ts` = exactly 25 production files.
+- `registry.ts` — `export const attributeTypes: Record<AttributeType, AttributeTypeDef>`; `getAttributeType(type)`; exact key equality with all 22 `AttributeType` values.
 - `index.ts`.
-- Tests `attribute-types.test.ts`: for every type, a valid value passes, an invalid fails; `normalize` cases: `email` `" Anna@Example.COM "` → `anna@example.com`; `phone` `"+44 20 7946 0958"` → `+442079460958`; `domain` `"https://www.Example.co.uk/x"` → `example.co.uk`; `personal_name` derives `full`; `currency` rejects `amount: 1.005` as number (must be string).
+- Direct dependencies: `ajv@^8` (Draft 2020-12, no external refs) and `decimal.js` (reject-not-round number precision, canonical non-exponent decimals). Tests cover the full capability matrix: text YYY; rich_text YNN; number YYY; currency YNN; percent YNY; boolean YYY; date YYY; datetime YYY; select YYY; status NNY; rating YNY; email YYY; phone YYY; url YYY; domain YYY; registry_id YYY; location YNN; personal_name YYN; actor_reference YYN; record_reference YNY; timestamp_system NNN; json YNN. Cover phone `+` international input/no guessing, domain hostname or http(s) URL→tldts registrable lowercase, JSON 2020-12/Ajv/no refs/64KiB, Gregorian date, RFC3339 offset→UTC millisecond Z, select unique ids/status unique contiguous positions, ISO/fixed currency, URL canonicalization, and record_reference’s record_links/EXISTS-only indexing.
 
-**Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/schema-engine` green; `ls packages/schema-engine/src/attribute-types/*.ts | wc -l` ≥ 24.
+**Acceptance:** engine tests green; registry keys equal `AttributeType` exactly; `find packages/schema-engine/src/attribute-types -maxdepth 1 -name '*.ts' | wc -l` prints `25`.
 
 ---
 
