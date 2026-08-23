@@ -84,7 +84,7 @@ Both exit 0.
 
 ---
 
-### T03 — Prisma schema and initial migration
+### T03 ✅ — Prisma schema and initial migration
 
 **Depends on:** T02. **Spec:** `docs/schema-engine.md` §2 (copy verbatim), `docs/testing.md` "Local database".
 
