@@ -155,7 +155,7 @@ curl prints `{"ok":true,…}`.
 
 ---
 
-### T06 — Audit chain and queue package
+### T06 ✅ — Audit chain and queue package
 
 **Depends on:** T05. **Spec:** `docs/auth-and-tenancy.md` §6; `docs/schema-engine.md` §2 (`QueueJob`).
 
