@@ -53,7 +53,7 @@ Outcome: the monorepo installs, lints, typechecks; Prisma migrations apply to a 
   - `packages/schema-engine` (`@deepcrm/schema-engine`, deps: `@deepcrm/schemas`, `@deepcrm/db`, `zod`, `libphonenumber-js@^1.11.0`, `tldts@^6.1.0`, `fast-check` devDep)
   - `packages/mcp-inbound` (`@deepcrm/mcp-inbound`, deps: `jose@^5.9.6`, `zod`, `@deepcrm/schemas`)
   - `packages/queue` (`@deepcrm/queue`, deps: `@deepcrm/db`, `zod`)
-  - `api` (`@deepcrm/api`, deps: `fastify@^5.8.4`, `@modelcontextprotocol/sdk@^1.30.0`, `zod`, all `@deepcrm/*` workspace packages; scripts `dev: tsx watch --poll src/index.ts`, `start: node dist/index.js`)
+  - `api` (`@deepcrm/api`, deps: `fastify@^5.8.4`, `@modelcontextprotocol/sdk@^1.30.0`, `zod`, all `@deepcrm/*` workspace packages; scripts `dev: tsx watch src/index.ts`, `start: node dist/index.js`)
   - `worker` (`@deepcrm/worker`, deps: `@deepcrm/db`, `@deepcrm/queue`, `@deepcrm/schema-engine`, `@deepcrm/schemas`)
 
 **Steps:** create the files; `pnpm install`; `git init` if needed; commit.
@@ -129,6 +129,7 @@ Last command prints `1`.
 - `api/src/app.ts` — `export function buildApp(deps: AppDeps): FastifyInstance` registering only `routes/health.ts`; `trustProxy: env.DEEPCRM_TRUSTED_PROXY_HOPS`; `logger` with redaction of `authorization`, `x-uoa-delegation`, `x-nessie-context`.
 - `api/src/routes/health.ts` — `GET /health` → `{ ok: true, version, db: 'ok' | 'error' }` (runs `SELECT 1`); 503 when db errors.
 - `api/src/index.ts` — parse env, create deps, `buildApp` (body limit `DEEPCRM_MAX_BODY_BYTES`), **fail-closed boot check** (auth-and-tenancy §1: refuse `REQUIRE_AUTH=false` outside localhost/production), listen on `DEEPCRM_API_PORT` host `0.0.0.0`; if `DEEPCRM_PROCESS_MODE` is `all`, also `import('@deepcrm/worker')` and call `startWorker(deps, handlers)` — `worker/src/index.ts` exports `startWorker(deps: WorkerDeps, handlers: Record<string, JobHandler>)` from the start (T04 passes `{}`; T07 fills the registry and this call site already matches). Mode `worker` ⇒ only worker. Graceful shutdown on SIGTERM.
+- `worker/src/index.ts` — T04 process-mode seam: export structural `WorkerDeps`, `JobHandler`, and `startWorker(deps, handlers)`; accept the deliberately empty T04 registry without background work and reject nonempty registries until T07 replaces it with the queue loop.
 - `api/test/health.test.ts` — `buildApp` with a fake db (`$queryRaw` resolves) → `inject GET /health` → 200 body `ok: true`.
 
 **Acceptance:**

@@ -50,6 +50,9 @@ importers:
       '@deepcrm/schemas':
         specifier: workspace:*
         version: link:../packages/schemas
+      '@deepcrm/worker':
+        specifier: workspace:*
+        version: link:../worker
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
