@@ -141,7 +141,7 @@ curl prints `{"ok":true,…}`.
 
 ---
 
-### T05 — Dev principal and request context
+### T05 ✅ — Dev principal and request context
 
 **Depends on:** T04. **Spec:** `docs/auth-and-tenancy.md` §1–§3.
 
