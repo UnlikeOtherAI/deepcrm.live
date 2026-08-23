@@ -1,0 +1,2319 @@
+Reading additional input from stdin...
+OpenAI Codex v0.145.0
+--------
+workdir: /Volumes/External/Projects/deepcrm.live
+model: k3-256k
+provider: kimi
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 01a03023-0f2d-7271-a51b-44c4ca8cd511
+--------
+user
+You are a security red team reviewing the design docs of DeepCRM (headless multi-tenant CRM whose only surface is an MCP server; docs only, no code yet). Read ALL of: docs/auth-and-tenancy.md, docs/spec/contracts.md, docs/spec/events.md, docs/spec/nessie-integration.md, docs/spec/protocol-flows.md, docs/spec/policy-defaults.json, docs/architecture.md, docs/schema-engine.md, docs/mcp-surface.md. Your angle: BREAK THE SECURITY MODEL. Attack: cross-tenant isolation (any path where organization_id/team_id could come from arguments or be omitted), the three-header auth model (app key hashing, JWT verification gaps, replay of X-Nessie-Context within its 300s TTL, sub-mismatch edge cases, dev principal leaking into prod), approval-token abuse (MRTR approval flow F6 — who can mint/consume, arguments_hash gaps, approver role read from delegation claim), policy engine bypasses (deny-overrides ordering, conditions on sensitivity, agent-inheritance rule), attribute-level redaction leaks (search documents, change feed, timeline, webhooks-as-admin, display_name built from restricted values, _n shadow keys in data), SSRF via crm_webhook_set and export URL signing, secrets handling (webhook secret shown once, keyring), audit-chain gaps, DoS vectors (unbounded filters, fuzzy trigram scans, bulk rows, json attribute size). For every finding: severity, exact doc+section, attack scenario, concrete fix. Do NOT modify any existing file. Write full findings to reviews/2-security-redteam.md (create it). No praise.
+exec
+/bin/zsh -lc 'ls docs docs/spec reviews 2>/dev/null; wc -l docs/auth-and-tenancy.md docs/spec/contracts.md docs/spec/events.md docs/spec/nessie-integration.md docs/spec/protocol-flows.md docs/spec/policy-defaults.json docs/architecture.md docs/schema-engine.md docs/mcp-surface.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+docs:
+architecture.md
+auth-and-tenancy.md
+brief.md
+deployment.md
+mcp-surface.md
+plans
+schema-engine.md
+spec
+testing.md
+
+docs/spec:
+contracts.md
+events.md
+nessie-integration.md
+policy-defaults.json
+protocol-flows.md
+templates
+
+reviews:
+1.log
+2.log
+      92 docs/auth-and-tenancy.md
+     465 docs/spec/contracts.md
+      80 docs/spec/events.md
+      57 docs/spec/nessie-integration.md
+     134 docs/spec/protocol-flows.md
+      29 docs/spec/policy-defaults.json
+     134 docs/architecture.md
+     748 docs/schema-engine.md
+     144 docs/mcp-surface.md
+    1883 total
+
+exec
+/bin/zsh -lc 'cat docs/spec/protocol-flows.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Protocol flows
+
+Wire-level sequences for the interactions that define the product. JSON-RPC bodies are abbreviated to the parts that matter; every `tools/call` carries MCP 2026-07-28 `_meta` (`io.modelcontextprotocol/protocolVersion`, `clientCapabilities`) and the HTTP headers `Mcp-Method: tools/call`, `Mcp-Name: <tool>`.
+
+## F1 — Authenticated call
+
+```
+Nessie worker ──POST /mcp──────────────────────────────────────────────▶ deepcrm-api
+  Authorization: Bearer dck_…            (app key, SHA-256 matched to DEEPCRM_APP_KEYS)
+  X-UOA-Delegation: eyJ…                 (RS256; sub/org/team/tv/scope)
+  X-Nessie-Context: eyJ…                 (RS256; agentId/runId/toolCallId/requestId; ttl ≤ 300s)
+  { "jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"crm_record_get","arguments":{"id":"…"}} }
+
+deepcrm-api: authenticate → Principal
+             resolveTenant(org, team) → (organization_id, team_id)   [upsert 1:1 mirrors]
+             buildActorContext → actor = agent:<agentId>, onBehalfOf = sub
+             buildMcpServer(ctx) → transport.handleRequest
+             tool → service(ctx, args) → policy → engine → redact
+◀── 200 { "result": { "content":[{"type":"text","text":"Anna Novak (person)"}],
+                      "structuredContent": { "record": { … } } } }
+```
+Failure: any header invalid ⇒ `401` + `WWW-Authenticate: Bearer resource_metadata="https://api.deepcrm.live/.well-known/oauth-protected-resource"`; no JSON-RPC body.
+
+## F2 — Session start (schema discovery)
+
+```
+tools/list            ← _meta cache { ttlMs: 300000, cacheScope: "tenant" }, etag = schema_version
+resources/read crm://schema   → SchemaSnapshot (object types, relations, rules)
+resources/read crm://schema/deal → ObjectTypeDetail (attributes with descriptions)
+```
+The agent caches both by `schema_version`; a `schema.changed` event or a `SCHEMA_CONFLICT`/`UNKNOWN_ATTRIBUTE` error is the cue to re-read.
+
+## F3 — Create with duplicate detection
+
+```
+tools/call crm_record_create { object_type:"company", data:{ name:"Asahi Europe", domains:["asahi.eu"] } }
+
+case A  no match          → { record, version:1 }                       + record.created event
+case B  warn rule (fuzzy name 0.6 vs "Asahi Europe Ltd")
+                          → { record, duplicates:[{ record:{id,…}, rule_position:1,
+                                evidence:[{kind:"fuzzy",attribute:"name",score:0.71}] }] }
+case C  unique domain collision / block rule
+                          → isError { code:"DUPLICATE_FOUND", attribute:"domains", record_id:"…",
+                                candidates:[…] }
+```
+Agent's follow-ups for C: `crm_record_assert` (update the existing), or `crm_merge_records` if two already exist.
+
+## F4 — Sync-safe upsert (assert)
+
+```
+crm_record_assert { object_type:"person", match_attribute:"emails",
+                    data:{ emails:["anna@asahi.eu"], name:{full:"Anna Novak"}, company:"<companyId>" },
+                    idempotency_key:"gmail:msg:18f2…" }
+→ { record, created:true }            first time
+→ { record, created:false }           later sync, same email: patch applied, version+1 (no-op patch ⇒ no change rows)
+→ same idempotency_key + same args    → identical stored result, no write
+→ same key + different args           → isError IDEMPOTENCY_MISMATCH
+```
+
+## F5 — Confirmation (MRTR) on a destructive schema change
+
+```
+crm_attribute_archive { object_type:"person", attribute:"fax" }
+← { "resultType":"input_required",
+    "inputRequests":[{ "id":"confirm","kind":"confirmation",
+       "message":"Archiving 'fax' hides 12 existing values (kept in history). Proceed?",
+       "schema":{…confirmed:boolean…} }] }
+
+crm_attribute_archive { object_type:"person", attribute:"fax" }  + inputResponses:{ confirm:{ confirmed:true } }
+← { archived:true, records_with_values:12 }                      + schema.changed event
+```
+
+## F6 — Approval (MRTR + human in Nessie)
+
+```
+agent (member) → crm_merge_records { survivor_id:A, merged_ids:[B], reason:"same person, two emails" }
+← input_required [{ id:"approval", kind:"approval", approval_token:"apr_…", expires_at:+24h,
+     required_role:"admin", message:"Merge 'Anna Novak' (B) into 'Anna Nováková' (A)?" }]
+     (server: approval_requests row pending, arguments_hash stored)
+
+agent → posts the question in the Nessie channel; an admin replies "yes"
+agent (same run or later, principal now carries the admin's delegation) →
+  crm_merge_records { …identical args… } + inputResponses:{ approval:{ approval_token:"apr_…", approved:true } }
+← { record:A, merge_change_id:"…", repointed_links:3 }           approval row → consumed; audit: approval.consumed
+
+rejections: approved:false ⇒ row rejected, tool returns isError POLICY_DENIED { detail:"approval rejected" }
+            different args  ⇒ APPROVAL_REQUIRED { detail:"arguments changed since approval" }
+            member re-issues ⇒ APPROVAL_REQUIRED { detail:"approver must be admin or owner" }
+```
+
+## F7 — Long-running work (Tasks extension)
+
+```
+crm_records_bulk_assert { object_type:"person", match_attribute:"emails", rows:[…2,000…] }
+← { task_id:"job_…" }
+tasks/get { taskId:"job_…" }  → { status:"working", progress:{ done:600, total:2000 } }
+tasks/get                     → { status:"completed", result:{ created:1800, updated:190, failed:[{index:77,code:"VALIDATION_FAILED",message:"emails[0]: invalid"}] } }
+tasks/cancel                  → only while queued; running jobs finish their current batch then stop, status "cancelled"
+```
+
+## F8 — Reacting to changes (scheduled agent)
+
+```
+trigger fires (Nessie schedule, state.cursor = "1040")
+crm_changes_since { cursor:"1040", object_types:["deal"], kinds:["set"] }
+← { changes:[{ seq:"1041", kind:"set", attribute:"stage", old_value:"proposal", new_value:"negotiation", record:{…} }, …],
+    next_cursor:"1077", has_more:false }
+agent acts (e.g. crm_task_create "Draft contract" about the deal), stores next_cursor in trigger state
+```
+
+## F9 — Timeline read for a human question
+
+```
+"What's going on with Asahi?" →
+crm_record_get { object_type:"company", match_attribute:"domains", value:"asahi.eu", include_links:true }
+crm_record_timeline { id:<companyId>, hops:1, limit:30 }
+← items: [ activity(call, about:[Anna, deal]), change(deal.stage proposal→negotiation), task(open "Draft contract"), … ]
+```
+
+## F10 — Tenant provisioning (first call from a new team)
+
+```
+authenticate ok, team unknown →
+  INSERT organizations (external_org_id)  [if absent]
+  INSERT teams (external_team_id, schema_version 0)
+  seedDefaultPolicies(team)                         (docs/spec/policy-defaults.json)
+  applyTemplate(team, "system")                    (activity, note, task)
+  audit: tenant.provisioned
+→ the original tool call proceeds. `standard_crm` is NOT auto-applied; the agent calls crm_template_apply.
+```
+
+## F11 — Webhook delivery
+
+See `events.md` §3. Sequence: write commits → `enqueue change.deliver (visible +30 s)` → worker locks webhook → selects `seq > last_delivered_seq` → POST with signature → 2xx advances cursor → else backoff.
+
+exec
+/bin/zsh -lc 'cat docs/auth-and-tenancy.md docs/spec/nessie-integration.md docs/spec/policy-defaults.json' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Auth, tenancy and policy
+
+## 1. Inbound MCP authentication
+
+Every `/mcp` request is authenticated independently (the protocol is stateless; there is no session). Three headers, three independent proofs — the DeepSignal `auth/mcp-inbound.ts` model:
+
+| Header | Proves | Verification |
+|---|---|---|
+| `Authorization: Bearer <app key>` | the calling **product** (Nessie deployment) | SHA-256 of the key compared (timing-safe) against `DEEPCRM_APP_KEYS` (`name:sha256hex,…`). The name becomes `principal.app`. |
+| `X-UOA-Delegation: <JWT>` | the **human** and **workspace** the call acts for | RS256 via `UOA_JWKS_URL`; `iss = UOA_ISSUER`, `aud = UOA_AUDIENCE` (= `DEEPCRM_API_PUBLIC_URL`), `exp`; claims `sub` (UOA user id), `org` (UOA organisation id), `team` (UOA team id), `tv` (credential epoch), `scope` contains `ai.invoke`. |
+| `X-Nessie-Context: <JWT>` | **agent/run provenance** | RS256 via `NESSIE_CONTEXT_JWKS_URL`; max TTL 300 s, 30 s skew; claims `agentId`, `runId`, `toolCallId`, `requestId`, `sub` = same UOA user as the delegation (mismatch ⇒ 401). |
+
+Rules:
+- All three required when `REQUIRE_AUTH=true`. Missing/invalid ⇒ HTTP 401 with `WWW-Authenticate: Bearer resource_metadata="<DEEPCRM_API_PUBLIC_URL>/.well-known/oauth-protected-resource"` (RFC 9728).
+- With `REQUIRE_AUTH=false` (local dev only) the server serves the **dev principal**: `app=dev`, `user=usr_dev`, `org=org_dev`, `team=team_dev`, `agent=agent_dev`.
+- Headers are read case-insensitively; a request carrying *both* a valid delegation and a different `sub` in the context is rejected.
+- The principal is bound into the per-request `McpServer`; tool handlers receive `ctx` and **never** accept `organizationId`/`teamId`/`userId` arguments.
+
+Future (brief §9 Q3): a non-Nessie client presenting only a UOA OAuth token (CIMD per MCP 2026-07-28). The seam is `packages/mcp-inbound/src/authenticate.ts` returning `Principal`; adding a second strategy does not touch tools.
+
+## 2. Principal and ActorContext
+
+```ts
+type Principal = {
+  app: string                    // app key name
+  uoaUserId: string
+  uoaOrgId: string
+  uoaTeamId: string
+  credentialEpoch: number        // tv
+  agentId: string | null         // null when a human calls directly (future)
+  provenance: { runId: string; toolCallId: string; requestId: string } | null
+}
+
+type ActorContext = {
+  tenant: { organizationId: string; teamId: string }   // local ids, resolved 1:1 from UOA ids
+  actor: { type: 'human' | 'agent' | 'system'; id: string }  // agent when agentId present, else human
+  onBehalfOf: { uoaUserId: string }                     // always the human
+  provenance: Principal['provenance']
+  requestId: string
+  now: Date
+}
+```
+
+`actor` is the agent when `agentId` is present (the agent did the write, for the human). Policy is evaluated for **both**: the agent binding and the human's role — a deny on either denies.
+
+## 3. Tenancy
+
+- `organizations.external_org_id` ⇔ UOA organisation id (unique). `teams.external_team_id` ⇔ UOA team id (unique), `teams.organization_id` FK.
+- `resolveTenant(principal)` upserts both rows (name placeholders `Organisation <id8>`, `Team <id8>`; names are non-authoritative mirrors — DeepCRM stores no other UOA data) and returns local ids. Runs once per request, cached in-process by UOA ids for 60 s.
+- Every CRM table carries `organization_id` **and** `team_id`; every query filters on both. `tenant_scope.ts` exports `tenantWhere(ctx)` and there is a lint rule: any `prisma.<crmTable>.find*` call without `...tenantWhere(ctx)` fails (`scripts/lint-tenant-where.mjs`).
+- Tenant deletion cascades CRM data; `audit_logs` has no FK and survives.
+
+## 4. Policy
+
+Tables `policy_rules` and `policy_bindings` as in nessie (`docs/schema-engine.md` §2.10).
+
+```
+PolicyScope        organization | team | object_type | record | list
+PolicyResourceType schema | object_type | attribute | record | link | list | view | merge | export | webhook | approval
+PolicyAction       view | create | edit | delete | link | merge | export | define | admin
+PolicyEffect       allow | deny
+actorType          human | agent | role        (role ∈ owner | admin | member — from UOA team role claim `role` if present, else member)
+```
+
+`checkPolicy(ctx, resourceType, action, scopeChain)`:
+1. Collect rules for the tenant where `(resourceType, action)` match and `scope/scopeId` is in the chain `[record?, object_type?, team, organization]`.
+2. Bindings matching the actor: `agent:<agentId>`, `human:<uoaUserId>`, `role:<role>`.
+3. Order by `priority` desc; first matching rule's effect wins **except** any matching `deny` at equal-or-higher priority wins (deny-overrides).
+4. No matching rule ⇒ the **default table** below.
+
+Defaults seeded per team on first resolve (as rows, so they are editable):
+
+| resource.action | member | admin/owner |
+|---|---|---|
+| record.view/create/edit/link | allow | allow |
+| record.delete | deny | allow |
+| schema.define, object_type.*, attribute.*, relation_type.* | deny | allow |
+| merge.merge | deny (approval) | allow |
+| export.export | deny (approval) | allow |
+| webhook.admin | deny | allow |
+| attribute.view where sensitivity=restricted | deny | allow |
+| attribute.edit where sensitivity=confidential | deny | allow |
+
+"deny (approval)" means the tool returns MRTR `input_required` with an approval token instead of a hard denial; an `approval_requests` row is created; re-issuing the call with `inputResponses.approval = { token, approved: true, approverUoaUserId }` from a principal whose role is admin/owner completes it (see `mcp-surface.md` §0.4).
+
+## 5. Attribute sensitivity
+
+`attributes.sensitivity ∈ public | internal | confidential | restricted`. Read path: after policy, `redactForActor(record, schema, ctx)` removes attributes the actor may not view and returns `redacted_attributes: [slug…]`. Search documents exclude `confidential` and `restricted` values. Change-feed rows for restricted attributes carry no values (`old_value`/`new_value` omitted) unless the reader may view them.
+
+## 6. Audit
+
+`audit_logs` — nessie's hash-chained table, verbatim: `actor_type, actor_id, action, resource_type, resource_id, outcome, reason, metadata, request_id, ip_address, user_agent, prev_hash, entry_hash`. Written by `writeAudit(tx, …)` inside the same transaction as the mutation; `entry_hash = sha256(prev_hash ∥ canonical JSON of the row)` per organisation. `scripts/verify-audit-chain.mjs` recomputes the chain.
+# Nessie integration protocol
+
+How a Nessie deployment connects its agents to DeepCRM. Written from DeepCRM's side; the Nessie-side plan (T46) restates it in Nessie vocabulary. Precedents: Nessie's DeepWater (team-scoped tool projection, explicit grants) and DeepSignal (app key + delegation + provenance, product webhook → digest).
+
+## 1. Identity & credentials (three proofs, as DeepSignal)
+
+| Proof | Issued by | Carried as | DeepCRM checks |
+|---|---|---|---|
+| Product app key `dck_…` | DeepCRM operator (`scripts/generate-app-key.mjs nessie`) | `Authorization: Bearer` | SHA-256 in `DEEPCRM_APP_KEYS`; names the calling product |
+| UOA delegation | UOA token exchange, requested by Nessie for the linked user + active team, `aud = https://api.deepcrm.live`, scope `ai.invoke` | `X-UOA-Delegation` | signature, `iss`, `aud`, `exp`, `sub`, `org`, `team`, `tv` |
+| Nessie context | Nessie's RS256 signer (same key set it uses for DeepWater/DeepSignal) | `X-Nessie-Context` | signature via `NESSIE_CONTEXT_JWKS_URL`, ttl ≤ 300 s, `sub` equals delegation `sub` |
+
+Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per user), pinned to the canonical catalog entry whose URL is exactly `https://api.deepcrm.live/mcp`. DeepCRM never receives Nessie's UOA refresh credentials; the delegation token is short-lived and resource-bound.
+
+## 2. Enablement
+
+1. Owner toggles **DeepCRM** for a team in Nessie Integrations.
+2. Nessie provisions a **team-scoped, tool-projecting** `McpServerInstance` from the `deep-crm` catalog entry, probes `tools/list` with a delegation for the enabling owner, and projects every tool as `mcp_crm_<name-without-prefix>` (e.g. `crm_record_assert` → `mcp_crm_record_assert`).
+3. DeepCRM provisions the tenant on that first call (flow F10) — no separate "create workspace" API.
+4. Disable: Nessie removes the instance; DeepCRM data stays (the tenant persists; re-enable reconnects). Deleting a UOA team ⇒ UOA-driven cleanup (out of scope for v1; tracked as an open question).
+
+## 3. Grants (what agents see by default)
+
+| Tools | Default for team agents | Rationale |
+|---|---|---|
+| all read tools, `crm_record_create/update/assert`, `crm_link*`, `crm_activity_log`, `crm_note_add`, `crm_task_*`, `crm_list_*`, `crm_view_*`, `crm_search`, `crm_changes_since`, `crm_pipeline_summary`, `crm_data_quality`, `crm_find_duplicates` | **ON** | cheap, unmetered, reversible, policy-checked server-side |
+| `crm_merge_records`, `crm_unmerge`, `crm_record_delete`, `crm_export`, all schema `define`/archive tools, `crm_matching_rule_set`, `crm_template_apply`, `crm_webhook_*` | `requiresExplicitGrant` — OFF until an owner grants per agent | destructive or structural; DeepCRM additionally enforces policy/approval, so the grant is defence in depth, not the only gate |
+
+Nessie's "tool that takes an id ships with the read that resolves it" rule holds: every granted mutator has its read in the default-ON set.
+
+## 4. Approvals (MRTR ↔ Nessie)
+
+When DeepCRM returns `resultType: "input_required"` with `kind: "approval"`:
+1. The Nessie worker surfaces it to the model as the tool result (it is a normal result, not an error).
+2. The agent asks in-channel; Nessie's existing `ApprovalRequest` may mirror it (`action = "deepcrm:<tool>"`, `context = { approval_token, expires_at }`) so the admin can click Approve.
+3. On approval, Nessie re-issues the **same** `tools/call` with `inputResponses.approval = { approval_token, approved: true }` under a delegation for the **approving admin** (not the original requester) — DeepCRM checks the approver's role from the delegation's team role claim.
+4. Expired tokens (24 h) require a fresh call; DeepCRM keeps the `approval_requests` row for audit.
+
+## 5. Events into Nessie
+
+- Nessie registers one webhook per enabled team via `crm_webhook_set` (run by Nessie's integration code under an owner delegation), URL `https://api.nessie.works/api/integrations/deepcrm/events`, secret stored encrypted per org in Nessie (`PUT /api/integrations/products/deepcrm/webhook-secret`, as for DeepSignal).
+- Envelope: `events.md` §3 (`deepcrm.webhook.v1`). Nessie verifies timestamp + HMAC, dedupes on `seq`, and renders a **rolling digest** message in the team's DeepCRM-bound channel (`"7 CRM changes · 3 deals moved · 2 people added"`, updated in place within a window), never one message per event.
+- Agent automation uses `crm_changes_since` on a schedule with the cursor persisted in trigger state (flow F8).
+
+## 6. Prompts
+
+Nessie may surface DeepCRM prompts (`crm/qualify-lead`, …) as agent skills; they reference `mcp_crm_*` names after projection. Nessie's projector rewrites the `crm_` prefix in prompt text to the projected names at install time.
+
+## 7. Failure modes
+
+| Situation | DeepCRM | Nessie |
+|---|---|---|
+| App key rotated | 401 | instance health `unauthorized`; owner re-enters key |
+| Delegation for a user no longer in the team | 401 (UOA refuses exchange; or DeepCRM `aud`/`team` mismatch) | run fails closed; no fallback identity |
+| DeepCRM down | — | tool error surfaced to the model; retries are the model's choice, never silent |
+| Policy deny | `POLICY_DENIED { resource, action }` | agent says who can do it (nessie's "refuse in words" convention) |
+| Schema drift mid-run | `UNKNOWN_ATTRIBUTE` / `SCHEMA_CONFLICT` | agent re-reads `crm://schema` and retries once |
+{
+  "description": "Rows inserted into policy_rules/policy_bindings for every new team (scope=team, scope_id=<teamId>). Editable per tenant afterwards. Evaluation: deny-overrides, higher priority first; no match falls through to deny for define/merge/export/delete/admin and allow for view/create/edit/link.",
+  "rules": [
+    { "resource_type": "record",      "action": "view",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "record",      "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "record",      "action": "edit",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "record",      "action": "link",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "record",      "action": "delete", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
+    { "resource_type": "record",      "action": "delete", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "link",        "action": "link",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "list",        "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "list",        "action": "edit",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "view",        "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
+    { "resource_type": "schema",      "action": "define", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
+    { "resource_type": "schema",      "action": "define", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "merge",       "action": "merge",  "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
+    { "resource_type": "merge",       "action": "merge",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "export",      "action": "export", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
+    { "resource_type": "export",      "action": "export", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "webhook",     "action": "admin",  "effect": "deny",  "priority": 0,  "bindings": [["role","member"]] },
+    { "resource_type": "webhook",     "action": "admin",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "approval",    "action": "admin",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "attribute",   "action": "view",   "effect": "deny",  "priority": 10, "conditions": { "sensitivity": "restricted" }, "bindings": [["role","member"]] },
+    { "resource_type": "attribute",   "action": "view",   "effect": "allow", "priority": 10, "conditions": { "sensitivity": "restricted" }, "bindings": [["role","admin"],["role","owner"]] },
+    { "resource_type": "attribute",   "action": "edit",   "effect": "deny",  "priority": 10, "conditions": { "sensitivity": "confidential" }, "bindings": [["role","member"]] },
+    { "resource_type": "attribute",   "action": "edit",   "effect": "allow", "priority": 10, "conditions": { "sensitivity": "confidential" }, "bindings": [["role","admin"],["role","owner"]] }
+  ],
+  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<id> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them."
+}
+
+exec
+/bin/zsh -lc 'cat docs/spec/contracts.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Contracts — shared types and every tool's input/output (zod)
+
+Normative. `packages/schemas/src/*` is a verbatim copy of the code blocks below, split by the file names in the headings. Tool registrations in `api/src/mcp/tools/*` import these and nothing else for argument shapes. `docs/mcp-surface.md` is the prose; this file is the types.
+
+Conventions: import lines are shown only in the first block — every other file imports `z` and its sibling modules as used. Every field has `.describe()` (the text agents see). Outputs are **not** validated at runtime (types only) except where noted. `z` is `zod@3.25`.
+
+## `primitives.ts`
+
+```ts
+import { z } from 'zod'
+
+export const Uuid = z.string().uuid().describe('UUID')
+export const Slug = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/)
+  .describe('snake_case identifier, 2–63 chars, starts with a letter')
+export const IsoDateTime = z.string().datetime({ offset: true }).describe('ISO 8601 timestamp')
+export const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('YYYY-MM-DD')
+export const Limit = z.number().int().min(1).max(200).default(50).describe('page size, 1–200')
+export const Cursor = z.string().min(1).optional().describe('opaque cursor from a previous page')
+export const Reason = z.string().max(500).optional()
+  .describe('why this change is being made; stored on the change history')
+export const IdempotencyKey = z.string().min(8).max(128).optional()
+  .describe('replay-safe key: same key + same arguments within 24h returns the original result')
+export const ExpectedVersion = z.number().int().positive().optional()
+  .describe('fail with VERSION_CONFLICT if the record version differs (optimistic concurrency)')
+
+export const ActorType = z.enum(['human', 'agent', 'system'])
+export const Actor = z.object({
+  type: z.enum(['human', 'agent']).describe('human = UOA user, agent = Nessie agent'),
+  id: z.string().min(1).describe('UOA user id or agent id'),
+})
+export type Actor = z.infer<typeof Actor>
+```
+
+## `attribute-values.ts` — value shapes per attribute type
+
+```ts
+export const CurrencyValue = z.object({
+  amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/).describe('decimal as string, up to 4 dp'),
+  currency: z.string().length(3).toUpperCase().describe('ISO 4217'),
+})
+export const LocationValue = z.object({
+  line1: z.string().max(200).optional(), line2: z.string().max(200).optional(),
+  city: z.string().max(120).optional(), region: z.string().max(120).optional(),
+  postal: z.string().max(32).optional(),
+  country: z.string().length(2).toUpperCase().optional().describe('ISO 3166-1 alpha-2'),
+  lat: z.number().min(-90).max(90).optional(), lng: z.number().min(-180).max(180).optional(),
+})
+export const PersonalNameValue = z.object({
+  first: z.string().max(120).optional(), last: z.string().max(120).optional(),
+  full: z.string().max(250).optional().describe('derived from first+last when absent'),
+}).refine(v => v.full || v.first || v.last, 'at least one of first, last, full')
+export const SelectOption = z.object({
+  id: Slug, label: z.string().min(1).max(120), color: z.string().max(32).optional(),
+})
+export const StatusOption = SelectOption.extend({
+  category: z.enum(['open', 'won', 'lost', 'neutral']).describe('pipeline semantics of this stage'),
+  position: z.number().int().min(0),
+})
+```
+
+## `attribute-config.ts` — `attributes.config` per type
+
+```ts
+export const AttributeType = z.enum([
+  'text','rich_text','number','currency','percent','boolean','date','datetime','select','status',
+  'rating','email','phone','url','domain','location','personal_name','actor_reference',
+  'record_reference','timestamp_system','json',
+])
+export const AttributeConfig = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), maxLength: z.number().int().min(1).max(4000).default(4000) }),
+  z.object({ type: z.literal('rich_text') }),
+  z.object({ type: z.literal('number'), precision: z.number().int().min(0).max(10).optional(),
+             min: z.number().optional(), max: z.number().optional() }),
+  z.object({ type: z.literal('currency'), defaultCurrency: z.string().length(3).default('USD') }),
+  z.object({ type: z.literal('percent') }),
+  z.object({ type: z.literal('boolean') }),
+  z.object({ type: z.literal('date') }),
+  z.object({ type: z.literal('datetime') }),
+  z.object({ type: z.literal('select'), options: z.array(SelectOption).min(1).max(200) }),
+  z.object({ type: z.literal('status'), options: z.array(StatusOption).min(2).max(50) }),
+  z.object({ type: z.literal('rating'), max: z.number().int().min(1).max(10).default(5) }),
+  z.object({ type: z.literal('email') }),
+  z.object({ type: z.literal('phone'), defaultRegion: z.string().length(2).default('GB') }),
+  z.object({ type: z.literal('url') }),
+  z.object({ type: z.literal('domain') }),
+  z.object({ type: z.literal('location') }),
+  z.object({ type: z.literal('personal_name') }),
+  z.object({ type: z.literal('actor_reference'),
+             allow: z.array(z.enum(['human','agent'])).default(['human','agent']) }),
+  z.object({ type: z.literal('record_reference'),
+             objectTypes: z.array(Slug).min(1).describe('allowed target object types'),
+             relationTypeSlug: Slug.optional().describe('backing relation; generated when absent') }),
+  z.object({ type: z.literal('timestamp_system'),
+             source: z.enum(['created_at','updated_at','last_activity_at']) }),
+  z.object({ type: z.literal('json'), schema: z.record(z.unknown()).optional()
+             .describe('optional JSON Schema the value must satisfy') }),
+])
+```
+
+## `schema-specs.ts` — definitions and details
+
+```ts
+export const Sensitivity = z.enum(['public','internal','confidential','restricted'])
+export const Cardinality = z.enum(['one_to_one','one_to_many','many_to_one','many_to_many'])
+export const OnDelete = z.enum(['unlink','cascade','restrict'])
+
+export const AttributeSpec = z.object({
+  slug: Slug, name: z.string().min(1).max(120),
+  description: z.string().max(500).describe('shown to agents; say what the value means'),
+  type: AttributeType,
+  config: z.record(z.unknown()).optional().describe('type-specific config; see attribute-config.ts'),
+  is_multi: z.boolean().default(false).describe('accepts an array of values'),
+  is_required: z.boolean().default(false),
+  is_unique: z.boolean().default(false).describe('enforced; enables crm_record_assert on this attribute'),
+  is_indexed: z.boolean().default(false).describe('creates an index for filtering/sorting'),
+  sensitivity: Sensitivity.default('internal'),
+  default_value: z.unknown().optional(),
+})
+export type AttributeSpec = z.infer<typeof AttributeSpec>
+
+export const AttributeDetail = AttributeSpec.extend({
+  id: Uuid, is_system: z.boolean(), position: z.number().int(), archived_at: IsoDateTime.nullable(),
+})
+export const ObjectTypeDetail = z.object({
+  id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(),
+  icon: z.string().nullable(), kind: z.enum(['system','standard','custom']),
+  primary_attribute: Slug.nullable(), attributes: z.array(AttributeDetail),
+  relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(),
+    other_object_type: Slug.nullable(), cardinality: Cardinality })),
+  archived_at: IsoDateTime.nullable(),
+})
+export const RelationTypeDetail = z.object({
+  id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(),
+  forward_name: z.string(), inverse_name: z.string(), description: z.string(),
+  cardinality: Cardinality, on_delete: OnDelete, edge_attributes: z.array(AttributeDetail),
+  is_system: z.boolean(), archived_at: IsoDateTime.nullable(),
+})
+export const MatchingRule = z.object({
+  attributes: z.array(Slug).min(1).max(4),
+  method: z.enum(['exact','normalized','fuzzy']),
+  threshold: z.number().min(0.3).max(1).optional().describe('fuzzy only; trigram similarity'),
+  action: z.enum(['block','warn','allow']),
+})
+export const SchemaSnapshot = z.object({
+  schema_version: z.number().int(),
+  object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true,
+    plural_name: true, description: true, kind: true, primary_attribute: true })
+    .extend({ attribute_count: z.number().int() })),
+  relation_types: z.array(RelationTypeDetail),
+  matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'),
+})
+```
+
+## `records.ts` — record shapes
+
+```ts
+export const RecordData = z.record(Slug, z.unknown()).describe('attribute slug → value')
+
+export const RecordSummary = z.object({
+  id: Uuid, object_type: Slug, display_name: z.string(),
+})
+export const RecordOut = RecordSummary.extend({
+  version: z.number().int(), data: RecordData,
+  owner: Actor.nullable(),
+  created_at: IsoDateTime, updated_at: IsoDateTime, last_activity_at: IsoDateTime.nullable(),
+  redacted_attributes: z.array(Slug).describe('attributes hidden by policy'),
+  redirected_from: Uuid.optional().describe('present when the requested id was merged into this record'),
+})
+export type RecordOut = z.infer<typeof RecordOut>
+
+export const LinkInput = z.object({
+  relation_type: Slug, to_record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional().describe('edge attribute values'),
+  label: z.string().max(120).optional(),
+})
+export const LinkOut = z.object({
+  id: Uuid, relation_type: Slug, from_record_id: Uuid, to_record_id: Uuid,
+  label: z.string().nullable(), data: z.record(z.unknown()),
+  active_from: IsoDateTime, active_until: IsoDateTime.nullable(),
+})
+export const Candidate = z.object({
+  record: RecordSummary, rule_position: z.number().int().nullable(),
+  evidence: z.array(z.object({ kind: z.enum(['unique','exact','normalized','fuzzy','semantic']),
+    attribute: Slug.nullable(), value: z.unknown(), score: z.number().optional() })),
+})
+export const Change = z.object({
+  id: Uuid, seq: z.string().describe('monotonic cursor value'),
+  record: RecordSummary,
+  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge']),
+  attribute: Slug.nullable(), relation_type: Slug.nullable(), link_id: Uuid.nullable(),
+  old_value: z.unknown().optional(), new_value: z.unknown().optional(),
+  actor: z.object({ type: ActorType, id: z.string() }), on_behalf_of: z.string().nullable(),
+  provenance: z.object({ run_id: z.string().nullable(), tool_call_id: z.string().nullable(),
+    request_id: z.string() }),
+  reason: z.string().nullable(), occurred_at: IsoDateTime,
+})
+export const TimelineItem = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('activity'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('note'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('task'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('change'), change: Change, occurred_at: IsoDateTime }),
+])
+```
+
+## `filter.ts` — query grammar
+
+```ts
+export const FilterOp = z.enum(['eq','neq','in','not_in','is_null','is_not_null','contains',
+  'starts_with','gt','gte','lt','lte','between'])
+export const SystemField = z.enum(['created_at','updated_at','last_activity_at','display_name','owner'])
+
+export type Filter =
+  | { and: Filter[] } | { or: Filter[] } | { not: Filter }
+  | { attribute: string; op: z.infer<typeof FilterOp>; value?: unknown }
+  | { system: z.infer<typeof SystemField>; op: z.infer<typeof FilterOp>; value?: unknown }
+  | { linked_to: { relation: string; record_id: string; direction?: 'from' | 'to' } }
+  | { text: string }
+
+export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
+  z.object({ and: z.array(Filter).min(1) }),
+  z.object({ or: z.array(Filter).min(1) }),
+  z.object({ not: Filter }),
+  z.object({ attribute: Slug, op: FilterOp, value: z.unknown().optional() }),
+  z.object({ system: SystemField, op: FilterOp, value: z.unknown().optional() }),
+  z.object({ linked_to: z.object({ relation: Slug, record_id: Uuid,
+    direction: z.enum(['from','to']).default('from') }) }),
+  z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }),
+])).describe('see docs/schema-engine.md §5')
+
+export const Sort = z.array(z.object({
+  attribute: Slug.optional(), system: SystemField.optional(),
+  direction: z.enum(['asc','desc']).default('asc'),
+}).refine(s => !!s.attribute !== !!s.system, 'exactly one of attribute or system')).max(3)
+```
+
+Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
+
+| ops | types |
+|---|---|
+| `eq neq in not_in is_null is_not_null` | all |
+| `contains starts_with` | text, email, url, domain, personal_name, select (multi), rich_text (contains only) |
+| `gt gte lt lte between` | number, currency (compares `amount`), percent, rating, date, datetime, timestamp_system, system timestamps |
+
+## `tools.ts` — every tool's input and output
+
+```ts
+// ── schema ───────────────────────────────────────────────────────────────────
+export const CrmSchemaGet = { in: z.object({ object_type: Slug.optional() }),
+  out: z.union([SchemaSnapshot, ObjectTypeDetail]) }
+export const CrmObjectTypeDefine = { in: z.object({
+  slug: Slug, singular_name: z.string().min(1).max(80), plural_name: z.string().min(1).max(80),
+  description: z.string().min(1).max(500).describe('what a record of this type represents'),
+  icon: z.string().max(64).optional(), attributes: z.array(AttributeSpec).max(100).optional(),
+  primary_attribute: Slug.optional().describe('attribute used as display name') }),
+  out: ObjectTypeDetail }
+export const CrmObjectTypeUpdate = { in: z.object({ object_type: Slug,
+  singular_name: z.string().min(1).max(80).optional(), plural_name: z.string().min(1).max(80).optional(),
+  description: z.string().max(500).optional(), icon: z.string().max(64).optional(),
+  primary_attribute: Slug.optional() }), out: ObjectTypeDetail }
+export const CrmObjectTypeArchive = { in: z.object({ object_type: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), records: z.number().int() }) }
+export const CrmAttributeDefine = { in: AttributeSpec.extend({ object_type: Slug }), out: AttributeDetail }
+export const CrmAttributeUpdate = { in: z.object({ object_type: Slug, attribute: Slug,
+  name: z.string().min(1).max(120).optional(), description: z.string().max(500).optional(),
+  config: z.record(z.unknown()).optional(), is_required: z.boolean().optional(),
+  is_unique: z.boolean().optional(), is_indexed: z.boolean().optional(),
+  sensitivity: Sensitivity.optional(), default_value: z.unknown().optional() }), out: AttributeDetail }
+export const CrmAttributeArchive = { in: z.object({ object_type: Slug, attribute: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), records_with_values: z.number().int() }) }
+export const CrmRelationTypeDefine = { in: z.object({ slug: Slug,
+  from_object_type: Slug.nullable().describe('null = any object type'),
+  to_object_type: Slug.nullable().describe('null = any object type'),
+  forward_name: z.string().min(1).max(80).describe('e.g. "works at"'),
+  inverse_name: z.string().min(1).max(80).describe('e.g. "employs"'),
+  description: z.string().max(500).optional(), cardinality: Cardinality,
+  on_delete: OnDelete.default('unlink'), edge_attributes: z.array(AttributeSpec).max(20).optional() }),
+  out: RelationTypeDetail }
+export const CrmRelationTypeArchive = { in: z.object({ relation_type: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), links: z.number().int() }) }
+export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug, rules: z.array(MatchingRule).max(10) }),
+  out: z.object({ rules: z.array(MatchingRule) }) }
+export const CrmTemplateApply = { in: z.object({ template: z.enum(['standard_crm','saas','agency']) }),
+  out: z.object({ added: z.object({ object_types: z.array(Slug), attributes: z.array(z.string()),
+    relation_types: z.array(Slug) }) }) }
+
+// ── records ──────────────────────────────────────────────────────────────────
+const WriteCommon = { reason: Reason, idempotency_key: IdempotencyKey }
+export const CrmRecordCreate = { in: z.object({ object_type: Slug, data: RecordData,
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
+  out: z.object({ record: RecordOut, duplicates: z.array(Candidate).optional() }) }
+export const CrmRecordUpdate = { in: z.object({ id: Uuid, data: RecordData.describe('null clears a value'),
+  owner: Actor.nullable().optional(), expected_version: ExpectedVersion, ...WriteCommon }),
+  out: z.object({ record: RecordOut }) }
+export const CrmRecordAssert = { in: z.object({ object_type: Slug,
+  match_attribute: Slug.describe('a unique attribute present in data'), data: RecordData,
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
+  out: z.object({ record: RecordOut, created: z.boolean() }) }
+export const CrmRecordGet = { in: z.object({ id: Uuid.optional(), object_type: Slug.optional(),
+  match_attribute: Slug.optional(), value: z.unknown().optional(),
+  include_links: z.boolean().default(false), include_timeline: z.number().int().min(0).max(50).default(0)
+    .describe('number of recent timeline items to include') })
+  .refine(a => a.id || (a.object_type && a.match_attribute && a.value !== undefined),
+    'id, or object_type + match_attribute + value'),
+  out: z.object({ record: RecordOut, links: z.record(Slug, z.array(z.object({ link: LinkOut,
+    related: RecordSummary }))).optional(), timeline: z.array(TimelineItem).optional() }) }
+export const CrmRecordsQuery = { in: z.object({ object_type: Slug, filter: Filter.optional(),
+  sort: Sort.optional(), attributes: z.array(Slug).max(50).optional().describe('project only these'),
+  include_total: z.boolean().default(false), cursor: Cursor, limit: Limit }),
+  out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(),
+    total: z.number().int().optional() }) }
+export const CrmRecordsBulkAssert = { in: z.object({ object_type: Slug, match_attribute: Slug,
+  rows: z.array(z.object({ data: RecordData, links: z.array(LinkInput).max(20).optional() })).min(1),
+  reason: Reason }), out: z.object({ task_id: z.string() }) }
+export const BulkAssertResult = z.object({ created: z.number().int(), updated: z.number().int(),
+  failed: z.array(z.object({ index: z.number().int(), code: z.string(), message: z.string() })) })
+export const CrmRecordDelete = { in: z.object({ id: Uuid, expected_version: ExpectedVersion, reason: Reason }),
+  out: z.object({ deleted: z.literal(true) }) }
+export const CrmRecordRestore = { in: z.object({ id: Uuid }), out: z.object({ record: RecordOut }) }
+export const CrmRecordAt = { in: z.object({ id: Uuid, at: IsoDateTime }),
+  out: z.object({ record_at: z.object({ data: RecordData, version_at: z.number().int(), as_of: IsoDateTime }) }) }
+export const CrmRecordHistory = { in: z.object({ id: Uuid, attributes: z.array(Slug).optional(),
+  cursor: Cursor, limit: Limit }), out: z.object({ changes: z.array(Change), next_cursor: z.string().nullable() }) }
+
+// ── links ────────────────────────────────────────────────────────────────────
+export const CrmLink = { in: z.object({ relation_type: Slug, from_record_id: Uuid, to_record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional(), label: z.string().max(120).optional(), ...WriteCommon }),
+  out: z.object({ link: LinkOut }) }
+export const CrmUnlink = { in: z.object({ link_id: Uuid.optional(), relation_type: Slug.optional(),
+  from_record_id: Uuid.optional(), to_record_id: Uuid.optional(), reason: Reason })
+  .refine(a => a.link_id || (a.relation_type && a.from_record_id && a.to_record_id), 'link_id or triple'),
+  out: z.object({ unlinked: z.literal(true) }) }
+export const CrmLinksList = { in: z.object({ record_id: Uuid, relation_type: Slug.optional(),
+  direction: z.enum(['from','to','both']).default('both'), include_history: z.boolean().default(false),
+  cursor: Cursor, limit: Limit }),
+  out: z.object({ links: z.array(z.object({ link: LinkOut, related: RecordSummary })),
+    next_cursor: z.string().nullable() }) }
+
+// ── lists & views ────────────────────────────────────────────────────────────
+export const ListDetail = z.object({ id: Uuid, slug: Slug, name: z.string(), description: z.string(),
+  object_type: Slug.nullable(), attributes: z.array(AttributeDetail), entry_count: z.number().int() })
+export const CrmListCreate = { in: z.object({ slug: Slug, name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(), object_type: Slug.optional(),
+  attributes: z.array(AttributeSpec).max(20).optional() }), out: ListDetail }
+export const CrmListAdd = { in: z.object({ list: Slug, entries: z.array(z.object({ record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional() })).min(1).max(500) }), out: z.object({ added: z.number().int() }) }
+export const CrmListRemove = { in: z.object({ list: Slug, record_ids: z.array(Uuid).min(1).max(500) }),
+  out: z.object({ removed: z.number().int() }) }
+export const CrmListEntries = { in: z.object({ list: Slug, cursor: Cursor, limit: Limit }),
+  out: z.object({ entries: z.array(z.object({ entry: z.object({ id: Uuid, data: z.record(z.unknown()),
+    position: z.number().int() }), record: RecordOut })), next_cursor: z.string().nullable() }) }
+export const ViewDetail = z.object({ id: Uuid, slug: Slug, name: z.string(), description: z.string(),
+  object_type: Slug, filter: Filter, sort: Sort, attributes: z.array(Slug) })
+export const CrmViewSave = { in: z.object({ slug: Slug, name: z.string().min(1).max(120), object_type: Slug,
+  filter: Filter, sort: Sort.optional(), attributes: z.array(Slug).optional(),
+  description: z.string().max(500).optional() }), out: ViewDetail }
+export const CrmViewRun = { in: z.object({ view: Slug, cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+
+// ── activity, tasks, pipeline ────────────────────────────────────────────────
+export const ActivityKind = z.enum(['email','call','meeting','note','message','task_event','custom'])
+export const CrmActivityLog = { in: z.object({ kind: ActivityKind, occurred_at: IsoDateTime,
+  subject: z.string().max(300).optional(), body: z.string().max(100_000).optional(),
+  direction: z.enum(['inbound','outbound','internal']).optional(),
+  participants: z.array(Actor).max(50).optional(), about: z.array(Uuid).min(1).max(20),
+  external_ref: z.string().max(300).optional().describe('source id; re-logging the same ref updates'),
+  reason: Reason }), out: z.object({ record: RecordOut }) }
+export const CrmNoteAdd = { in: z.object({ title: z.string().max(300).optional(),
+  body: z.string().min(1).max(100_000), about: z.array(Uuid).min(1).max(20) }),
+  out: z.object({ record: RecordOut }) }
+export const CrmRecordTimeline = { in: z.object({ id: Uuid, hops: z.union([z.literal(0), z.literal(1)]).default(0)
+  .describe('1 = include linked records\' items'), kinds: z.array(z.enum(['activity','change','note','task'])).optional(),
+  since: IsoDateTime.optional(), cursor: Cursor, limit: Limit }),
+  out: z.object({ items: z.array(TimelineItem), next_cursor: z.string().nullable() }) }
+export const TaskStatus = z.enum(['open','in_progress','done','cancelled'])
+export const TaskPriority = z.enum(['low','normal','high','urgent'])
+export const CrmTaskCreate = { in: z.object({ title: z.string().min(1).max(300), body: z.string().max(20_000).optional(),
+  due_at: IsoDateTime.optional(), assignee: Actor.optional(), priority: TaskPriority.default('normal'),
+  about: z.array(Uuid).max(20).optional() }), out: z.object({ record: RecordOut }) }
+export const CrmTaskUpdate = { in: z.object({ id: Uuid, status: TaskStatus.optional(), assignee: Actor.nullable().optional(),
+  due_at: IsoDateTime.nullable().optional(), priority: TaskPriority.optional(),
+  title: z.string().min(1).max(300).optional(), body: z.string().max(20_000).optional() }),
+  out: z.object({ record: RecordOut }) }
+export const CrmTasksList = { in: z.object({ status: TaskStatus.optional(), assignee: Actor.optional(),
+  due_before: IsoDateTime.optional(), due_after: IsoDateTime.optional(), about: Uuid.optional(),
+  cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+export const CrmPipelineSummary = { in: z.object({ object_type: Slug,
+  status_attribute: Slug.optional().describe('defaults to the only status attribute'),
+  amount_attribute: Slug.optional(), filter: Filter.optional(), since: IsoDateTime.optional() }),
+  out: z.object({ stages: z.array(z.object({ id: Slug, label: z.string(), category: StatusOption.shape.category,
+    count: z.number().int(), amount_sum: CurrencyValue.nullable(), avg_days_in_stage: z.number().nullable() })),
+    conversions: z.array(z.object({ from: Slug, to: Slug, count: z.number().int() })) }) }
+
+// ── search, quality, merge ───────────────────────────────────────────────────
+export const CrmSearch = { in: z.object({ query: z.string().min(1).max(500), object_types: z.array(Slug).optional(),
+  mode: z.enum(['keyword','semantic','hybrid']).default('hybrid'), limit: z.number().int().min(1).max(50).default(10) }),
+  out: z.object({ hits: z.array(z.object({ record: RecordSummary, score: z.number(),
+    match: z.enum(['keyword','semantic','both']) })) }) }
+export const CrmFindDuplicates = { in: z.object({ object_type: Slug, filter: Filter.optional(),
+  include_semantic: z.boolean().default(true) }), out: z.object({ task_id: z.string() }) }
+export const FindDuplicatesResult = z.object({ groups: z.array(z.object({ records: z.array(RecordSummary),
+  evidence: z.array(Candidate.shape.evidence.element) })) })
+export const CrmMergeRecords = { in: z.object({ survivor_id: Uuid, merged_ids: z.array(Uuid).min(1).max(10),
+  field_choices: z.record(Slug, Uuid).optional().describe('attribute → record whose value wins'),
+  reason: z.string().min(1).max(500) }),
+  out: z.object({ record: RecordOut, merge_change_id: Uuid, repointed_links: z.number().int() }) }
+export const CrmUnmerge = { in: z.object({ merge_change_id: Uuid, reason: z.string().min(1).max(500) }),
+  out: z.object({ restored: z.array(Uuid) }) }
+const QualityBucket = z.object({ count: z.number().int(),
+  items: z.array(z.object({ record: RecordSummary, detail: z.string() })).max(100) })
+export const CrmDataQuality = { in: z.object({ object_type: Slug.optional(),
+  stale_days: z.number().int().min(1).max(3650).default(90) }),
+  out: z.object({ missing_required: QualityBucket, stale: QualityBucket, orphans: QualityBucket, collisions: QualityBucket }) }
+
+// ── io, feed, webhooks ───────────────────────────────────────────────────────
+export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),
+  format: z.enum(['jsonl','csv']), attributes: z.array(Slug).optional() })
+  .refine(a => !!a.object_type !== !!a.view, 'object_type or view'), out: z.object({ task_id: z.string() }) }
+export const ExportResult = z.object({ url: z.string().url(), rows: z.number().int(), expires_at: IsoDateTime })
+export const CrmChangesSince = { in: z.object({ cursor: Cursor.describe('omit for the oldest retained change'),
+  object_types: z.array(Slug).optional(), kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
+  out: z.object({ changes: z.array(Change), next_cursor: z.string(), has_more: z.boolean() }) }
+export const WebhookEvent = z.enum(['record.created','record.updated','record.deleted','record.merged',
+  'link.created','link.ended','schema.changed'])
+export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host'),
+  events: z.array(WebhookEvent).min(1), active: z.boolean().default(true) }),
+  out: z.object({ webhook: z.object({ id: Uuid, url: z.string(), events: z.array(WebhookEvent), active: z.boolean() }),
+    secret: z.string().optional().describe('shown once on creation') }) }
+export const CrmWebhookList = { in: z.object({}), out: z.object({ webhooks: z.array(CrmWebhookSet.out.shape.webhook) }) }
+export const CrmWebhookDelete = { in: z.object({ id: Uuid }), out: z.object({ deleted: z.literal(true) }) }
+```
+
+## `errors.ts`
+
+```ts
+export const ErrorCode = z.enum(['POLICY_DENIED','APPROVAL_REQUIRED','UNKNOWN_OBJECT_TYPE','UNKNOWN_ATTRIBUTE',
+  'ATTRIBUTE_ARCHIVED','ATTRIBUTE_READ_ONLY','VALIDATION_FAILED','VERSION_CONFLICT','DUPLICATE_FOUND','NOT_FOUND',
+  'MERGED','CARDINALITY_VIOLATION','DELETE_RESTRICTED','SCHEMA_CONFLICT','IDEMPOTENCY_MISMATCH','LIMIT_EXCEEDED','INTERNAL'])
+export const ErrorPayload = z.object({
+  code: ErrorCode, message: z.string(),
+  issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),   // VALIDATION_FAILED
+  current: z.number().int().optional(),                                              // VERSION_CONFLICT
+  attribute: Slug.optional(), record_id: Uuid.optional(), candidates: z.array(Candidate).optional(), // DUPLICATE_FOUND
+  redirect_to: Uuid.optional(),                                                      // MERGED
+  resource: z.string().optional(), action: z.string().optional(),                    // POLICY_DENIED
+  detail: z.string().optional(),
+})
+```
+
+## MRTR shapes (`mrtr.ts`)
+
+```ts
+export const InputRequest = z.discriminatedUnion('kind', [
+  z.object({ id: z.string(), kind: z.literal('confirmation'), message: z.string(),
+    schema: z.object({ type: z.literal('object'), properties: z.object({ confirmed: z.object({ type: z.literal('boolean') }) }),
+      required: z.tuple([z.literal('confirmed')]) }) }),
+  z.object({ id: z.literal('approval'), kind: z.literal('approval'), message: z.string(), approval_token: z.string(),
+    expires_at: IsoDateTime, required_role: z.enum(['admin','owner']) }),
+])
+export const InputResponses = z.object({
+  confirm: z.object({ confirmed: z.boolean() }).optional(),
+  approval: z.object({ approval_token: z.string(), approved: z.boolean(), note: z.string().max(500).optional() }).optional(),
+})
+```
+
+exec
+/bin/zsh -lc 'cat docs/spec/events.md docs/architecture.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Events protocol — change feed, webhooks, delivery targets
+
+One event model, three consumers: the `crm_changes_since` tool (pull), HMAC webhooks (push), and future delivery adapters (Matrix room, Nessie integration endpoint). The source of truth is `record_changes`; nothing is emitted that is not a row there.
+
+## 1. Event
+
+An **event** is a `Change` (see `contracts.md` → `records.ts`) plus a derived `event` name:
+
+| `kind` | `event` |
+|---|---|
+| `create` | `record.created` |
+| `set`, `unset` | `record.updated` |
+| `delete` | `record.deleted` |
+| `restore` | `record.updated` |
+| `merge` (on survivor) | `record.merged` — payload adds `merged_ids` |
+| `merge` (on loser) | `record.deleted` with `merged_into` |
+| `unmerge` | `record.updated` |
+| `link` | `link.created` |
+| `unlink` | `link.ended` |
+| schema mutation (no record) | `schema.changed` — emitted from a synthetic change row with `record = null`, `attribute` = affected slug, `new_value = { object_type, schema_version }` |
+
+`seq` (bigint autoincrement) is the cursor and ordering key across all consumers. Redaction: events about `restricted` attributes carry no `old_value`/`new_value` unless the consumer's principal may view them; webhooks are evaluated as `role:admin`.
+
+## 2. Pull — `crm_changes_since`
+
+- `cursor` = decimal string of the last `seq` seen; omit ⇒ from the oldest retained row.
+- Returns up to `limit` events with `seq > cursor`, ascending, filtered by `object_types`/`kinds`; `next_cursor` = last `seq` returned (or the input cursor when empty); `has_more`.
+- Retention: `record_changes` are never deleted, so a cursor never expires. Consumers store the cursor (Nessie: on the trigger's state).
+
+## 3. Push — webhooks
+
+### Registration
+`crm_webhook_set { url, events[], active }` — `url` must be `https://`, public host (SSRF guard). Secret: 32 random bytes, hex; returned once; stored sealed (AES-256-GCM keyring).
+
+### Delivery
+Worker job `change.deliver` per team, triggered by the write path (debounced: `visibleAt = now + 30 s`, idempotency `deliver:<teamId>:<floor(now/30s)>`).
+
+```
+POST <url>
+Content-Type: application/json
+X-DeepCRM-Delivery: <uuid>                 unique per attempt batch
+X-DeepCRM-Webhook: <webhook id>
+X-DeepCRM-Timestamp: <unix seconds>
+X-DeepCRM-Signature: sha256=<hex hmac>     HMAC-SHA256(secret, "<timestamp>.<raw body>")
+
+{
+  "schema": "deepcrm.webhook.v1",
+  "team": "<UOA team id>",
+  "organization": "<UOA org id>",
+  "since_seq": "1040",
+  "until_seq": "1077",
+  "events": [ { "event": "record.updated", "seq": "1041", ...Change } , ... ]   // ≤ 500, ascending
+}
+```
+
+Receiver verification: reject if `|now − timestamp| > 300 s`; recompute HMAC over `timestamp + "." + body`; constant-time compare.
+
+### Acknowledgement and retry
+- Any `2xx` ⇒ `webhooks.last_delivered_seq = until_seq`.
+- Otherwise retry the **same batch** with backoff 1 m, 5 m, 30 m, 2 h, 12 h (five attempts); then `active = false`, `last_error` set, and a `schema.changed`-style marker is **not** emitted (no event about events). `crm_webhook_list` shows `active:false` + `last_error`; re-enable with `crm_webhook_set { active: true }` which resumes from `last_delivered_seq`.
+- Ordering guarantee: per webhook, batches are delivered in `seq` order and never overlap (the job takes `pg_advisory_xact_lock(hashtext('webhook:'||id))`).
+
+## 4. Delivery adapters (design seam)
+
+`worker/src/deliver/targets/*.ts` implement:
+
+```ts
+interface DeliveryTarget {
+  kind: 'webhook' | 'matrix_room' | 'nessie_integration'
+  deliver(batch: EventBatch, target: TargetConfig): Promise<{ ok: true } | { ok: false; retryable: boolean; error: string }>
+}
+```
+
+- `webhook` — §3. Ships in v1.
+- `nessie_integration` — same envelope posted to Nessie's `POST /api/integrations/deepcrm/events` with Nessie's per-org HMAC secret (see `nessie-integration.md`). v1 uses the generic webhook target with that URL; a dedicated kind exists only if Nessie needs a different envelope.
+- `matrix_room` — **not built in v1** (brief §3.5 / §9 Q11). Contract when built: target `{ homeserver, room_id, access_token_ref }`; one `m.room.message` per batch with `msgtype: "m.notice"`, `body` = human summary ("3 deals moved, 2 people added"), and `content["live.deepcrm.events"] = envelope` so agents in the room read the structured payload; `seq` carried in the event for idempotent replay. Uses the same retry table.
+
+## 5. Nessie consumption pattern (reference)
+
+Nessie treats the webhook as *delivery-shaped* (its DeepSignal precedent): coalesce a team's batches into one rolling "N CRM changes" digest message per channel bound to DeepCRM, updated in place within a window; per-event ids retained for idempotency. Agents that need to *act* on changes use the pull tool on a schedule with the cursor stored in trigger state — push is for humans' awareness, pull is for agent work.
+# Architecture
+
+The Nessie backend pattern (Fastify + Prisma + PostgreSQL, Postgres-backed queue, separate worker, shared packages, pnpm + Turbo) with every presentation layer removed and an MCP server as the only product surface. Read [brief.md](brief.md) §4 for what is reused from Nessie and why; this document is the concrete layout and the guardrails.
+
+## 1. Topology
+
+```
+MCP client (Nessie agent run, or any 2026-07-28 client)
+   │  POST /mcp   (streamable HTTP, stateless; one JSON-RPC request per HTTP request)
+   │  Authorization: Bearer <app key>
+   │  X-UOA-Delegation: <resource token: user + org + team>
+   │  X-Nessie-Context: <RS256 JWT: agentId, runId, toolCallId, requestId>
+   ▼
+deepcrm-api (Fastify, port 5656)
+   ├─ plugins/mcp-http.ts       per-request McpServer + StreamableHTTPServerTransport
+   ├─ mcp/tools/*.ts            crm_* tool registrations (thin adapters)
+   ├─ mcp/resources.ts          crm://schema, crm://schema/{type}, crm://templates
+   ├─ routes/health.ts          GET /health
+   ├─ routes/oauth-metadata.ts  GET /.well-known/oauth-protected-resource
+   └─ services/*                one module per CRM concern; ALL business logic
+          │
+          ▼ Prisma (packages/db)
+   PostgreSQL 16 + pgvector ──── queue_jobs ──► deepcrm-worker
+   (metadata, records, links,                   jobs/record-reindex.ts
+    changes, unique keys, search,               jobs/dedup-scan.ts
+    audit, policy, approvals, jobs)             jobs/bulk-assert.ts, bulk-export.ts
+                                                jobs/change-deliver.ts
+                                                jobs/retention.ts
+```
+
+Process modes: `api` (default), `worker`, and `all` (api with the worker embedded — the local-dev default, exactly like nessie's embedded worker).
+
+## 2. Repository layout
+
+```
+deepcrm.live/
+  api/                      @deepcrm/api      Fastify process
+    src/
+      index.ts              boot: env → prisma → build app → listen (+ embedded worker in `all` mode)
+      app.ts                buildApp(deps): registers plugins/routes; no side effects at import
+      env.ts                zod-validated process env (deepsignal pattern)
+      plugins/mcp-http.ts   /mcp transport; builds McpServer per request from principal
+      mcp/server.ts         buildMcpServer(ctx, deps) → registers tool groups
+      mcp/tools/schema.ts   crm_schema_*, crm_object_type_*, crm_attribute_*, crm_relation_type_*, crm_matching_rule_set, crm_template_apply
+      mcp/tools/records.ts  crm_record_*, crm_records_query, crm_records_bulk_assert
+      mcp/tools/links.ts    crm_link, crm_unlink, crm_links_list
+      mcp/tools/lists.ts    crm_list_*, crm_view_*
+      mcp/tools/activity.ts crm_activity_log, crm_record_timeline, crm_task_*
+      mcp/tools/pipeline.ts crm_pipeline_summary
+      mcp/tools/search.ts   crm_search
+      mcp/tools/quality.ts  crm_find_duplicates, crm_merge_records, crm_unmerge, crm_data_quality
+      mcp/tools/io.ts       crm_export, crm_changes_since, crm_webhook_set
+      mcp/tools/errors.ts   ServiceError → MCP tool error/MRTR mapping
+      mcp/resources.ts
+      mcp/prompts.ts
+      routes/health.ts
+      routes/oauth-metadata.ts
+      services/             domain services (see §3)
+    test/                   Fastify + MCP client harness tests
+  worker/                   @deepcrm/worker
+    src/index.ts            poll loop over queue_jobs
+    src/jobs/*.ts           one file per job type
+  packages/
+    schemas/                @deepcrm/schemas   zod contracts, shared types, EMBEDDING_DIMENSIONS, error codes
+    db/                     @deepcrm/db        Prisma schema + client factory + migrations + audit chain
+    schema-engine/          @deepcrm/schema-engine  metadata, attribute types, validation/normalisation,
+                                                    write path, query compiler, merge, templates
+    mcp-inbound/            @deepcrm/mcp-inbound    header parsing, JWT verification, principal, tenant
+    queue/                  @deepcrm/queue     enqueue/claim/complete over queue_jobs
+  infrastructure/compose/   docker-compose.prod.yml, redeploy.sh
+  scripts/                  lint-migrations.mjs, generate-mcp-docs.mjs
+  docs/
+```
+
+## 3. Services (api/src/services)
+
+Each service exports plain functions taking `(deps, ctx: ActorContext, input)` and returning typed results or throwing `ServiceError` (from `@deepcrm/schemas`). Tools never touch Prisma.
+
+| Service | Owns |
+|---|---|
+| `tenancy.ts` | resolve/provision `Organization` + `Team` from principal (1:1 UOA). |
+| `policy.ts` | `checkPolicy(ctx, resourceType, action, scope)` deny-overrides; default bindings. |
+| `schema.ts` | object types, attributes, relation types, matching rules, templates, `schema_version`. |
+| `records.ts` | create/update/assert/get/delete/restore/query/at. |
+| `links.ts` | link/unlink/list with cardinality enforcement. |
+| `lists.ts` | lists, entries, views. |
+| `activity.ts` | activity log, timeline, tasks. |
+| `pipeline.ts` | stage summaries from `record_changes`. |
+| `search.ts` | keyword/semantic/hybrid over `record_search`. |
+| `quality.ts` | duplicates, merge/unmerge, data quality report. |
+| `io.ts` | export, change feed, webhooks. |
+| `approvals.ts` | MRTR approval tokens ↔ `approval_requests`. |
+| `audit.ts` | `writeAudit(tx, …)` hash-chained. |
+
+The schema engine package holds the pure, Prisma-transaction-scoped core (`validateRecordData`, `normalizeValue`, `applyWrite`, `compileFilter`, `planMerge`); services orchestrate policy + engine + audit + queue.
+
+## 4. Guardrails (things to avoid)
+
+- No `helpers`, `utils`, `common`, `extras` modules. Name files after the responsibility they own.
+- Tools do not own workflows: parse → service → map errors. A tool file registers tools and nothing else.
+- No import-time side effects; `buildApp`, `buildMcpServer`, `createWorker` take explicit deps (prisma, clock, ids, fetch, queue, embedder).
+- Never read tenancy from tool arguments. `ctx.tenant` comes from the authenticated principal only.
+- Never write `records.data` without `validateRecordData` against the live schema; never write it outside a transaction that also writes `record_changes` and `audit_logs`.
+- Never store a JSON array of ids as a relationship; links live in `record_links`. `records.data[slug]` for a `record_reference` attribute is a projection the engine maintains.
+- No per-tenant DDL. Ever.
+- Never call `fetch` on an agent- or operator-supplied URL; use `safeFetch` from `@deepcrm/schemas/net` (port of nessie's IP-pinned guard).
+- Never log `records.data`, tool arguments, tokens, or webhook bodies.
+- No REST endpoints for CRM data. If a client cannot speak MCP it is not a DeepCRM client.
+- Do not adopt deprecated MCP features (Sampling, Roots, Logging, HTTP+SSE transport).
+
+## 5. Cross-process rules
+
+- The worker and the API share `packages/*`; neither imports from the other.
+- Queue jobs carry `{organizationId, teamId}` and an idempotency key; handlers are idempotent.
+- `schema_version` is bumped inside the same transaction as any metadata change; caches key on it.
+
+## 6. Environment (api/src/env.ts)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DEEPCRM_API_PORT` | `5656` | listen port |
+| `DEEPCRM_API_PUBLIC_URL` | `http://localhost:5656` | resource id in OAuth metadata, webhook `source` |
+| `DATABASE_URL` | — | Postgres |
+| `DEEPCRM_PROCESS_MODE` | `all` | `api` / `worker` / `all` |
+| `REQUIRE_AUTH` | `true` (prod) / `false` (dev) | off ⇒ dev principal |
+| `DEEPCRM_APP_KEYS` | — | comma-separated `name:sha256hex` of accepted bearer app keys |
+| `UOA_ISSUER`, `UOA_JWKS_URL`, `UOA_AUDIENCE` | — | verify `X-UOA-Delegation` |
+| `NESSIE_CONTEXT_JWKS_URL` | — | verify `X-Nessie-Context` |
+| `DEEPCRM_SECRET_KEYRING_B64` | — | AES-256-GCM keyring for webhook secrets |
+| `LEDGER_PUBLIC_URL`, `LEDGER_PROXY_TOKEN` | — | embeddings via Ledger `/v1/jina` |
+| `DEEPCRM_EMBEDDING_MODEL` | `jina-embeddings-v3` | |
+| `DEEPCRM_MAX_BULK_ROWS` | `10000` | bulk assert cap |
+| `DEEPCRM_RETENTION_DAYS` | `30` | soft-delete / merge snapshot retention |
+| `DEEPCRM_TRUSTED_PROXY_HOPS` | `0` | `1` behind Caddy |
+
+exec
+/bin/zsh -lc 'cat docs/schema-engine.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Schema engine
+
+The runtime-composable data model: object types, attributes, relation types and records defined as rows, with history, uniqueness, search, pipelines, merge and permissions implemented once over the metadata. Design rationale in [brief.md](brief.md) §5. This document is the normative spec; the Prisma schema in §2 is copied verbatim into `packages/db/prisma/schema.prisma`.
+
+## 1. Principles
+
+1. **Metadata is data.** Adding an object type or attribute is an insert; nothing runs DDL.
+2. **One write path.** Every mutation goes through `applyWrite` in one transaction: policy → validate → lock → version check → unique keys → data → links → changes → audit → enqueue.
+3. **Current state in JSONB, history in a change log, relationships in an edge table, uniqueness in a key table, search in a materialised doc.**
+4. **Everything tenant-scoped** by `(organization_id, team_id)`.
+5. **Deterministic only.** The engine normalises and matches on structural facts; it never judges content.
+
+## 2. Prisma schema (`packages/db/prisma/schema.prisma`)
+
+```prisma
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pg_trgm]
+}
+
+// ───────────────────────── tenancy (UOA 1:1 mirrors) ─────────────────────────
+
+model Organization {
+  id            String   @id @default(uuid()) @db.Uuid
+  externalOrgId String   @unique @map("external_org_id")
+  name          String
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  teams         Team[]
+
+  @@map("organizations")
+}
+
+model Team {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  externalTeamId String       @unique @map("external_team_id")
+  name           String
+  schemaVersion  Int          @default(0) @map("schema_version")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("teams")
+}
+
+// ───────────────────────── enums ─────────────────────────
+
+enum ActorType {
+  human
+  agent
+  system
+}
+
+enum ObjectTypeKind {
+  system
+  standard
+  custom
+}
+
+enum AttributeType {
+  text
+  rich_text
+  number
+  currency
+  percent
+  boolean
+  date
+  datetime
+  select
+  status
+  rating
+  email
+  phone
+  url
+  domain
+  location
+  personal_name
+  actor_reference
+  record_reference
+  timestamp_system
+  json
+}
+
+enum Sensitivity {
+  public
+  internal
+  confidential
+  restricted
+}
+
+enum Cardinality {
+  one_to_one
+  one_to_many
+  many_to_one
+  many_to_many
+}
+
+enum OnDelete {
+  unlink
+  cascade
+  restrict
+}
+
+enum ChangeKind {
+  create
+  set
+  unset
+  link
+  unlink
+  delete
+  restore
+  merge
+  unmerge
+}
+
+enum MatchMethod {
+  exact
+  normalized
+  fuzzy
+}
+
+enum MatchAction {
+  block
+  warn
+  allow
+}
+
+enum PolicyScope {
+  organization
+  team
+  object_type
+  record
+  list
+}
+
+enum PolicyResourceType {
+  schema
+  object_type
+  attribute
+  record
+  link
+  list
+  view
+  merge
+  export
+  webhook
+  approval
+}
+
+enum PolicyAction {
+  view
+  create
+  edit
+  delete
+  link
+  merge
+  export
+  define
+  admin
+}
+
+enum PolicyEffect {
+  allow
+  deny
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  consumed
+}
+
+enum AuditOutcome {
+  success
+  denied
+  failure
+}
+
+enum JobStatus {
+  queued
+  running
+  completed
+  failed
+}
+
+// ───────────────────────── metadata ─────────────────────────
+
+model ObjectType {
+  id                 String         @id @default(uuid()) @db.Uuid
+  organizationId     String         @map("organization_id") @db.Uuid
+  teamId             String         @map("team_id") @db.Uuid
+  slug               String
+  singularName       String         @map("singular_name")
+  pluralName         String         @map("plural_name")
+  description        String
+  icon               String?
+  kind               ObjectTypeKind
+  templateSlug       String?        @map("template_slug")
+  primaryAttributeId String?        @map("primary_attribute_id") @db.Uuid
+  archivedAt         DateTime?      @map("archived_at")
+  createdByType      ActorType      @map("created_by_type")
+  createdById        String         @map("created_by_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  attributes         Attribute[]
+  records            Record[]
+  relationsFrom      RelationType[] @relation("RelationFrom")
+  relationsTo        RelationType[] @relation("RelationTo")
+  matchingRules      MatchingRule[]
+
+  @@unique([organizationId, teamId, slug])
+  @@index([organizationId, teamId, kind])
+  @@map("object_types")
+}
+
+model Attribute {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  teamId         String        @map("team_id") @db.Uuid
+  objectTypeId   String?       @map("object_type_id") @db.Uuid
+  listId         String?       @map("list_id") @db.Uuid
+  slug           String
+  name           String
+  description    String
+  type           AttributeType
+  config         Json          @default("{}")
+  isMulti        Boolean       @default(false) @map("is_multi")
+  isRequired     Boolean       @default(false) @map("is_required")
+  isUnique       Boolean       @default(false) @map("is_unique")
+  isSystem       Boolean       @default(false) @map("is_system")
+  isIndexed      Boolean       @default(false) @map("is_indexed")
+  sensitivity    Sensitivity   @default(internal)
+  defaultValue   Json?         @map("default_value")
+  position       Int           @default(0)
+  archivedAt     DateTime?     @map("archived_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  objectType     ObjectType?   @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  list           List?         @relation(fields: [listId], references: [id], onDelete: Cascade)
+  uniqueKeys     RecordUniqueKey[]
+
+  @@unique([objectTypeId, slug])
+  @@unique([listId, slug])
+  @@index([organizationId, teamId])
+  @@map("attributes")
+}
+
+model RelationType {
+  id                     String      @id @default(uuid()) @db.Uuid
+  organizationId         String      @map("organization_id") @db.Uuid
+  teamId                 String      @map("team_id") @db.Uuid
+  slug                   String
+  fromObjectTypeId       String?     @map("from_object_type_id") @db.Uuid   // null = any
+  toObjectTypeId         String?     @map("to_object_type_id") @db.Uuid     // null = any
+  forwardName            String      @map("forward_name")
+  inverseName            String      @map("inverse_name")
+  description            String      @default("")
+  cardinality            Cardinality
+  onDelete               OnDelete    @default(unlink) @map("on_delete")
+  edgeAttributes         Json        @default("[]") @map("edge_attributes")  // AttributeSpec[] for link.data
+  projectionAttributeSlug String?    @map("projection_attribute_slug")      // set when backing a record_reference attribute
+  isSystem               Boolean     @default(false) @map("is_system")
+  archivedAt             DateTime?   @map("archived_at")
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+  fromObjectType         ObjectType? @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
+  toObjectType           ObjectType? @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
+  links                  RecordLink[]
+
+  @@unique([organizationId, teamId, slug])
+  @@map("relation_types")
+}
+
+model MatchingRule {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  objectTypeId   String      @map("object_type_id") @db.Uuid
+  position       Int
+  attributeSlugs String[]    @map("attribute_slugs")
+  method         MatchMethod
+  threshold      Float?
+  action         MatchAction
+  createdAt      DateTime    @default(now()) @map("created_at")
+  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+
+  @@index([objectTypeId, position])
+  @@map("matching_rules")
+}
+
+// ───────────────────────── data ─────────────────────────
+
+model Record {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  teamId         String     @map("team_id") @db.Uuid
+  objectTypeId   String     @map("object_type_id") @db.Uuid
+  data           Json       @default("{}")
+  displayName    String     @default("") @map("display_name")
+  ownerType      ActorType? @map("owner_type")
+  ownerId        String?    @map("owner_id")
+  version        Int        @default(1)
+  lastActivityAt DateTime?  @map("last_activity_at")
+  mergedIntoId   String?    @map("merged_into_id") @db.Uuid
+  deletedAt      DateTime?  @map("deleted_at")
+  createdByType  ActorType  @map("created_by_type")
+  createdById    String     @map("created_by_id")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  objectType     ObjectType @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  linksFrom      RecordLink[] @relation("LinkFrom")
+  linksTo        RecordLink[] @relation("LinkTo")
+  changes        RecordChange[]
+  uniqueKeys     RecordUniqueKey[]
+  search         RecordSearch?
+  listEntries    ListEntry[]
+
+  @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
+  @@index([organizationId, teamId, objectTypeId, lastActivityAt])
+  @@index([mergedIntoId])
+  @@map("records")
+}
+// Added by raw SQL in the same migration (Prisma cannot express them):
+//   CREATE INDEX records_data_gin ON records USING gin (data jsonb_path_ops);
+//   CREATE INDEX records_display_name_trgm ON records USING gin (display_name gin_trgm_ops);
+
+model RecordLink {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  relationTypeId String       @map("relation_type_id") @db.Uuid
+  fromRecordId   String       @map("from_record_id") @db.Uuid
+  toRecordId     String       @map("to_record_id") @db.Uuid
+  label          String?
+  data           Json         @default("{}")
+  activeFrom     DateTime     @default(now()) @map("active_from")
+  activeUntil    DateTime?    @map("active_until")
+  createdByType  ActorType    @map("created_by_type")
+  createdById    String       @map("created_by_id")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  relationType   RelationType @relation(fields: [relationTypeId], references: [id], onDelete: Cascade)
+  fromRecord     Record       @relation("LinkFrom", fields: [fromRecordId], references: [id], onDelete: Cascade)
+  toRecord       Record       @relation("LinkTo", fields: [toRecordId], references: [id], onDelete: Cascade)
+
+  @@index([fromRecordId, relationTypeId])
+  @@index([toRecordId, relationTypeId])
+  @@index([organizationId, teamId, relationTypeId])
+  @@map("record_links")
+}
+// Raw SQL: CREATE UNIQUE INDEX record_links_active_unique
+//   ON record_links (relation_type_id, from_record_id, to_record_id) WHERE active_until IS NULL;
+
+model RecordUniqueKey {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  teamId          String    @map("team_id") @db.Uuid
+  attributeId     String    @map("attribute_id") @db.Uuid
+  recordId        String    @map("record_id") @db.Uuid
+  normalizedValue String    @map("normalized_value")
+  attribute       Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  record          Record    @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([attributeId, normalizedValue])
+  @@index([recordId])
+  @@map("record_unique_keys")
+}
+
+model RecordChange {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  teamId         String     @map("team_id") @db.Uuid
+  recordId       String     @map("record_id") @db.Uuid
+  kind           ChangeKind
+  attributeSlug  String?    @map("attribute_slug")
+  relationTypeId String?    @map("relation_type_id") @db.Uuid
+  linkId         String?    @map("link_id") @db.Uuid
+  oldValue       Json?      @map("old_value")
+  newValue       Json?      @map("new_value")
+  snapshot       Json?                                   // full pre-image for merge/delete
+  actorType      ActorType  @map("actor_type")
+  actorId        String     @map("actor_id")
+  onBehalfOf     String?    @map("on_behalf_of")          // UOA user id
+  runId          String?    @map("run_id")
+  toolCallId     String?    @map("tool_call_id")
+  requestId      String     @map("request_id")
+  reason         String?
+  seq            BigInt     @default(autoincrement())     // change-feed cursor
+  occurredAt     DateTime   @default(now()) @map("occurred_at")
+  record         Record     @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([recordId, occurredAt(sort: Desc)])
+  @@index([organizationId, teamId, seq])
+  @@index([organizationId, teamId, attributeSlug, occurredAt])
+  @@map("record_changes")
+}
+
+model RecordSearch {
+  recordId       String                      @id @map("record_id") @db.Uuid
+  organizationId String                      @map("organization_id") @db.Uuid
+  teamId         String                      @map("team_id") @db.Uuid
+  objectTypeId   String                      @map("object_type_id") @db.Uuid
+  content        String
+  embedding      Unsupported("vector(1024)")?
+  embeddingModel String?                     @map("embedding_model")
+  indexedAt      DateTime                    @default(now()) @map("indexed_at")
+  record         Record                      @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, objectTypeId])
+  @@map("record_search")
+}
+// Raw SQL:
+//   ALTER TABLE record_search ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
+//   CREATE INDEX record_search_tsv ON record_search USING gin (tsv);
+//   CREATE INDEX record_search_embedding ON record_search USING hnsw (embedding vector_cosine_ops);
+
+// ───────────────────────── lists & views ─────────────────────────
+
+model List {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  slug           String
+  name           String
+  description    String      @default("")
+  objectTypeId   String?     @map("object_type_id") @db.Uuid   // null = mixed
+  createdByType  ActorType   @map("created_by_type")
+  createdById    String      @map("created_by_id")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  attributes     Attribute[]
+  entries        ListEntry[]
+
+  @@unique([organizationId, teamId, slug])
+  @@map("lists")
+}
+
+model ListEntry {
+  id        String   @id @default(uuid()) @db.Uuid
+  listId    String   @map("list_id") @db.Uuid
+  recordId  String   @map("record_id") @db.Uuid
+  data      Json     @default("{}")
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  record    Record   @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, recordId])
+  @@map("list_entries")
+}
+
+model View {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  teamId         String    @map("team_id") @db.Uuid
+  objectTypeId   String    @map("object_type_id") @db.Uuid
+  slug           String
+  name           String
+  description    String    @default("")
+  filter         Json      @default("{}")
+  sort           Json      @default("[]")
+  attributes     String[]  @default([])
+  createdByType  ActorType @map("created_by_type")
+  createdById    String    @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([organizationId, teamId, slug])
+  @@map("views")
+}
+
+// ───────────────────────── policy, approvals, audit ─────────────────────────
+
+model PolicyRule {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  teamId         String             @map("team_id") @db.Uuid
+  scope          PolicyScope
+  scopeId        String             @map("scope_id")
+  resourceType   PolicyResourceType @map("resource_type")
+  action         PolicyAction
+  effect         PolicyEffect
+  priority       Int                @default(0)
+  conditions     Json?
+  requiresApproval Boolean          @default(false) @map("requires_approval")
+  createdById    String             @map("created_by_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  bindings       PolicyBinding[]
+
+  @@index([organizationId, teamId, resourceType, action, scopeId, priority])
+  @@map("policy_rules")
+}
+
+model PolicyBinding {
+  id           String     @id @default(uuid()) @db.Uuid
+  policyRuleId String     @map("policy_rule_id") @db.Uuid
+  actorType    String     @map("actor_type")   // human | agent | role
+  actorId      String     @map("actor_id")
+  policyRule   PolicyRule @relation(fields: [policyRuleId], references: [id], onDelete: Cascade)
+
+  @@unique([policyRuleId, actorType, actorId])
+  @@index([actorType, actorId])
+  @@map("policy_bindings")
+}
+
+model ApprovalRequest {
+  id                String         @id @default(uuid()) @db.Uuid
+  organizationId    String         @map("organization_id") @db.Uuid
+  teamId            String         @map("team_id") @db.Uuid
+  action            String                      // tool name
+  resourceType      String         @map("resource_type")
+  resourceId        String?        @map("resource_id")
+  argumentsHash     String         @map("arguments_hash")
+  argumentsSnapshot Json           @map("arguments_snapshot")
+  requesterType     ActorType      @map("requester_type")
+  requesterId       String         @map("requester_id")
+  onBehalfOf        String         @map("on_behalf_of")
+  reason            String
+  status            ApprovalStatus @default(pending)
+  continuationToken String         @unique @map("continuation_token")
+  resolverUoaUserId String?        @map("resolver_uoa_user_id")
+  resolvedAt        DateTime?      @map("resolved_at")
+  resolutionNote    String?        @map("resolution_note")
+  expiresAt         DateTime       @map("expires_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  @@index([organizationId, teamId, status])
+  @@map("approval_requests")
+}
+
+/// INTENTIONALLY no FK on organization_id: audit rows survive tenant deletion.
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String?      @map("team_id") @db.Uuid
+  actorType      ActorType    @map("actor_type")
+  actorId        String       @map("actor_id")
+  onBehalfOf     String?      @map("on_behalf_of")
+  action         String
+  resourceType   String       @map("resource_type")
+  resourceId     String?      @map("resource_id")
+  outcome        AuditOutcome
+  reason         String?
+  metadata       Json?
+  requestId      String       @map("request_id")
+  ipAddress      String?      @map("ip_address")
+  userAgent      String?      @map("user_agent")
+  prevHash       String?      @map("prev_hash")
+  entryHash      String?      @map("entry_hash")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+// ───────────────────────── jobs, webhooks, idempotency ─────────────────────────
+
+model QueueJob {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String?   @map("organization_id") @db.Uuid
+  teamId         String?   @map("team_id") @db.Uuid
+  type           String
+  payload        Json
+  idempotencyKey String?   @unique @map("idempotency_key")
+  status         JobStatus @default(queued)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5) @map("max_attempts")
+  visibleAt      DateTime  @default(now()) @map("visible_at")
+  lockedAt       DateTime? @map("locked_at")
+  lockedBy       String?   @map("locked_by")
+  lastError      String?   @map("last_error")
+  result         Json?
+  progress       Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, visibleAt])
+  @@index([organizationId, teamId, type, createdAt(sort: Desc)])
+  @@map("queue_jobs")
+}
+
+model Webhook {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  teamId         String    @map("team_id") @db.Uuid
+  url            String
+  events         String[]
+  secretCiphertext String  @map("secret_ciphertext")
+  active         Boolean   @default(true)
+  lastDeliveredSeq BigInt  @default(0) @map("last_delivered_seq")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([organizationId, teamId, url])
+  @@map("webhooks")
+}
+
+model IdempotencyReplay {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  teamId         String   @map("team_id") @db.Uuid
+  key            String
+  tool           String
+  argumentsHash  String   @map("arguments_hash")
+  result         Json
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([organizationId, teamId, key])
+  @@map("idempotency_replays")
+}
+```
+
+## 3. Attribute type registry (`packages/schema-engine/src/attribute-types/`)
+
+One module per type exporting `AttributeTypeDef`:
+
+```ts
+type AttributeTypeDef = {
+  type: AttributeType
+  configSchema: z.ZodType            // validates attributes.config at define time
+  valueSchema: (config) => z.ZodType // validates one value
+  normalize: (value, config) => string | null   // for unique keys + matching; null = not keyable
+  toSearchText: (value, config) => string | null
+  supportsMulti: boolean
+  supportsUnique: boolean
+  supportsIndexed: boolean
+  filterOps: FilterOp[]
+}
+```
+
+| type | value shape | config | normalize | notes |
+|---|---|---|---|---|
+| `text` | string ≤ `maxLength` (default 4000) | `{maxLength?}` | trim, lower, collapse whitespace | |
+| `rich_text` | markdown string ≤ 100k | — | — | not unique/indexed |
+| `number` | number | `{precision?, min?, max?}` | canonical decimal string | |
+| `currency` | `{amount: string (decimal), currency: ISO4217}` | `{defaultCurrency}` | — | amount stored as string to avoid float drift |
+| `percent` | number 0–100 | — | — | |
+| `boolean` | boolean | — | `"true"/"false"` | |
+| `date` | `YYYY-MM-DD` | — | same | |
+| `datetime` | ISO 8601 UTC | — | same | |
+| `select` | option id string | `{options: [{id, label, color?}]}` | option id | `isMulti` ⇒ multi-select |
+| `status` | option id | `{options: [{id, label, category: open\|won\|lost\|neutral, position}]}` | option id | pipeline stages; never `isMulti` |
+| `rating` | int 0–`max` | `{max: 5}` | — | |
+| `email` | RFC 5322 address | — | lower-case, strip display name | unique-capable |
+| `phone` | E.164 string | `{defaultRegion}` | E.164 via `libphonenumber-js` | unique-capable |
+| `url` | absolute http(s) URL | — | lower host, strip trailing slash | |
+| `domain` | hostname | — | registrable domain (`tldts`), lower | unique-capable |
+| `location` | `{line1?, city?, region?, country? (ISO2), postal?, lat?, lng?}` | — | — | |
+| `personal_name` | `{first?, last?, full}` | — | lower(full) collapse | `full` derived when absent |
+| `actor_reference` | `{type: human\|agent, id}` | `{allow: [human, agent]}` | `type:id` | |
+| `record_reference` | record id (string) or array when `isMulti` | `{objectTypes: [slug…], relationTypeSlug}` | record id | backed by a `RelationType`; see §4.4 |
+| `timestamp_system` | ISO datetime | `{source: created_at\|updated_at\|last_activity_at}` | — | read-only, computed |
+| `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique |
+
+Reserved attribute slugs on every object type (system, not stored in `data`): `id`, `created_at`, `updated_at`, `last_activity_at`, `display_name`, `owner`.
+
+## 4. Write path — `applyWrite(tx, ctx, schema, op)`
+
+Ops: `create`, `update`, `assert`, `delete`, `restore`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` with `isolationLevel: 'ReadCommitted'` and explicit advisory locks.
+
+1. **Policy** — `checkPolicy(ctx, 'record', action, [record?, objectType, team, org])`; for each attribute touched with `sensitivity ∈ confidential|restricted`, `checkPolicy(ctx, 'attribute', 'edit', [attribute…])`. Denied ⇒ `POLICY_DENIED` (or MRTR approval when the rule has `requiresApproval`).
+2. **Schema** — `loadSchema(tenant)` cached by `teams.schema_version`; unknown attribute slug ⇒ `UNKNOWN_ATTRIBUTE`; archived ⇒ `ATTRIBUTE_ARCHIVED`; system read-only ⇒ `ATTRIBUTE_READ_ONLY`.
+3. **Validate & normalise** — per attribute `valueSchema`; `isMulti` ⇒ array, de-duplicated by `normalize`; `isRequired` on create ⇒ present and non-null; `record_reference` ⇒ target exists, same tenant, not deleted/merged, `objectTypes` allowed.
+4. **Lock** — `SELECT pg_advisory_xact_lock(hashtext(recordId))` for every record touched (sorted ids to avoid deadlocks).
+5. **Version** — `expected_version` given and ≠ `records.version` ⇒ `VERSION_CONFLICT {current}`.
+6. **Unique keys** — delete old keys for changed unique attributes, insert new `(attribute_id, normalized)`; unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (the conflicting record id is read back in the same tx).
+7. **Matching rules** (create/assert only) — evaluate §6; `block` ⇒ `DUPLICATE_FOUND {candidates}`; `warn` ⇒ continue and attach `duplicates` to the result.
+8. **Data** — compute new `data` (merge patch: keys with `null` unset), `display_name` from the primary attribute (`toSearchText`), `version + 1`.
+9. **Links** — for `record_reference` attributes, diff current active links vs new ids and write `record_links` (+ projection into `data[slug]`); for explicit `link/unlink` ops enforce cardinality (`one_to_*`/`*_to_one`: end the existing active link with `active_until = now` before inserting).
+10. **Changes** — one `record_changes` row per attribute set/unset and per link/unlink, with `old_value`/`new_value`, actor, provenance, reason.
+11. **Audit** — `writeAudit(tx, …)`.
+12. **Enqueue** — `record.reindex {recordId}` (idempotency `reindex:<recordId>:<version>`) and, if webhooks exist, `change.deliver {teamId}` (idempotency `deliver:<teamId>:<minute>`).
+13. **Idempotency** — if `idempotency_key` given: before step 1 look up `idempotency_replays`; hit with same `arguments_hash` ⇒ return stored result; hit with different hash ⇒ `IDEMPOTENCY_MISMATCH`. Store result after commit.
+
+`assert`: resolve `match_attribute` (must be `isUnique`) → normalise the incoming value → look up `record_unique_keys` → `update` if found else `create`. Returns `{record, created: boolean}`.
+
+`delete` (soft): sets `deleted_at`, ends active links per `on_delete` (`unlink`: end; `cascade`: soft-delete the other side when it is a `*_to_one` dependent; `restrict`: `DELETE_RESTRICTED`), writes a `delete` change with `snapshot`. `restore` reverses within retention.
+
+## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
+
+```json
+{ "and": [
+    { "attribute": "stage", "op": "in", "value": ["qualified", "proposal"] },
+    { "attribute": "amount", "op": "gte", "value": 10000 },
+    { "or": [
+        { "attribute": "owner", "op": "eq", "value": { "type": "human", "id": "usr_1" } },
+        { "attribute": "tags", "op": "contains", "value": "enterprise" }
+    ]},
+    { "not": { "attribute": "close_date", "op": "is_null" } },
+    { "linked_to": { "relation": "deal_for_company", "record_id": "…", "direction": "from" } },
+    { "system": "last_activity_at", "op": "lt", "value": "2026-07-01T00:00:00Z" },
+    { "text": "packaging" }
+]}
+```
+
+Ops by type: `eq neq in not_in is_null is_not_null` (all); `contains starts_with` (text, email, url, domain, personal_name, select-multi); `gt gte lt lte between` (number, currency.amount, percent, rating, date, datetime, timestamp_system). `text` = full-text on `record_search.tsv`. Sort: `[{attribute|system, direction}]`, max 3 keys. Pagination: opaque cursor = base64 of the last sort values + id; `limit` 1–200 (default 50). Attribute values are read as `data->>slug` with casts per type; indexed attributes use expression indexes `CREATE INDEX CONCURRENTLY records_<objtype>_<slug> ON records ((data->>'slug')) WHERE object_type_id = '…'` created by the worker job `attribute.index` when `isIndexed` is set (this is DML-free schema metadata + an index; it is the one exception to "no DDL", runs `CONCURRENTLY`, and is idempotent).
+
+## 6. Matching rules
+
+`{attribute_slugs, method, threshold?, action}` ordered by `position`. Evaluate on create/assert against non-deleted, non-merged records of the same type:
+
+- `exact` — every listed attribute's raw value equal.
+- `normalized` — every listed attribute's `normalize(value)` equal (uses `record_unique_keys` when the attribute is unique, else a `data->>slug` comparison on normalised values stored in a per-attribute normalised shadow key `_n.<slug>` inside `data`).
+- `fuzzy` — `similarity(display_name, candidate) >= threshold` via `pg_trgm`, only allowed on `text`/`personal_name`/`domain`.
+
+Result: `candidates: [{record_id, rule_position, evidence: [{attribute, value}]}]`. The engine never merges on its own.
+
+## 7. Merge — `planMerge` + `executeMerge`
+
+Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id}`, `reason`.
+1. Lock all records (sorted). All same object type, same tenant, none deleted/merged.
+2. For each attribute: chosen value = `field_choices[slug]`'s value if given; else survivor's non-null; else newest non-null among merged (by that attribute's last `set` change). `isMulti` ⇒ union de-duplicated by `normalize`.
+3. Unique keys: move losers' keys to survivor where survivor lacks them; drop the rest.
+4. Links: re-point `from_record_id`/`to_record_id` from losers to survivor; collapse duplicates on `(relation_type, from, to)` keeping the oldest; enforce cardinality (a `*_to_one` conflict keeps survivor's own link and ends the loser's).
+5. List entries re-pointed (duplicate ⇒ drop the loser's).
+6. Losers: `merged_into_id = survivor`, `deleted_at = now`; one `merge` change on the survivor with `snapshot = {survivorBefore, losers: [...full pre-images including links]}`, one `merge` change on each loser.
+7. Reads by a loser id return the survivor with `redirected_from: loserId` (service-level redirect, one hop).
+8. `unmerge(merge_change_id)` restores from the snapshot within `DEEPCRM_RETENTION_DAYS`; changes made to the survivor after the merge are kept; re-linking is best-effort and reported.
+
+## 8. Search document
+
+`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). Max 8 KiB. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
+
+## 9. Templates (`packages/schema-engine/src/templates/*.json`)
+
+`standard_crm` (person, company, deal + relations + matching rules as in brief §5.6), `system` (activity, note, task, their relation types — applied automatically on tenant provision), later `saas`, `agency`. Template application is idempotent: existing slugs are left untouched; new ones added; never archives.
+
+System object types created on provision:
+- `activity`: `kind (select: email|call|meeting|note|message|task_event|custom)`, `occurred_at (datetime, required)`, `direction (select: inbound|outbound|internal)`, `subject (text)`, `body (rich_text)`, `participants (actor_reference, multi)`, `external_ref (text, unique)`.
+- `note`: `title (text)`, `body (rich_text, required)`.
+- `task`: `title (text, required)`, `body (rich_text)`, `status (status: open|in_progress|done|cancelled)`, `due_at (datetime)`, `assignee (actor_reference)`, `priority (select: low|normal|high|urgent)`.
+- Relation types (`fromObjectTypeId` set, `toObjectTypeId` null = any): `activity_about`, `note_about`, `task_about` — `many_to_many`, `on_delete: unlink`.
+
+## 10. Error codes (`@deepcrm/schemas/errors.ts`)
+
+`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `LIMIT_EXCEEDED`, `INTERNAL`.
+
+exec
+/bin/zsh -lc 'cat docs/mcp-surface.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# MCP surface
+
+The product. One streamable-HTTP endpoint, MCP spec **2026-07-28**, stateless. Tool names, descriptions and schemas here are normative; code registers exactly these, and `pnpm docs:mcp` regenerates the tables in §2–§8 from the registrations.
+
+## 0. Conventions
+
+### 0.1 Transport
+- `POST /mcp` — one JSON-RPC request per HTTP request. `GET`/`DELETE /mcp` ⇒ 405. Headers per [auth-and-tenancy.md](auth-and-tenancy.md) §1. Response: JSON (no SSE stream needed — no server-initiated messages are used).
+- `tools/list`, `resources/list`, `prompts/list` results carry `_meta["io.modelcontextprotocol/cache"] = { ttlMs: 300000, cacheScope: "tenant" }` and an `etag` = `schema_version`.
+- Server info: `{ name: "deepcrm", version: <package version> }`.
+
+### 0.2 Argument conventions
+- Object types, attributes, relation types, lists and views are addressed by **slug**; records, links and changes by **uuid**.
+- Every mutating tool accepts optional `reason: string` (stored on the change) and `idempotency_key: string` (replay-safe for 24 h).
+- Every write that touches an existing record accepts optional `expected_version: number`.
+- `limit` defaults 50, max 200; `cursor` is opaque.
+
+### 0.3 Result conventions
+- Results are `structuredContent` JSON (plus a one-line `content[0].text` summary for clients that show text). Shapes below are the `structuredContent`.
+- A **record** renders as `{ id, object_type, display_name, version, data, owner, created_at, updated_at, last_activity_at, redacted_attributes: [], links?: … , redirected_from? }`.
+- Errors: `isError: true`, `structuredContent: { code, message, ...details }` with codes from `schema-engine.md` §10.
+
+### 0.4 Multi round-trip (MRTR) — confirmations and approvals
+When a call needs a decision before it proceeds, the tool returns `resultType: "input_required"` with `inputRequests`:
+
+```json
+{ "resultType": "input_required",
+  "inputRequests": [{ "id": "confirm", "kind": "confirmation",
+     "message": "Archiving attribute 'fax' will hide 12 existing values. Proceed?",
+     "schema": { "type": "object", "properties": { "confirmed": { "type": "boolean" } }, "required": ["confirmed"] } }] }
+```
+The client re-issues the same `tools/call` with `inputResponses: { confirm: { confirmed: true } }`. Approval-gated actions use `kind: "approval"` with `approval_token`; the re-issue must carry `{ approval_token, approved: true }` **and** come from a principal whose role is admin/owner (the Nessie agent obtains the human's decision in-channel). Tokens expire after 24 h.
+
+### 0.5 Long-running work — Tasks extension
+`crm_records_bulk_assert`, `crm_find_duplicates`, `crm_export` return `{ task_id }`; clients poll `tasks/get { taskId }` (extension `io.modelcontextprotocol/tasks`) which maps to `queue_jobs.{status, progress, result}`. `tasks/cancel` marks the job cancelled if still queued.
+
+## 1. Resources
+
+| URI | Content |
+|---|---|
+| `crm://schema` | `{ schema_version, object_types: [ObjectTypeSummary], relation_types: [...], matching_rules: [...] }` |
+| `crm://schema/{object_type}` | full `ObjectTypeDetail` (attributes with type, config, flags, sensitivity, description) |
+| `crm://templates` | available template slugs with descriptions |
+| `crm://views/{slug}` | a saved view's definition |
+
+## 2. Schema tools
+
+| Tool | Description (as registered) | Input | Output |
+|---|---|---|---|
+| `crm_schema_get` | Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by `schema_version`. | `{ object_type?: slug }` | `crm://schema` body or one `ObjectTypeDetail` |
+| `crm_object_type_define` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with `crm_attribute_define`. | `{ slug, singular_name, plural_name, description, icon?, attributes?: AttributeSpec[], primary_attribute?: slug }` | `ObjectTypeDetail` |
+| `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type, singular_name?, plural_name?, description?, icon?, primary_attribute? }` | `ObjectTypeDetail` |
+| `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type, reason? }` | `{ archived: true, records: n }` |
+| `crm_attribute_define` | Add an attribute (field) to an object type. Use `record_reference` to relate to other object types. Unique attributes enable `crm_record_assert`. | `{ object_type, ...AttributeSpec }` | `AttributeDetail` |
+| `crm_attribute_update` | Change an attribute's name, description, options, required/indexed/sensitivity flags. Type and slug are immutable. Tightening (required, unique) reports violations via MRTR before applying. | `{ object_type, attribute, name?, description?, config?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }` | `AttributeDetail` |
+| `crm_attribute_archive` | Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value. | `{ object_type, attribute, reason? }` | `{ archived: true, records_with_values: n }` |
+| `crm_relation_type_define` | Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. | `{ slug, from_object_type: slug \| null, to_object_type: slug \| null, forward_name, inverse_name, description?, cardinality, on_delete?, edge_attributes?: AttributeSpec[] }` | `RelationTypeDetail` |
+| `crm_relation_type_archive` | Archive a relation type; links are kept but inactive. | `{ relation_type, reason? }` | `{ archived: true, links: n }` |
+| `crm_matching_rule_set` | Replace the duplicate-matching rules for an object type. Rules decide what `crm_record_create` does when a likely duplicate exists (block / warn / allow). | `{ object_type, rules: [{ attributes: [slug], method: exact\|normalized\|fuzzy, threshold?, action }] }` | `{ rules }` |
+| `crm_template_apply` | Apply a schema template (e.g. `standard_crm`: people, companies, deals). Idempotent: existing slugs untouched. | `{ template }` | `{ added: { object_types, attributes, relation_types } }` |
+
+`AttributeSpec = { slug, name, description, type, config?, is_multi?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }`. Policy: all `define` on `schema`.
+
+## 3. Record tools
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_record_create` | Create a record. Returns the record, plus `duplicates` when a matching rule with action `warn` found likely duplicates. Fails with `DUPLICATE_FOUND` on a unique-attribute collision or a `block` rule — then use `crm_record_assert` or `crm_merge_records`. | `{ object_type, data: {slug: value}, links?: [{ relation_type, to_record_id, data? }], owner?: Actor, reason?, idempotency_key? }` | `{ record, duplicates?: Candidate[] }` |
+| `crm_record_update` | Patch attributes on a record. Keys set to `null` are cleared. Pass `expected_version` to avoid overwriting concurrent edits. | `{ id, data, owner?, expected_version?, reason?, idempotency_key? }` | `{ record }` |
+| `crm_record_assert` | Create-or-update by a unique attribute (upsert), e.g. person by email, company by domain. The safe default for any sync or import. | `{ object_type, match_attribute: slug, data, links?, owner?, reason?, idempotency_key? }` | `{ record, created: boolean }` |
+| `crm_record_get` | Fetch one record by id, or by a unique attribute value. Optionally include active links (grouped by relation) and the recent timeline. | `{ id? , object_type?, match_attribute?, value?, include_links?: boolean, include_timeline?: number }` | `{ record, links?, timeline? }` |
+| `crm_records_query` | List records of one object type with a structured filter, sort and cursor. Use `crm_search` for free-text. Filter grammar: see `schema-engine.md` §5. | `{ object_type, filter?, sort?, attributes?: [slug], cursor?, limit? }` | `{ records, next_cursor, total? }` |
+| `crm_records_bulk_assert` | Upsert many rows by a unique attribute as a background Task (cap `DEEPCRM_MAX_BULK_ROWS`). Poll `tasks/get`. | `{ object_type, match_attribute, rows: [{ data, links? }], reason? }` | `{ task_id }` → result `{ created, updated, failed: [{ index, code, message }] }` |
+| `crm_record_delete` | Soft-delete a record (restorable for the retention window). Links are ended per relation `on_delete`. Admin or approval. | `{ id, reason?, expected_version? }` | `{ deleted: true }` |
+| `crm_record_restore` | Restore a soft-deleted record and its links. | `{ id }` | `{ record }` |
+| `crm_record_at` | The record's attribute values as they were at a point in time, reconstructed from history. | `{ id, at: datetime }` | `{ record_at: { data, version_at, as_of } }` |
+| `crm_record_history` | Field-level change history for one record (who changed what, when, why). | `{ id, attributes?: [slug], cursor?, limit? }` | `{ changes: Change[], next_cursor }` |
+
+## 4. Link tools
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_link` | Relate two records through a relation type, optionally with link attributes (e.g. role, since). Cardinality is enforced: a `*_to_one` link replaces the existing one. | `{ relation_type, from_record_id, to_record_id, data?, label?, reason?, idempotency_key? }` | `{ link }` |
+| `crm_unlink` | End an active link (kept in history). | `{ link_id?, relation_type?, from_record_id?, to_record_id?, reason? }` | `{ unlinked: true }` |
+| `crm_links_list` | Active links of a record, optionally filtered by relation type and direction, with the related records' summaries. | `{ record_id, relation_type?, direction?: from\|to\|both, include_history?: boolean, cursor?, limit? }` | `{ links: [{ link, related: RecordSummary }], next_cursor }` |
+
+## 5. Lists, views
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_list_create` | Create a curated list of records (any object type, or mixed) with optional per-entry attributes — e.g. "Q4 target accounts" with a `priority` per entry. | `{ slug, name, description?, object_type?, attributes?: AttributeSpec[] }` | `ListDetail` |
+| `crm_list_add` | Add records to a list with optional entry data. | `{ list, entries: [{ record_id, data? }] }` | `{ added: n }` |
+| `crm_list_remove` | Remove records from a list. | `{ list, record_ids }` | `{ removed: n }` |
+| `crm_list_entries` | Entries of a list with their records. | `{ list, cursor?, limit? }` | `{ entries: [{ entry, record }], next_cursor }` |
+| `crm_view_save` | Save a reusable query (filter + sort + attributes) for an object type. | `{ slug, name, object_type, filter, sort?, attributes?, description? }` | `ViewDetail` |
+| `crm_view_run` | Run a saved view. | `{ view, cursor?, limit? }` | same as `crm_records_query` |
+
+## 6. Activities, timeline, tasks, pipeline
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_activity_log` | Log an interaction (email, call, meeting, message…) against one or more records. Idempotent on `external_ref`. Updates `last_activity_at` on linked records. | `{ kind, occurred_at, subject?, body?, direction?, participants?: Actor[], about: [record_id], external_ref?, reason? }` | `{ record }` (the activity record) |
+| `crm_note_add` | Attach a note to one or more records. | `{ title?, body, about: [record_id] }` | `{ record }` |
+| `crm_record_timeline` | Chronological activities and changes for a record; `hops: 1` also includes linked records (a company's people and deals). | `{ id, hops?: 0\|1, kinds?: [activity\|change\|note\|task], since?, cursor?, limit? }` | `{ items: TimelineItem[], next_cursor }` |
+| `crm_task_create` | Create a task linked to records, assigned to an agent or a human. | `{ title, body?, due_at?, assignee?: Actor, priority?, about?: [record_id] }` | `{ record }` |
+| `crm_task_update` | Update a task's status, assignee, due date. | `{ id, status?, assignee?, due_at?, priority?, title?, body? }` | `{ record }` |
+| `crm_tasks_list` | Tasks by status/assignee/due window. | `{ status?, assignee?: Actor, due_before?, due_after?, about?: record_id, cursor?, limit? }` | `{ records, next_cursor }` |
+| `crm_pipeline_summary` | Stage-by-stage counts, amounts and average time-in-stage for any object type with a `status` attribute (e.g. deals). Derived from history. | `{ object_type, status_attribute?: slug, amount_attribute?: slug, filter?, since? }` | `{ stages: [{ id, label, category, count, amount_sum?, avg_days_in_stage }] , conversions: [{ from, to, count }] }` |
+
+## 7. Search, quality, merge
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_search` | Free-text search across records: `keyword` (exact words), `semantic` (meaning), or `hybrid` (default). Restrict to object types. | `{ query, object_types?, mode?, limit? }` | `{ hits: [{ record: RecordSummary, score, match: keyword\|semantic\|both }] }` |
+| `crm_find_duplicates` | Scan an object type for likely duplicates using matching rules and semantic similarity. Background Task; returns candidate groups with evidence. Never merges. | `{ object_type, filter?, include_semantic?: boolean }` | `{ task_id }` → `{ groups: [{ records: [RecordSummary], evidence }] }` |
+| `crm_merge_records` | Merge duplicates into a survivor: per-attribute survivor values (override with `field_choices`), union of multi-values, links and list entries re-pointed, losers become redirects. Reversible with `crm_unmerge` within retention. Approval-gated by default. | `{ survivor_id, merged_ids: [id], field_choices?: { slug: record_id }, reason }` | `{ record, merge_change_id, repointed_links: n }` |
+| `crm_unmerge` | Undo a merge from its snapshot. | `{ merge_change_id, reason }` | `{ restored: [id] }` |
+| `crm_data_quality` | Report: required attributes missing, stale records (no activity in N days), orphans (deals without company/contact), unique collisions predating a rule. Deterministic; the agent decides what to fix. | `{ object_type?, stale_days?: number }` | `{ missing_required, stale, orphans, collisions }` each `[{ record: RecordSummary, detail }]` with counts |
+
+## 8. IO, change feed, webhooks
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_export` | Export an object type or view to JSONL/CSV as a Task; result carries a signed download URL valid for 1 h. Approval-gated by default. | `{ object_type?, view?, format: jsonl\|csv, attributes? }` | `{ task_id }` → `{ url, rows, expires_at }` |
+| `crm_changes_since` | Global change feed for the workspace since a cursor: every create/set/unset/link/unlink/delete/merge with actor and provenance. Use on schedules to react to what changed. | `{ cursor?: string, object_types?, kinds?, limit? }` | `{ changes: Change[], next_cursor, has_more }` |
+| `crm_webhook_set` | Register (or update) an HMAC-signed webhook URL that receives coalesced change batches. Admin only. | `{ url, events: [record.*\|link.*\|schema.*], active? }` | `{ webhook: { id, url, events, active }, secret: string (shown once) }` |
+| `crm_webhook_list` | List webhooks (secrets never returned). | `{}` | `{ webhooks }` |
+| `crm_webhook_delete` | Delete a webhook. | `{ id }` | `{ deleted: true }` |
+
+Webhook payload: `POST url` with `X-DeepCRM-Signature: sha256=<hmac>` over the body, `X-DeepCRM-Delivery: <id>`, body `{ team: uoaTeamId, since_seq, until_seq, changes: Change[] }`, coalesced per 30 s window, retried with backoff (1 m, 5 m, 30 m, 2 h, 12 h) then parked with `last_error`.
+
+## 9. Prompts
+
+| Name | Arguments | Purpose |
+|---|---|---|
+| `crm/qualify-lead` | `record_id` | Steps: fetch record + timeline + company, check required attributes, propose stage move, log activity. |
+| `crm/prepare-account-review` | `company_record_id` | Gather people, open deals, last 90 days of activity, data-quality issues; produce a review. |
+| `crm/clean-duplicates` | `object_type` | Run `crm_find_duplicates`, review groups with evidence, merge only with human confirmation. |
+
+Prompts are text scaffolds referencing tool names; they contain no logic.
+
+## 10. Tool count and grouping
+
+47 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (10), `crm_link*` (3), `crm_list_*`/`crm_view_*` (6), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters so a client's find/load meta-tools work.
+
+codex
+All nine docs read. Writing the findings document now.
+exec
+/bin/zsh -lc "cat > reviews/2-security-redteam.md << 'EOF'
+# Security red-team review — DeepCRM design docs
+
+Scope: "'`docs/auth-and-tenancy.md` (A&T), `docs/spec/contracts.md` (CT), `docs/spec/events.md` (EV), `docs/spec/nessie-integration.md` (NI), `docs/spec/protocol-flows.md` (PF), `docs/spec/policy-defaults.json` (PD), `docs/architecture.md` (AR), `docs/schema-engine.md` (SE), `docs/mcp-surface.md` (MS). Docs only, no code. Findings ordered by area; each has severity, location, scenario, fix.
+
+---
+
+## 1. Cross-tenant isolation
+
+### S1.1 — HIGH — `tasks/get` has no specified tenant check; export URLs readable cross-tenant
+- **Where:** MS §0.5 (Tasks extension), CT `tools.ts` (`tasks/get { taskId }` maps to `queue_jobs.{status,progress,result}`), SE §2 (`QueueJob.organizationId/teamId` are **nullable**).
+- **Attack:** Any authenticated principal from tenant B who learns or guesses a `task_id` (uuid v4 — but task ids leak via logs, Nessie run state, `X-DeepCRM-Delivery`-style breadcrumbs, or a compromised agent in tenant A) calls `tasks/get` and reads `result`, which for `crm_export` is `{ url, rows, expires_at }` — a bearer signed URL to a full data export of tenant A. Nullability of `QueueJob.organizationId/teamId` signals the authors already anticipate jobs without tenant rows, which makes a tenant check easy to "forget" for exactly those rows.
+- **Fix:** Make `organizationId`/`teamId` non-nullable on `queue_jobs`; state normatively that `tasks/get`/`tasks/cancel` reject with `NOT_FOUND` (not `POLICY_DENIED` — no existence oracle) when `job.(organizationId,teamId) ≠ ctx.tenant`. Add it to the acceptance tests.
+
+### S1.2 — HIGH — Org/team pairing in `resolveTenant` is not verified on the hit path
+- **Where:** A&T §3, PF F10. `teams.external_team_id` is globally `@unique`; upsert inserts org then team. Nothing specifies behaviour when a delegation arrives claiming `(org=B, team=T)` where team T already exists under org A.
+- **Attack:** UOA team ids and org ids are separate claims. If UOA ever re-parents a team, or a delegation is minted with a mismatched pair (UOA bug, token-exchange confusion, future non-Nessie client per A&T §1 "Future"), `resolveTenant` finds team T by `external_team_id` and returns `tenant = { organizationId: <A'"'s local id>, teamId: T }"'` while the principal says org B — or worse, silently returns team T under org A to a caller whose only valid credential is for org B. All subsequent queries scope to the wrong org context. The doc never states a consistency check.
+- **Fix:** Specify: on resolve, if the team row exists, its `organization_id` MUST equal the resolved org'"'s id, else 401 ("'`TENANT_MISMATCH`). Never re-parent implicitly; re-parenting is an operator migration.
+
+### S1.3 — MEDIUM — Unbounded tenant auto-provisioning
+- **Where:** PF F10, NI §2.3. First call from an unknown team inserts org + team + policy seed + system template + audit, with no authorization decision beyond "the three headers verified".
+- **Attack:** Any holder of a valid UOA delegation with `scope: ai.invoke` for *any* org/team causes DeepCRM to provision a tenant. If UOA lets users create teams cheaply, an attacker mints thousands of teams → thousands of provisioned tenants (policy rows, template rows, advisory-lock domains, seq ranges). Also squatting: provision `external_org_id` of a victim org before the victim'"'s real first call, pre-seeding attacker-influenced placeholder state (names are non-authoritative, but policy rows are editable per tenant — see S3.6 — and the seeding path is the trust root).
+- **Fix:** Gate provisioning: require the delegation's "'`role` claim to be `owner` for the F10 path, or an explicit per-deployment allow-list of `external_org_id` values in env. Rate-limit tenant creation per `principal.app`.
+
+### S1.4 — MEDIUM — Worker jobs trust tenant ids carried in payloads
+- **Where:** AR §5 ("Queue jobs carry `{organizationId, teamId}`"), SE §4.12. The worker reindex/dedup/bulk/export/deliver jobs act on the tenant named in the payload; no doc states the worker re-derives or validates tenancy against anything authoritative.
+- **Attack:** Defence-in-depth gap rather than a direct exploit from the MCP surface: any bug that lets a caller influence a job payload (e.g. bulk-assert rows containing record ids, or a future enqueue path) crosses tenants inside the worker, where the `lint-tenant-where` rule (A&T §3) does not apply. `pg_advisory_xact_lock(hashtext(recordId))` (SE §4.4) also shares a global lock namespace across tenants — a tenant can stall another tenant'"'s writes by hammering a known victim record id (record ids are uuids but leak via redirect/error paths, see S4.4).
+- **Fix:** State that job handlers re-resolve the tenant from the payload ids and abort if the referenced rows don't match; namespace advisory locks per tenant ("'`hashtext(tenantId || recordId)`).
+
+### S1.5 — LOW — Lint rule is the only stated enforcement of tenant filtering
+- **Where:** A&T §3 (`scripts/lint-tenant-where.mjs`).
+- **Attack:** A lint rule is bypassable (`eslint-disable`, a raw-SQL path, a Prisma `$queryRaw`, worker code not covered by the glob). One miss = silent cross-tenant read.
+- **Fix:** Add a runtime backstop: wrap the Prisma client so every query against a CRM table without `organization_id`/`team_id` in `where` throws in non-test environments, or use Postgres RLS with a per-transaction `SET app.tenant` as the floor and the lint rule as ergonomics.
+
+---
+
+## 2. Three-header auth model
+
+### S2.1 — HIGH — `X-Nessie-Context` JWT has no `aud`/`iss` binding — cross-service token confusion
+- **Where:** A&T §1 table (context verification: "RS256 via `NESSIE_CONTEXT_JWKS_URL`; max TTL 300 s, 30 s skew; claims …"), NI §1 ("same key set it uses for DeepWater/DeepSignal"). No `aud`, `iss`, or token-use claim is checked for the context token.
+- **Attack:** Nessie signs context tokens for DeepWater and DeepSignal with the *same key set*. A context JWT minted for DeepSignal (different audience, possibly different `agentId` semantics and different TTL discipline) is replayed against DeepCRM and verifies. The delegation token gates data access, so this is not direct data theft — but it lets an attacker who holds any DeepSignal-bound context token forge `agentId`/`runId`/`toolCallId` provenance on DeepCRM writes, poisoning the audit trail and shifting policy evaluation onto a different `agent:<id>` binding (PD `agent_inheritance`: an `agent:<id>` binding can *grant* rights — see S3.4 — so choosing your agent id matters).
+- **Fix:** Require `aud = <DEEPCRM_API_PUBLIC_URL>` (or a dedicated `deepcrm` audience) and a fixed `iss` on the context token; reject otherwise. Document the claim set as normative.
+
+### S2.2 — HIGH — No replay / jti binding for `X-Nessie-Context`; provenance is spoofable within the 300 s TTL
+- **Where:** A&T §1, PF F1. The context carries `toolCallId` and `requestId` but nothing binds those to the actual JSON-RPC request, and there is no jti/nonce store.
+- **Attack:** Within 300 s, anyone holding a context token (logs at Nessie, a compromised tool proxy, another tool call in the same run) can replay it with *arbitrary* tool calls under the same delegation, attributing them to the original `agentId`/`runId`/`toolCallId`. Audit rows (A&T §6) and `record_changes` provenance will confidently name the wrong tool call. Since provenance is the only agent-attribution DeepCRM has, this undermines both audit and per-agent policy bindings.
+- **Fix:** Bind the context token to the request: require `toolCallId` to equal the JSON-RPC `id` (or a hash of method+arguments) and reject mismatch. For high-value actions (merge/export/delete/webhook admin), require single-use: record `requestId` in a short-lived seen-set (300 s TTL) and reject replays.
+
+### S2.3 — HIGH — `REQUIRE_AUTH=false` dev principal can reach production data by misconfiguration
+- **Where:** A&T §1, AR §6 (`REQUIRE_AUTH` default `true` (prod) / `false` (dev)). The server happily serves a fixed omnipotent principal (`org=org_dev`, `team=team_dev`) when the flag is off.
+- **Attack:** One env-var mistake (a compose file carried from local to prod, a redeploy script that doesn'"'t set it) and the entire CRM is unauthenticated. Worse, the dev principal uses *fixed, well-known ids*: if prod ever runs with "'`REQUIRE_AUTH=false` even briefly, an attacker who knows this (it'"'s in the public docs) provisions/uses "'`org_dev`/`team_dev` tenant data that later becomes reachable again on any recurrence. Nothing states the server refuses to boot in this configuration when `DEEPCRM_API_PUBLIC_URL` is non-localhost.
+- **Fix:** Fail closed: refuse to start when `REQUIRE_AUTH=false` AND (`DEEPCRM_API_PUBLIC_URL` is not localhost OR `NODE_ENV=production`). Make the dev principal ids configurable per checkout so prod data can never share them.
+
+### S2.4 — MEDIUM — `tv` (credential epoch) is verified but never enforced
+- **Where:** A&T §1 (delegation claims include `tv`), §2 (`credentialEpoch` carried on the Principal). No doc describes an epoch store or a comparison.
+- **Attack:** UOA'"'s epoch exists to kill a user's tokens on credential rotation. If DeepCRM only *checks signature/iss/aud/exp* (as the table states) and never compares "'`tv` against a current epoch, a stolen delegation is good until `exp` regardless of revocation. The claim is dead weight — a verification gap that looks like a control.
+- **Fix:** Either specify the enforcement (UOA introspection endpoint or a pushed epoch cache; reject `tv < current`) or remove the claim from the docs. Silence here will be implemented as "no check".
+
+### S2.5 — MEDIUM — Delegation token has no maximum lifetime and no `iat`/`nbf` discipline
+- **Where:** A&T §1 (checks `exp` only), NI §1 ("short-lived" — aspirational, not enforced).
+- **Attack:** A misconfigured or compromised token-exchange path mints a 30-day delegation; DeepCRM accepts it because only `exp` validity is checked. Combined with S2.4, revocation is impossible.
+- **Fix:** Enforce `exp - iat ≤ 15 min` (configurable), require `iat`, reject `nbf` in the future beyond skew. State it in A&T §1.
+
+### S2.6 — MEDIUM — App key is a global, unscoped bearer; no binding to issuer, orgs, or rotation
+- **Where:** A&T §1 (`DEEPCRM_APP_KEYS` name:sha256 list; name becomes `principal.app`), NI §7 (rotation story = "401, owner re-enters key").
+- **Attack:** The app key proves "the calling product" but is not bound to anything: any valid delegation for any tenant composes with it. If the single Nessie app key leaks, every Nessie-connected tenant is exposed to anyone who can also obtain *any* UOA delegation (a much lower bar — delegations flow through every worker). There is no per-app policy surface (e.g. allowed `iss`, allowed org set, separate read-only keys), no dual-key rotation window, and no statement that the same key name can have two active hashes during rotation.
+- **Fix:** Support multiple active hashes per app name (rotation window); document per-app constraints (allowed issuers, optional org allow-list) as a designed seam even if v1 ships unconstrained; log and alert on 401 bursts per key hash prefix.
+
+### S2.7 — LOW — Claim shape validation unspecified
+- **Where:** A&T §1 lists claims but never says they are schema-validated (types, non-empty, `sub`/`org`/`team` format).
+- **Attack:** A JWT with `team: ""`, `org: null` coerced to string, or `sub` type-confused (number vs string) reaches `resolveTenant`, creating garbage tenants (`external_team_id = ""`) or crashing the upsert — and on the `sub`-mismatch check, type confusion between delegation `sub` and context `sub` (`"123"` vs `123`) could either fail open (if compared loosely) or be an availability bug.
+- **Fix:** Specify a zod schema for each token'"'s claims; strict "'`===` on strings for the sub-match; reject empty/absent claims.
+
+---
+
+## 3. Approval flow (MRTR F6)
+
+### S3.1 — HIGH — `arguments_hash` canonicalisation is unspecified
+- **Where:** PF F6 ("arguments_hash stored"), SE §2 (`ApprovalRequest.argumentsHash` + `argumentsSnapshot`), CT `mrtr.ts`. No canonicalisation rules: key order, array order, unicode normalisation, number formatting, treatment of `reason`, `idempotency_key`, `expected_version`, `field_choices` ordering.
+- **Attack:** Two directions. (a) Fail-open wobble: if the hash is computed over a serialisation that treats `{a:1,b:2}` and `{b:2,a:1}` as equal but the *executor* applies them differently somewhere (e.g. `field_choices` iteration order, `merged_ids` order affecting `field_choices` precedence), the approver approves one semantic and the executor applies another. (b) Fail-open by omission: if `reason` or other "cosmetic" fields are excluded from the hash, an attacker re-issues with identical operational args but a falsified audit `reason`; if `idempotency_key` is included, the approved re-issue may instead hit `IDEMPOTENCY_MISMATCH` (availability). You cannot audit "approver approved exactly this" without a defined canonical form.
+- **Fix:** Define canonical JSON (sorted keys, NFC, explicit treatment of floats) over the *complete* tool arguments minus `inputResponses`, and state that the stored `argumentsSnapshot` — not the re-issued args — is what gets executed (execute from snapshot, not from the second request body).
+
+### S3.2 — HIGH — Approval token consumption is not stated to be tenant- and tool-bound
+- **Where:** PF F6, MS §0.4, SE §2 (`ApprovalRequest.continuationToken @unique`). The consumption path ("re-issue the same call with `inputResponses.approval`") never states that token lookup is scoped by `(organization_id, team_id, action, arguments_hash, status=pending, expires_at)`.
+- **Attack:** `continuationToken` is globally unique and (entropy unspecified, see S3.5) possibly guessable or leakable — it appears in agent-visible tool results and flows through Nessie'"'s "'`ApprovalRequest.context`. If lookup is by token alone, a token from tenant A presented by an admin of tenant B (or against a different tool'"'s call in tenant A) could be consumed against the wrong request. Even same-tenant, nothing states the token is bound to the *requester* or the *tool name*; a token minted for "'`crm_merge_records` could be replayed on a concurrent `crm_export` call if only token+role are checked.
+- **Fix:** Normative consumption predicate: token must match a `pending`, unexpired row in the caller'"'s tenant whose "'`action` equals the tool name and whose `argumentsHash` equals the canonical hash of the re-issued arguments; single-use transition `pending → consumed` in the same transaction as the mutation; audit `approval.consumed` with both requester and resolver.
+
+### S3.3 — MEDIUM — Approver role read solely from the delegation `role` claim; `required_role` degraded
+- **Where:** A&T §4 ("from UOA team role claim `role` if present, else member"), PF F6 ("DeepCRM checks the approver'"'s role from the delegation's team role claim\"), CT "'`mrtr.ts` (`required_role: admin|owner`), NI §4.3.
+- **Attack:** The role that authorises destructive actions is a *claim in a token DeepCRM does not issue*. If UOA'"'s exchange ever emits a stale role (demoted admin keeps a cached delegation for its lifetime — compounded by S2.4/S2.5), DeepCRM honours it. Separately, "'`required_role: "owner"` in the MRTR shape is not honoured by the documented check ("principal whose role is admin/owner") — an owner-only approval silently degrades to admin.
+- **Fix:** Enforce `required_role` exactly (owner ≠ admin). Document the maximum acceptable role staleness and tie it to the delegation max-lifetime fix (S2.5). Consider requiring the approval consumption call to carry a *fresh* context token (S2.2) so provenance records the actual approver'"'s run.
+
+### S3.4 — MEDIUM — Pending-approval spam / unbounded growth
+- **Where:** A&T §4 (\"an "'`approval_requests` row is created"), PF F6 (24 h expiry, rows kept for audit), SE §2 (no cap, `@@index([org,team,status])`).
+- **Attack:** Any member agent can loop approval-gated calls (merge/export/delete/define) and mint unlimited `approval_requests` rows with full `argumentsSnapshot` payloads (snapshots can be large — merge snapshots include record data). Storage DoS plus a denial-of-attention flood on admins (every row surfaces in Nessie as an approval ask).
+- **Fix:** Cap concurrent pending approvals per team (e.g. 100) and per requester (e.g. 10); dedupe identical `(action, argumentsHash)` pending rows; hard-delete expired rows after audit copy (or fold the fact into `audit_logs` and drop the snapshot).
+
+### S3.5 — LOW — Token entropy and format unspecified
+- **Where:** PF F6 (`approval_token: "apr_…"`), SE §2 (`continuationToken`).
+- **Attack:** If implemented as a short random or sequential id, S3.2 becomes practical. 
+- **Fix:** Specify ≥ 128-bit CSPRNG, prefixed (`apr_`), stored hashed (sha256) at rest — the DB needn'"'t hold the bearer value.
+
+### S3.6 — INFO — No policy-management surface exists, yet policies are \"editable per tenant\"
+- **Where:** A&T §4 (\"Defaults seeded per team … as rows, so they are editable\"), MS §2–§8 (47 tools, none touch "'`policy_rules`/`policy_bindings`), PD (`approval.admin` allow rule with no tool that could exercise it).
+- **Attack:** Not directly exploitable via MCP — but it means every policy change is a raw DB write by an operator, with no MRTR, no audit-chain integration guarantee, no validation that a tenant doesn'"'t delete its own deny rules. The first operator script that edits policies becomes an unaudited privilege-escalation path, and the "'`approval.admin` rule guards a resource nothing can reach.
+- **Fix:** Either ship a policy admin tool (admin-only, approval-gated, audited) or state explicitly that policies are immutable post-seed in v1 and edits require a migration. Remove or wire the dead `approval.admin` rule.
+
+---
+
+## 4. Policy engine
+
+### S4.1 — HIGH — `restore` and `unlink` actions fall through the default table; delete-gate is bypassable via restore ambiguity
+- **Where:** A&T §4 default table and PD rules cover `view|create|edit|link|delete|merge|export|define|admin` — there is **no `restore` action** in `PolicyAction` (SE §2 enum confirms) and no rule for it. `crm_record_restore` (MS §3) exists. `unlink` maps to `link.link`? Unstated.
+- **Attack:** A member soft-delete is approval-gated, but if restore evaluates as (a) `record.edit` (allowed for members) the member can restore anything an admin deleted — including records deleted *for cause* (GDPR erasure, abusive data); if (b) hardcoded-deny, legitimate restores break and someone "fixes" it with a permissive rule. Ambiguity in a security default is a vulnerability on a schedule. Same for `unlink`: if it isn'"'t explicitly "'`link.link`, a member unable to `link` may still be able to `unlink` (or vice versa) depending on implementer reading.
+- **Fix:** Add `restore` to `PolicyAction` with a seeded rule mirroring `delete` (deny+approval for members). State normatively that `unlink` evaluates `link.link` (or add `link.unlink`). Add a policy-coverage test: every tool maps to exactly one (resourceType, action) pair, enforced by a registry test.
+
+### S4.2 — MEDIUM — Deny-overrides semantics allow a high-priority `allow` to defeat lower `deny`; scope-chain ordering amplifies it
+- **Where:** A&T §4 step 3 ("first matching rule'"'s effect wins except any matching deny at equal-or-higher priority wins\"), scope chain "'`[record?, object_type?, team, organization]`.
+- **Attack:** The rule as written permits `allow(priority=10, scope=record)` to beat `deny(priority=0, scope=team)`. That is deliberate granularity — but combined with editable policies (S3.6) and free-form `conditions` (S4.3), an admin (or operator script) can punch a per-record hole in a team-wide deny and nothing in the model flags it. There is also no stated ceiling/floor on `priority` (arbitrary ints → precedence wars between rules).
+- **Fix:** Document deny-overrides as absolute for v1 (any matching deny at any priority denies; priority orders allows only), or ship a `policy_simulate`-style evaluation trace in admin tooling so holes are visible. Bound priority to a small enum (e.g. 0/10/100).
+
+### S4.3 — MEDIUM — `conditions` are unbounded JSON evaluated against record data — policy oracle
+- **Where:** A&T §4 (only seeded condition is `sensitivity`), SE §2 (`PolicyRule.conditions Json?`). The evaluation semantics (which fields may be referenced, how values compare) are undefined.
+- **Attack:** Once conditions can reference arbitrary record attributes, policy decisions become an oracle: a member probes `crm_record_update` outcomes or `POLICY_DENIED` vs success to infer values of attributes they cannot read (including `restricted` ones — the deny/allow distinction leaks a bit per call). Error payloads (`POLICY_DENIED { resource, action }`) are stable enough to automate this.
+- **Fix:** Restrict v1 conditions to a closed set (`sensitivity`, `object_type`); state that condition evaluation never reads `records.data`; document that deny and approval-required are indistinguishable in error shape to non-admin callers if an oracle is unacceptable.
+
+### S4.4 — MEDIUM — Duplicate/merge candidate evidence leaks values across policy boundaries
+- **Where:** CT `records.ts` (`Candidate.evidence[].value: z.unknown()`), SE §6 (matching evidence includes `{attribute, value}`), PF F3 (candidates returned on `DUPLICATE_FOUND` and on `warn`).
+- **Attack:** A member creates a record with a guessed restricted value (e.g. a private phone number). A `normalized`/`exact` rule on that attribute returns `evidence: [{kind:"exact", attribute:"private_phone", value:"+44…"}]` plus the **record_id** of the restricted record — confirming existence, confirming the guessed value, and handing over a target id for merge/link probing. `display_name` of the candidate (a `RecordSummary`) rides along too (see S5.1). Redaction is documented for record *rendering* (A&T §5) but never for candidate evidence.
+- **Fix:** Apply `redactForActor` to candidate records and strip/withhold `evidence[].value` for attributes the caller may not view (return `{kind, attribute, matched: true}` instead). Consider suppressing `record_id` for blocked candidates the caller cannot view.
+
+### S4.5 — LOW — Agent identity in bindings is not namespaced by app or deployment
+- **Where:** PD `agent_inheritance`, A&T §4 (`agent:<agentId>` bindings), NI §1 (app key names the product; agentId comes from Nessie'"'s context token).
+- **Attack:** Two Nessie deployments (or Nessie + a future second product) share a UOA org/team. "'`agentId` strings are assigned by the caller'"'s product; if deployment B mints "'`agentId = "assistant"` and tenant policy grants `agent:assistant` (intended for deployment A'"'s agent), B's agent inherits the grant. "'`principal.app` is recorded but never part of binding identity.
+- **Fix:** Make bindings `agent:<app>:<agentId>` (or document that agentIds must be deployment-unique and UOA enforces it).
+
+---
+
+## 5. Attribute-level redaction leaks
+
+### S5.1 — HIGH — `display_name` is built from the primary attribute regardless of sensitivity, and leaks everywhere
+- **Where:** SE §4.8 ("`display_name` from the primary attribute (`toSearchText`)"), SE §8 (search doc starts with `display_name`), CT (`RecordSummary.display_name` returned by search hits, timeline `about[]`, links `related`, duplicate candidates, change rows'"' embedded "'`record`).
+- **Attack:** Tenant marks the `name` attribute of `person` `restricted` (sensible: a witness list, a VIP pipeline). `display_name` still contains the name and is returned to every member in every `RecordSummary` across search, timeline, links, duplicate candidates, change feed, and webhook envelopes. The redaction model (`redactForActor` removes *attributes*) structurally cannot catch this because the leak is a *denormalised column*, not an attribute in `data`.
+- **Fix:** Forbid `sensitivity > internal` on `primary_attribute` (validate at define/update and when sensitivity is raised), and/or redact `display_name` to `null`/`"(restricted <type>)"` in `RecordSummary` when the caller may not view the primary attribute. State which.
+
+### S5.2 — HIGH — `_n.<slug>` normalised shadow keys live inside `data` and are not covered by documented redaction
+- **Where:** SE §6 ("normalised values stored in a per-attribute normalised shadow key `_n.<slug>` inside `data`"), A&T §5 (`redactForActor` removes "attributes the actor may not view" — attributes are addressed by slug).
+- **Attack:** A member may not view restricted attribute `private_email`, but `RecordOut.data` includes `_n.private_email` unless redaction explicitly strips `_n.*` keys — the docs never say it does. The normalised form often *is* the sensitive fact (lower-cased email, E.164 phone, registrable domain). Also, `data` is returned wholesale in query/get/export paths, so one missed strip leaks in bulk.
+- **Fix:** Specify that `redactForActor` strips all keys matching `_n.*` for redacted attributes (and that `_n.*` is never writable via `RecordData` — Slug regex already blocks it client-side, say so as an invariant). Add a contract test: redacted output never contains the restricted value in any form, including `_n.*`.
+
+### S5.3 — HIGH — Merge/delete `snapshot` carries full pre-images (including restricted values) into `record_changes`; feed/webhook redaction only covers `old_value`/`new_value`
+- **Where:** SE §4 delete ("writes a `delete` change with `snapshot`"), SE §7.6 (merge snapshot = `{survivorBefore, losers: [...full pre-images including links]}`), A&T §5 + EV §1 (redaction language covers only `old_value`/`new_value`), SE §2 (`RecordChange.snapshot Json?`).
+- **Attack:** The change feed (`crm_changes_since`), `crm_record_history`, and webhook envelopes are built from `record_changes`. A merge or delete of a record with restricted attributes writes the *entire record* into `snapshot`. Unless consumers strip it, any member (pull) or any webhook endpoint (push, see S6.2) receives the full restricted content at the moment of merge/delete — precisely the moment a cover-up merge would happen.
+- **Fix:** Extend the redaction clause to `snapshot`: either omit snapshots from all consumer-facing shapes (they'"'re an engine-internal unmerge artefact) or run the same attribute redaction over them. State that "'`snapshot` never leaves the service except in `crm_unmerge` execution.
+
+### S5.4 — HIGH — `crm_record_at` and `crm_record_history` redaction semantics undefined; sensitivity downgrade attack
+- **Where:** MS §3 (`crm_record_at`, `crm_record_history`), CT `records.ts` (`Change.old_value/new_value`), A&T §5 (read path redaction described only for record reads).
+- **Attack:** (a) History read applies no redaction → member reads restricted old/new values directly. (b) Even if current sensitivity is applied: an admin briefly lowers `salary` to `public`, a member snapshots history, sensitivity raised again — but worse and simpler: values set *while* an attribute was public remain visible in history forever after it becomes restricted. (c) `crm_record_at` reconstructs `data` — if it redacts by *current* sensitivity, fine for confidentiality but it also means restricted-at-read-time is the rule; the docs say nothing, so any of the three behaviours can ship.
+- **Fix:** Normative: history/at/change-feed apply the *current* sensitivity of the attribute to *all* historical values (most conservative, simplest), and state that raising sensitivity is the remediation path and is retroactive.
+
+### S5.5 — MEDIUM — Timeline and search-hit shapes embed `RecordOut`/`RecordSummary` without a stated redaction pass; `hops: 1` widens it
+- **Where:** CT `records.ts` (`TimelineItem` carries full `RecordOut`), MS §6 (`hops: 1` includes linked records'"' items), MS §7 (search hits are "'`RecordSummary` only — good, but display_name caveat S5.1), SE §8 (search doc excludes confidential/restricted — but the *hit'"'s* summary fields aren't covered).
+- **Attack:** Timeline items for activity/note/task records carry full "'`RecordOut` of the activity plus `about[]` summaries of the linked records. If `redactForActor` is only applied on the primary record-read path (as A&T §5 reads), embedded records escape redaction. `hops: 1` turns one permitted read into a fan-out over linked records the caller has never been policy-checked against (record-level `view` is all-or-nothing by default, but attribute redaction per object type still applies — an activity about a person with restricted attributes embeds that person'"'s summary).
+- **Fix:** State that every serialisation of a record — primary or embedded, in any tool result — passes through "'`redactForActor` with the caller'"'s ctx; one code path, tested per tool.
+
+### S5.6 — LOW — "'`redacted_attributes` is an existence oracle; schema resource exposes restricted attribute metadata
+- **Where:** CT `records.ts` (`redacted_attributes: [slug…]`), MS §1 (`crm://schema/{type}` returns attributes with sensitivity and descriptions to all callers).
+- **Attack:** Members enumerate the exact slugs, names and 500-char descriptions of restricted attributes ("ceo_personal_phone", description "direct line, do not share"), and per-record learn which ones are *populated*. Low severity but unnecessary.
+- **Fix:** Return `redacted_attributes: string[]` as count or omit for non-privileged callers; consider hiding restricted attribute *descriptions* from `crm://schema` for members (keep slug+type so tools still validate).
+
+---
+
+## 6. SSRF and export/URL signing
+
+### S6.1 — MEDIUM — Webhook SSRF guard is registration-time prose; delivery-time DNS rebinding/redirect behaviour unspecified
+- **Where:** CT `tools.ts` (`url: "https only, public host"`), EV §3 ("public host (SSRF guard)"), AR §4 (`safeFetch`, "IP-pinned").
+- **Attack:** The URL is validated at `crm_webhook_set` time but *fetched later by the worker*. Classic TOCTOU: register `https://attacker.example` while it resolves to a public IP, flip DNS to `169.254.169.254` / `10.x` afterwards. Nothing states the worker re-resolves and re-pins through `safeFetch` on every delivery, that redirects are refused (a 302 to an internal address defeats registration-time checks entirely), or that non-443 ports / userinfo / IP-literal hosts are rejected. The worker signs and POSTs change batches — a successful pivot turns DeepCRM into an authenticated internal-port scanner (response codes/timing distinguishable via `last_error` in `crm_webhook_list`).
+- **Fix:** Normative: delivery always goes through `safeFetch` (fresh resolution, IP pinned for the connection, private/loopback/link-local ranges refused at connect time), redirects not followed, port 443 only, no userinfo; re-validate on every attempt, not just registration.
+
+### S6.2 — HIGH — Webhook registration is an un-gated bulk-exfiltration channel that bypasses export approval; new/re-enabled webhooks replay full history
+- **Where:** MS §8 (`crm_webhook_set` "Admin only" — *not* approval-gated), PD (`webhook.admin` deny/allow — no `requires_approval`, unlike export), EV §2 ("`record_changes` are never deleted"), EV §3 (re-enable "resumes from `last_delivered_seq`", new webhook defaults `last_delivered_seq = 0`), EV §1 ("webhooks are evaluated as `role:admin`" — admins *can* view restricted, so restricted values flow, S5.3/S5.4 compound this).
+- **Attack:** One compromised admin delegation (or a confused deputy: Nessie'"'s integration code runs "'`crm_webhook_set` under an owner delegation — NI §5) registers a webhook to an attacker URL. First delivery replays the *entire retained change history* (seq > 0, history never deleted), including restricted attribute values (evaluated as admin), merge/delete snapshots (S5.3), and full actor/provenance metadata. This is `crm_export` with no MRTR approval, no audit-visible export event distinct from normal ops, and an ongoing tap. Approval-gating export but not this is an inconsistent security boundary.
+- **Fix:** (a) New webhooks start at the *current* max seq; history replay requires a separate approval-gated action. (b) Make `webhook.admin` `requires_approval` for members *and* admins (owner-only, per S3.3 fix) for URL create/change. (c) Re-state webhook payload redaction: strip restricted values and snapshots from push payloads regardless of the "evaluated as admin" shortcut — the consumer is a network endpoint, not a principal.
+
+### S6.3 — HIGH — Export pipeline: signed URL scheme, redaction, and task-result access all unspecified
+- **Where:** MS §8 ("signed download URL valid for 1 h"), CT (`ExportResult { url, rows, expires_at }`, `crm_export` takes `attributes?: [slug]` — caller-selected projection), S1.1 (task result readable via `tasks/get`).
+- **Attack:** Compounding gaps: (a) Does export apply `redactForActor`/attribute policy to the exported rows? An admin-approved export requested *with* `attributes: ["salary", "private_phone"]` — approval message says "Export person" while args carry the restricted projection (S3.1 decides whether the approver even sees that). (b) The signed URL is a bearer token good for 1 h, readable by anyone who can `tasks/get` the job (S1.1) or see Nessie run state; no statement of single-use, IP-binding, or where it'"'s served from. (c) No row cap on export.
+- **Fix:** Specify: export honours attribute-level policy for the *approver's* role (the approval must display the exact attribute list); URL is single-purpose, expiry ≤ 1 h, served from a dedicated host with its own signing key; document the signing scheme (HMAC of path+expiry, key in keyring). Cap rows per export.
+
+---
+
+## 7. Secrets handling
+
+### S7.1 — MEDIUM — Webhook secret is returned in an agent-visible tool result
+- **Where:** MS §8 ("'`secret: string (shown once)`), NI §5 (Nessie then stores it via a separate API).
+- **Attack:** The "shown once" value is shown *to the calling agent* — it lands in model context, tool-result logs, and Nessie run transcripts, all of which are exactly the places secrets are not supposed to persist. Any later prompt-injection against that agent (or log reader) recovers the HMAC secret and can forge `deepcrm.webhook.v1` deliveries to Nessie'"'s ingestion endpoint (which trusts the signature, EV §5).
+- **Fix:** Return the secret only when the call is made under a *human-direct* principal (the future non-agent path), or better: never return it via MCP — deliver it through the same out-of-band channel Nessie uses to store it ("'`PUT …/webhook-secret` flow inverted: DeepCRM posts the secret to a pre-registered Nessie endpoint, or Nessie generates the secret and DeepCRM stores it). At minimum, document that the tool result must be treated as secret material by the client (Nessie must strip it from model context).
+
+### S7.2 — LOW — Keyring is a single env var with no rotation story; app-key storage mixes with it operationally
+- **Where:** AR §6 (`DEEPCRM_SECRET_KEYRING_B64`), EV §3 (AES-256-GCM keyring), A&T §1 (app keys hashed — good).
+- **Attack:** Key rotation requires re-encrypting every `webhooks.secret_ciphertext` or all signatures break; no doc names a rotation procedure or key versioning (ciphertexts carry no key id). An operator forced to rotate under incident pressure will either break all webhooks or postpone indefinitely.
+- **Fix:** Version the keyring (`kid` prefix on ciphertexts, env carries `kid:b64` pairs, decrypt falls back across kids, encrypt uses latest). One sentence each in EV §3 and AR §6.
+
+### S7.3 — LOW — Replay window on the *receiver* side is DeepCRM'"'s recommended 300 s with per-event dedupe optional
+- **Where:** EV §3 (receiver verification: 300 s window; Nessie \"dedupes on seq\" — NI §5 says \"may\", dedupe described as rendering concern).
+- **Attack:** An attacker who captures one signed batch (webhook payloads traverse whichever infrastructure terminates TLS for the receiver) can replay it inside 300 s; if the receiver treats batches as commands rather than awareness (the "'`matrix_room` future target posts structured content *agents in the room read and act on* — EV §4), replayed seq values could trigger duplicate downstream actions where consumers skip dedupe.
+- **Fix:** State that receivers MUST dedupe on `(webhook_id, until_seq)` and reject `until_seq ≤ last seen`; keep 300 s.
+
+---
+
+## 8. Audit chain
+
+### S8.1 — MEDIUM — Hash chain has a concurrency fork and no anchoring; denial auditing unspecified
+- **Where:** A&T §6 (`entry_hash = sha256(prev_hash ∥ canonical JSON)` per organisation), SE §2 (`AuditLog`, no lock described), SE §4.11 (writeAudit inside the mutation tx).
+- **Attack:** Two concurrent transactions in one org both read the same tail `prev_hash` → two valid children of one parent → the chain forks and `verify-audit-chain.mjs` either fails spuriously or (worse) the verifier is written to tolerate forks and loses its meaning. Serialization (an advisory lock per org on audit write) is never mentioned. Also: chain integrity only detects tampering if an external anchor exists — anyone with DB write can recompute the whole chain from any point. And "written inside the same transaction as the mutation" means *denied* attempts (no mutation, no transaction) have no stated audit — a policy-probing campaign (S4.3) leaves no trace.
+- **Fix:** Take `pg_advisory_xact_lock(hashtext(org || '"':audit'))"'` in `writeAudit`; periodically anchor the tail hash externally (even a signed log line to Ledger); specify that denials and authentication failures are audited (outcome `denied` exists in the enum — wire it) with metadata limited to ids/codes per the logging rules.
+
+### S8.2 — LOW — Audit rows survive tenant deletion with UOA ids intact, forever
+- **Where:** A&T §3 (`audit_logs` no FK, survives), SE §2 (stores `actor_id`, `on_behalf_of`, `ip_address`, `user_agent`).
+- **Attack:** Post-deletion retention of per-user identifiers and IPs with no stated retention or erasure path conflicts with the deletion promise a tenant thinks it got ("Tenant deletion cascades CRM data") and with GDPR erasure. An org that leaves leaves its users'"' activity metadata behind indefinitely.
+- **Fix:** Define audit retention (e.g. N years then crypto-shred or hash-truncate personal fields); document it next to the \"survives deletion\" note.
+
+---
+
+## 9. DoS vectors
+
+### S9.1 — HIGH — "'`Filter` grammar has no depth/size bound
+- **Where:** CT `filter.ts` (`z.lazy` recursive union, no max depth, no max nodes), SE §5.
+- **Attack:** A single `crm_records_query` (member-allowed by default) with a 10,000-node nested `and/or/not` tree — zod parse cost, query-compiler cost, and a generated SQL with thousands of JSONB predicates. Repeated in parallel, this is CPU exhaustion with one tool call. `z.lazy` recursion also risks stack depth on pathological nesting before any DB work.
+- **Fix:** Cap filter depth (≤ 8), total nodes (≤ 100), and serialized size (≤ 16 KiB) in the schema; reject with `VALIDATION_FAILED`.
+
+### S9.2 — HIGH — Unbounded request bodies and record sizes
+- **Where:** CT (`CrmRecordsBulkAssert.rows` has `.min(1)` and **no `.max()`** — cap is env-only `DEEPCRM_MAX_BULK_ROWS` at 10,000; each row allows 20 links and unbounded `data`), CT (`json` attribute ≤ 64 KiB, `rich_text` ≤ 100k, up to 100 attributes/type ⇒ single record ≈ 6–10 MB), AR §6 (no HTTP body limit listed), MS §0.5.
+- **Attack:** One `tools/call` can POST hundreds of MB (10k rows × multi-MB `data`) — memory pressure in the API before zod even finishes. Record fetch paths return up to 200 such records per page (`Limit` max 200) ⇒ multi-GB responses. `crm_activity_log` body 100k × `about: 20` fans out `last_activity_at` updates and reindex jobs per call (embedding calls downstream, S9.4).
+- **Fix:** Enforce a hard HTTP body cap (e.g. 10 MB) at the Fastify level and state it; add `.max()` to `rows` in the zod (mirror the env cap); cap total `data` size per record (e.g. 512 KiB serialized) in `validateRecordData`; consider a lower page cap for attribute-heavy types or response-size guard.
+
+### S9.3 — MEDIUM — Fuzzy trigram matching and dedup scans are quadratic amplifiers on the write path
+- **Where:** SE §6 (`similarity(display_name, candidate) >= threshold` on every create/assert with a fuzzy rule), CT (`threshold` min 0.3 — low thresholds ⇒ huge candidate sets), SE §2 (trgm GIN index on `display_name` exists — good), `crm_find_duplicates` (full-type scan + semantic, unbounded per-team concurrency).
+- **Attack:** At 0.3 threshold, adversarial display names ("aaaa…common tokens") match a large fraction of the table; every create/assert in a bulk job (10k rows) runs this ⇒ O(n·m) trigram evaluations inside write transactions holding advisory locks (SE §4.4) — lock convoy plus CPU burn from a single bulk assert. `crm_find_duplicates` can be enqueued repeatedly; nothing caps concurrent jobs per team.
+- **Fix:** Require the trgm index to serve the query (raise min threshold to ~0.5, use `word_similarity` with `%` operator or explicit `SET pg_trgm.similarity_threshold`), cap candidate evaluation per write (e.g. top 20), bound matching work per bulk row, and add per-team job concurrency limits (one dedup scan at a time, N bulk jobs max).
+
+### S9.4 — MEDIUM — Embedding calls are a per-write, unbatched external dependency with no stated backpressure
+- **Where:** SE §8 (embed via Ledger `/v1/jina` per reindex), SE §4.12 (`record.reindex` enqueued per write), AR §6 (`LEDGER_PROXY_TOKEN`).
+- **Attack:** A bulk assert of 10k rows enqueues 10k reindex jobs ⇒ 10k embedding requests to Ledger (cost amplification billed to the deployment; rate-limit cascading failures into the queue with retries). Ledger outage ⇒ reindex jobs retry and the queue backs up, delaying `change.deliver` (shared worker).
+- **Fix:** Batch embeddings (up to N records per Ledger call), circuit-breaker + dead-letter on embedding failure (record searchable by keyword meanwhile), per-team embedding rate limit, separate queue lanes so reindex backlog cannot starve webhook delivery.
+
+### S9.5 — MEDIUM — Idempotency replay returns stored results without stated policy re-check; keys are agent-chosen and predictable
+- **Where:** SE §4.13 ("hit with same `arguments_hash` ⇒ return stored result"), CT (`IdempotencyKey` min 8 chars, example `"gmail:msg:18f2…"` — structured, guessable), SE §2 (`IdempotencyReplay.result Json` — full result incl. redacted-shaped record for the *original* caller).
+- **Attack:** Results are shaped for the original caller'"'s redaction context. If a second principal in the same team presents the same key + identical args (keys are predictable in sync workloads: source-system ids), they receive the stored result computed for the original caller — if the original was an admin and the replayer a member, restricted fields leak via the cached "'`result`. No statement binds replays to the principal or re-runs redaction.
+- **Fix:** Include the principal identity (app, uoaUserId) in the replay uniqueness check, or re-run `redactForActor` on the stored result at replay time. Also state a 24 h purge job for `idempotency_replays` (currently unstated — the `retention.ts` job'"'s scope covers soft-delete/merge snapshots only).
+
+### S9.6 — LOW — Full-history pulls and unbounded "'`include_total`
+- **Where:** EV §2 (`crm_changes_since` with omitted cursor starts at the oldest retained row; history never deleted), CT (`include_total` forces COUNT over arbitrary filters).
+- **Attack:** Any member can paginate the entire team history (200 rows/call, unlimited calls) — a sanctioned exfiltration walk and a seq-scan generator; `include_total` over a `contains` filter on an unindexed attribute forces full scans. Both are policy-allowed today; the issue is absence of rate limiting anywhere in the docs.
+- **Fix:** Add a global per-principal rate limit (state it in AR §4/env) and per-team concurrency cap on expensive tools; consider charging `include_total` and history walks against a stricter bucket. Document expected abuse handling even if v1 defers implementation.
+
+---
+
+## 10. Misc boundary gaps
+
+### S10.1 — MEDIUM — MRTR confirmations are not bound to arguments or principal
+- **Where:** MS §0.4, PF F5, CT `mrtr.ts` (`confirm: { confirmed: boolean }` — no token, no hash).
+- **Attack:** The confirmation flow has no `arguments_hash`. An agent requests `crm_attribute_archive { attribute: "fax" }`, gets the confirmation prompt, then re-issues with `{ attribute: "ssn" , confirm: { confirmed: true } }`. Nothing in the documented shape prevents the confirmation for X from satisfying the re-issue for Y — unless the server implicitly re-derives the MRTR requirement per call and merely checks `confirmed === true` on the *current* args (safe), but that is never stated. Same-session confusion (parallel confirmations) similarly ambiguous.
+- **Fix:** Give confirmations the same treatment as approvals: a `confirmation_token` bound to (tenant, tool, canonical args hash, principal, short TTL), or state explicitly that confirmation is stateless and the server re-evaluates the MRTR condition on the re-issued args (and that `confirmed:true` never carries across different args).
+
+### S10.2 — MEDIUM — Caller-supplied `owner`, `assignee`, `participants` (`Actor`) accept arbitrary ids with no validation or policy
+- **Where:** CT (`CrmRecordCreate/Update.owner`, `CrmTaskCreate.assignee`, `CrmActivityLog.participants` — `Actor = { type, id: string }`).
+- **Attack:** Any member sets `owner`/`assignee` to an arbitrary UOA user or agent id — including ids of users in *other* teams (no cross-tenant check is possible against UOA from DeepCRM, but nothing states even format/existence validation). Consequences: notification/routing confusion downstream (Nessie renders owner), audit pollution, and `actor_reference` filter/sort poisoning. Low data-confidentiality impact, real integrity nuisance.
+- **Fix:** Validate `Actor.id` shape; document that ownership reassignment requires `record.edit` on the record (already implied) plus, for setting owner to another human, nothing more — but say so; reject empty/whitespace ids.
+
+### S10.3 — LOW — Org-scope policy rules vs per-team rows model is incoherent
+- **Where:** A&T §4 (`PolicyScope organization`, scope chain includes organization), SE §2 (`PolicyRule` rows carry `team_id`; seeded per team).
+- **Attack:** An org-scope rule must live in some team'"'s rows to be evaluated — which team owns it, and does it affect sibling teams? As written, an operator adding an org-wide deny would insert it per team; drift between teams creates inconsistent enforcement that looks org-wide but isn't. Not directly exploitable via MCP (no policy surface, S3.6) but a design trap for the first admin tooling.
+- **Fix:** Either drop "'`organization` scope in v1 or make org-scope rows first-class (`team_id` nullable + evaluation union across org rows).
+
+### S10.4 — LOW — Error payload echoes can leak schema internals; `INTERNAL` handling unstated
+- **Where:** CT `errors.ts` (`issues[].path/message`, `DUPLICATE_FOUND.record_id`, `MERGED.redirect_to`), MS §0.3.
+- **Attack:** `VALIDATION_FAILED.issues` from zod can echo rejected *values* in messages (zod default messages include received values for some types); `MERGED.redirect_to`/`DUPLICATE_FOUND.record_id` disclose record ids of records the caller may not be able to view (existence + targeting, compounds S4.4). `INTERNAL` mapping (does it leak stack/SQL?) unspecified.
+- **Fix:** Specify issue messages are templates without values; gate `record_id`/`redirect_to` behind view permission (else return generic `DUPLICATE_FOUND`); `INTERNAL` returns only a correlation id.
+
+---
+
+## Priority summary
+
+| # | Finding | Severity |
+|---|---|---|
+| S5.1 | display_name built from restricted primary attribute | HIGH |
+| S5.3 | merge/delete snapshots bypass feed/webhook redaction | HIGH |
+| S6.2 | webhook registration = unapproved full-history exfil channel | HIGH |
+| S1.1 | tasks/get tenant check unspecified (export URL exposure) | HIGH |
+| S2.1 | context JWT lacks aud/iss binding (cross-service confusion) | HIGH |
+| S2.3 | REQUIRE_AUTH=false dev principal in prod | HIGH |
+| S5.2 | `_n.*` shadow keys not covered by redaction | HIGH |
+| S5.4 | record_at/history redaction undefined | HIGH |
+| S3.1 | approval arguments_hash canonicalisation undefined | HIGH |
+| S3.2 | approval token consumption not stated tenant/tool-bound | HIGH |
+| S6.3 | export redaction/signing/task-access unspecified | HIGH |
+| S9.1 | filter grammar unbounded | HIGH |
+| S9.2 | request/record size unbounded | HIGH |
+| S4.1 | restore/unlink missing from policy defaults | HIGH |
+| S2.2 | context token replay within TTL (provenance forgery) | MEDIUM→(HIGH if per-agent bindings used) |
+| S1.2 | org/team pairing not verified on resolve | HIGH |
+| S6.1 | webhook SSRF TOCTOU at delivery | MEDIUM |
+| S3.3 | approver role solely from delegation claim; required_role degraded | MEDIUM |
+| S2.4/S2.5 | tv unenforced; delegation TTL uncapped | MEDIUM |
+| S8.1 | audit chain fork / no denial audit / no anchor | MEDIUM |
+| S9.3/S9.4/S9.5 | trigram, embedding, idempotency-replay DoS/leak | MEDIUM |
+| S4.2/S4.3/S4.4/S4.5 | policy ordering/conditions/evidence/agent-namespace | MEDIUM |
+| S5.5/S5.6 | embedded-record redaction / metadata oracle | MEDIUM/LOW |
+| S1.3/S1.4/S1.5 | provisioning flood, worker trust, lint-only tenancy | MEDIUM/LOW |
+| S2.6/S2.7 | app key scoping; claim validation | MEDIUM/LOW |
+| S3.4/S3.5/S3.6 | approval spam; token entropy; no policy surface | MEDIUM/LOW |
+| S7.1/S7.2/S7.3 | secret in tool result; keyring rotation; receiver dedupe | MEDIUM/LOW |
+| S8.2 | audit retention post-deletion | LOW |
+| S10.1–S10.4 | confirmation binding; Actor validation; org-scope incoherence; error echoes | MEDIUM/LOW |
+
+**Systemic themes:** (1) the redaction model is defined only for the primary record-read path while at least five other serialisation paths (display_name, `_n.*`, snapshots, history, embedded records, candidate evidence) are unspecified — every one leaks; (2) the export approval gate is undermined by two parallel un-gated channels (webhook replay, task results); (3) the context token and approval token designs lack binding clauses (aud, jti, canonical hash, tenant scope) that must be written into the docs now, because implementers will not invent them; (4) nothing anywhere states rate limits, body caps, or job quotas.
+EOF
+wc -l reviews/2-security-redteam.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+     316 reviews/2-security-redteam.md
+
+codex
+Written to `reviews/2-security-redteam.md` (316 lines, ~40 findings). No existing files modified.
+
+Headline findings, by attack surface:
+
+**Cross-tenant:** `tasks/get`→`queue_jobs` has no specified tenant check (S1.1) — a `task_id` yields an export signed URL. `resolveTenant` never verifies the resolved team's `organization_id` matches the delegation's org (S1.2). Tenant auto-provisioning is ungated (S1.3). Tenant filtering rests on a lint rule with no runtime backstop (S1.5).
+
+**Three-header auth:** `X-Nessie-Context` verification checks neither `aud` nor `iss`, yet shares a key set with DeepWater/DeepSignal — cross-service token confusion and agent-identity spoofing (S2.1). No jti/nonce binding means provenance is replayable for 300 s (S2.2). `REQUIRE_AUTH=false` serves a fixed omnipotent dev principal with well-known ids and no prod guard (S2.3). The `tv` epoch claim is verified but never enforced — a dead control (S2.4).
+
+**Approvals (F6):** `arguments_hash` canonicalisation is entirely unspecified (S3.1), token consumption is never stated to be tenant/tool/args-bound (S3.2), approver role comes solely from a claim DeepCRM doesn't issue and `required_role: owner` silently degrades to admin (S3.3), pending rows are uncapped with full argument snapshots (S3.4).
+
+**Policy/redaction — the largest cluster:** `display_name` is denormalised from the primary attribute regardless of sensitivity and leaks through every `RecordSummary` (S5.1). `_n.<slug>` shadow keys inside `data` aren't covered by the documented redaction (S5.2). Merge/delete `snapshot` pre-images enter `record_changes` while feed/webhook redaction language covers only `old_value`/`new_value` (S5.3). `crm_record_at`/history redaction undefined (S5.4). Duplicate-candidate evidence echoes values (S4.4). `restore`/`unlink` have no policy default at all (S4.1).
+
+**SSRF/exfil:** webhook SSRF is checked at registration, not delivery — DNS-rebind TOCTOU (S6.1). Critically, `crm_webhook_set` is admin-only but **not approval-gated**, and new/re-enabled webhooks replay the full never-deleted change history evaluated as admin — an exfiltration channel that bypasses the export approval gate entirely (S6.2). Export itself doesn't specify whether the approval message reflects the requested restricted-attribute projection (S6.3). The webhook secret is "shown once" — to the agent, in model context (S7.1).
+
+**DoS/audit:** unbounded recursive `Filter` grammar (S9.1), no `.max()` on bulk rows and ~6–10 MB possible per record (S9.2), trigram matching at threshold 0.3 inside lock-holding write transactions (S9.3), idempotency replays returning results shaped for the *original* caller's redaction context (S9.5), audit chain forks under concurrency with no anchor and no denial auditing (S8.1).
+
+The doc includes per-finding doc+section citations, attack scenarios, concrete fixes, and a severity-ranked summary table.
+tokens used
+65,786
+Written to `reviews/2-security-redteam.md` (316 lines, ~40 findings). No existing files modified.
+
+Headline findings, by attack surface:
+
+**Cross-tenant:** `tasks/get`→`queue_jobs` has no specified tenant check (S1.1) — a `task_id` yields an export signed URL. `resolveTenant` never verifies the resolved team's `organization_id` matches the delegation's org (S1.2). Tenant auto-provisioning is ungated (S1.3). Tenant filtering rests on a lint rule with no runtime backstop (S1.5).
+
+**Three-header auth:** `X-Nessie-Context` verification checks neither `aud` nor `iss`, yet shares a key set with DeepWater/DeepSignal — cross-service token confusion and agent-identity spoofing (S2.1). No jti/nonce binding means provenance is replayable for 300 s (S2.2). `REQUIRE_AUTH=false` serves a fixed omnipotent dev principal with well-known ids and no prod guard (S2.3). The `tv` epoch claim is verified but never enforced — a dead control (S2.4).
+
+**Approvals (F6):** `arguments_hash` canonicalisation is entirely unspecified (S3.1), token consumption is never stated to be tenant/tool/args-bound (S3.2), approver role comes solely from a claim DeepCRM doesn't issue and `required_role: owner` silently degrades to admin (S3.3), pending rows are uncapped with full argument snapshots (S3.4).
+
+**Policy/redaction — the largest cluster:** `display_name` is denormalised from the primary attribute regardless of sensitivity and leaks through every `RecordSummary` (S5.1). `_n.<slug>` shadow keys inside `data` aren't covered by the documented redaction (S5.2). Merge/delete `snapshot` pre-images enter `record_changes` while feed/webhook redaction language covers only `old_value`/`new_value` (S5.3). `crm_record_at`/history redaction undefined (S5.4). Duplicate-candidate evidence echoes values (S4.4). `restore`/`unlink` have no policy default at all (S4.1).
+
+**SSRF/exfil:** webhook SSRF is checked at registration, not delivery — DNS-rebind TOCTOU (S6.1). Critically, `crm_webhook_set` is admin-only but **not approval-gated**, and new/re-enabled webhooks replay the full never-deleted change history evaluated as admin — an exfiltration channel that bypasses the export approval gate entirely (S6.2). Export itself doesn't specify whether the approval message reflects the requested restricted-attribute projection (S6.3). The webhook secret is "shown once" — to the agent, in model context (S7.1).
+
+**DoS/audit:** unbounded recursive `Filter` grammar (S9.1), no `.max()` on bulk rows and ~6–10 MB possible per record (S9.2), trigram matching at threshold 0.3 inside lock-holding write transactions (S9.3), idempotency replays returning results shaped for the *original* caller's redaction context (S9.5), audit chain forks under concurrency with no anchor and no denial auditing (S8.1).
+
+The doc includes per-finding doc+section citations, attack scenarios, concrete fixes, and a severity-ranked summary table.

@@ -1,29 +1,424 @@
 {
-  "description": "Rows inserted into policy_rules/policy_bindings for every new team (scope=team, scope_id=<teamId>). Editable per tenant afterwards. Evaluation: deny-overrides, higher priority first; no match falls through to deny for define/merge/export/delete/admin and allow for view/create/edit/link.",
+  "description": "Rows inserted into policy_rules/policy_bindings for every new team (scope=team, scope_id=<teamId>), immutable post-seed in v1 (operator migrations only). Evaluation: any matching deny denies (deny is absolute); priority orders competing allows; no match falls through to deny for define/merge/export/delete/restore/admin and allow for view/create/edit/link. Agent bindings are namespaced agent:<app>:<agentId>.",
   "rules": [
-    { "resource_type": "record",      "action": "view",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "record",      "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "record",      "action": "edit",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "record",      "action": "link",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "record",      "action": "delete", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
-    { "resource_type": "record",      "action": "delete", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "link",        "action": "link",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "list",        "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "list",        "action": "edit",   "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "view",        "action": "create", "effect": "allow", "priority": 0,  "bindings": [["role","member"],["role","admin"],["role","owner"]] },
-    { "resource_type": "schema",      "action": "define", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
-    { "resource_type": "schema",      "action": "define", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "merge",       "action": "merge",  "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
-    { "resource_type": "merge",       "action": "merge",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "export",      "action": "export", "effect": "deny",  "priority": 0,  "requires_approval": true, "bindings": [["role","member"]] },
-    { "resource_type": "export",      "action": "export", "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "webhook",     "action": "admin",  "effect": "deny",  "priority": 0,  "bindings": [["role","member"]] },
-    { "resource_type": "webhook",     "action": "admin",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "approval",    "action": "admin",  "effect": "allow", "priority": 0,  "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "attribute",   "action": "view",   "effect": "deny",  "priority": 10, "conditions": { "sensitivity": "restricted" }, "bindings": [["role","member"]] },
-    { "resource_type": "attribute",   "action": "view",   "effect": "allow", "priority": 10, "conditions": { "sensitivity": "restricted" }, "bindings": [["role","admin"],["role","owner"]] },
-    { "resource_type": "attribute",   "action": "edit",   "effect": "deny",  "priority": 10, "conditions": { "sensitivity": "confidential" }, "bindings": [["role","member"]] },
-    { "resource_type": "attribute",   "action": "edit",   "effect": "allow", "priority": 10, "conditions": { "sensitivity": "confidential" }, "bindings": [["role","admin"],["role","owner"]] }
+    {
+      "resource_type": "record",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "link",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "delete",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "restore",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "delete",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "restore",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "link",
+      "action": "link",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "list",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "list",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "view",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "schema",
+      "action": "define",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "schema",
+      "action": "define",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "merge",
+      "action": "merge",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "merge",
+      "action": "merge",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "export",
+      "action": "export",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "export",
+      "action": "export",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "webhook",
+      "action": "admin",
+      "effect": "deny",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "webhook",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ],
+      "requires_approval": true
+    },
+    {
+      "resource_type": "approval",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "view",
+      "effect": "deny",
+      "priority": 10,
+      "conditions": {
+        "sensitivity": "restricted"
+      },
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "view",
+      "effect": "allow",
+      "priority": 10,
+      "conditions": {
+        "sensitivity": "restricted"
+      },
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "edit",
+      "effect": "deny",
+      "priority": 10,
+      "conditions": {
+        "sensitivity": "confidential"
+      },
+      "bindings": [
+        [
+          "role",
+          "member"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 10,
+      "conditions": {
+        "sensitivity": "confidential"
+      },
+      "bindings": [
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    }
   ],
-  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<id> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them."
+  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<app>:<agentId> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them."
 }

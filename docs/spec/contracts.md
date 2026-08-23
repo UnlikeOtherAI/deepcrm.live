@@ -184,9 +184,10 @@ export const Candidate = z.object({
     attribute: Slug.nullable(), value: z.unknown(), score: z.number().optional() })),
 })
 export const Change = z.object({
-  id: Uuid, seq: z.string().describe('monotonic cursor value'),
-  record: RecordSummary,
-  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge']),
+  id: Uuid, seq: z.string().describe('per-team, commit-ordered decimal cursor value'),
+  record: RecordSummary.nullable().describe('null for kind "schema"'),
+  group_id: Uuid.nullable().describe('shared by the paired rows of a link/unlink and by cascade groups'),
+  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge','schema']),
   attribute: Slug.nullable(), relation_type: Slug.nullable(), link_id: Uuid.nullable(),
   old_value: z.unknown().optional(), new_value: z.unknown().optional(),
   actor: z.object({ type: ActorType, id: z.string() }), on_behalf_of: z.string().nullable(),
@@ -228,7 +229,7 @@ export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
   z.object({ linked_to: z.object({ relation: Slug, record_id: Uuid,
     direction: z.enum(['from','to']).default('from') }) }),
   z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }),
-])).describe('see docs/schema-engine.md §5')
+])).describe('structured filter; grammar + examples in resource crm://help/filtering. Caps: depth 8, 100 nodes, 16 KiB')
 
 export const Sort = z.array(z.object({
   attribute: Slug.optional(), system: SystemField.optional(),
@@ -245,6 +246,8 @@ Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
 | `gt gte lt lte between` | number, currency (compares `amount`), percent, rating, date, datetime, timestamp_system, system timestamps |
 
 ## `tools.ts` — every tool's input and output
+
+(The implementation may split this across `tools-schema.ts`, `tools-records.ts`, … to honour the 500-line file cap; the export names below are the contract.)
 
 ```ts
 // ── schema ───────────────────────────────────────────────────────────────────
@@ -282,7 +285,7 @@ export const CrmRelationTypeArchive = { in: z.object({ relation_type: Slug, reas
   out: z.object({ archived: z.literal(true), links: z.number().int() }) }
 export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug, rules: z.array(MatchingRule).max(10) }),
   out: z.object({ rules: z.array(MatchingRule) }) }
-export const CrmTemplateApply = { in: z.object({ template: z.enum(['standard_crm','saas','agency']) }),
+export const CrmTemplateApply = { in: z.object({ template: Slug.describe('a slug from crm://templates; unknown ⇒ UNKNOWN_TEMPLATE') }),
   out: z.object({ added: z.object({ object_types: z.array(Slug), attributes: z.array(z.string()),
     relation_types: z.array(Slug) }) }) }
 
@@ -311,9 +314,14 @@ export const CrmRecordsQuery = { in: z.object({ object_type: Slug, filter: Filte
   include_total: z.boolean().default(false), cursor: Cursor, limit: Limit }),
   out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(),
     total: z.number().int().optional() }) }
+export const CrmRecordsCount = { in: z.object({ object_type: Slug, filter: Filter.optional() }),
+  out: z.object({ count: z.number().int() }) }
+export const CrmRecordsGetMany = { in: z.object({ ids: z.array(Uuid).min(1).max(100) }),
+  out: z.object({ records: z.array(RecordOut), missing: z.array(Uuid) }) }
 export const CrmRecordsBulkAssert = { in: z.object({ object_type: Slug, match_attribute: Slug,
-  rows: z.array(z.object({ data: RecordData, links: z.array(LinkInput).max(20).optional() })).min(1),
-  reason: Reason }), out: z.object({ task_id: z.string() }) }
+  rows: z.array(z.object({ data: RecordData, links: z.array(LinkInput).max(20).optional() })).min(1).max(10_000)
+    .describe('hard cap mirrors DEEPCRM_MAX_BULK_ROWS; see crm://help/limits'),
+  reason: Reason }), out: z.object({ taskId: z.string() }) }
 export const BulkAssertResult = z.object({ created: z.number().int(), updated: z.number().int(),
   failed: z.array(z.object({ index: z.number().int(), code: z.string(), message: z.string() })) })
 export const CrmRecordDelete = { in: z.object({ id: Uuid, expected_version: ExpectedVersion, reason: Reason }),
@@ -327,11 +335,11 @@ export const CrmRecordHistory = { in: z.object({ id: Uuid, attributes: z.array(S
 // ── links ────────────────────────────────────────────────────────────────────
 export const CrmLink = { in: z.object({ relation_type: Slug, from_record_id: Uuid, to_record_id: Uuid,
   data: z.record(Slug, z.unknown()).optional(), label: z.string().max(120).optional(), ...WriteCommon }),
-  out: z.object({ link: LinkOut }) }
+  out: z.object({ link: LinkOut, ended_links: z.array(Uuid).describe('links ended by cardinality replacement') }) }
 export const CrmUnlink = { in: z.object({ link_id: Uuid.optional(), relation_type: Slug.optional(),
   from_record_id: Uuid.optional(), to_record_id: Uuid.optional(), reason: Reason })
   .refine(a => a.link_id || (a.relation_type && a.from_record_id && a.to_record_id), 'link_id or triple'),
-  out: z.object({ unlinked: z.literal(true) }) }
+  out: z.object({ link_id: Uuid.describe('the link that was ended (newest active when the triple was ambiguous)') }) }
 export const CrmLinksList = { in: z.object({ record_id: Uuid, relation_type: Slug.optional(),
   direction: z.enum(['from','to','both']).default('both'), include_history: z.boolean().default(false),
   cursor: Cursor, limit: Limit }),
@@ -357,6 +365,7 @@ export const CrmViewSave = { in: z.object({ slug: Slug, name: z.string().min(1).
   filter: Filter, sort: Sort.optional(), attributes: z.array(Slug).optional(),
   description: z.string().max(500).optional() }), out: ViewDetail }
 export const CrmViewRun = { in: z.object({ view: Slug, cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+export const CrmViewDelete = { in: z.object({ view: Slug }), out: z.object({ deleted: z.literal(true) }) }
 
 // ── activity, tasks, pipeline ────────────────────────────────────────────────
 export const ActivityKind = z.enum(['email','call','meeting','note','message','task_event','custom'])
@@ -370,7 +379,9 @@ export const CrmNoteAdd = { in: z.object({ title: z.string().max(300).optional()
   body: z.string().min(1).max(100_000), about: z.array(Uuid).min(1).max(20) }),
   out: z.object({ record: RecordOut }) }
 export const CrmRecordTimeline = { in: z.object({ id: Uuid, hops: z.union([z.literal(0), z.literal(1)]).default(0)
-  .describe('1 = include linked records\' items'), kinds: z.array(z.enum(['activity','change','note','task'])).optional(),
+  .describe('1 = merge in linked records\' items (policy-filtered; limit is total items)'),
+  relation_types: z.array(Slug).optional().describe('with hops 1: only these relations'),
+  kinds: z.array(z.enum(['activity','change','note','task'])).optional(),
   since: IsoDateTime.optional(), cursor: Cursor, limit: Limit }),
   out: z.object({ items: z.array(TimelineItem), next_cursor: z.string().nullable() }) }
 export const TaskStatus = z.enum(['open','in_progress','done','cancelled'])
@@ -398,68 +409,117 @@ export const CrmSearch = { in: z.object({ query: z.string().min(1).max(500), obj
   out: z.object({ hits: z.array(z.object({ record: RecordSummary, score: z.number(),
     match: z.enum(['keyword','semantic','both']) })) }) }
 export const CrmFindDuplicates = { in: z.object({ object_type: Slug, filter: Filter.optional(),
-  include_semantic: z.boolean().default(true) }), out: z.object({ task_id: z.string() }) }
+  include_semantic: z.boolean().default(true) }), out: z.object({ taskId: z.string() }) }
 export const FindDuplicatesResult = z.object({ groups: z.array(z.object({ records: z.array(RecordSummary),
   evidence: z.array(Candidate.shape.evidence.element) })) })
 export const CrmMergeRecords = { in: z.object({ survivor_id: Uuid, merged_ids: z.array(Uuid).min(1).max(10),
   field_choices: z.record(Slug, Uuid).optional().describe('attribute → record whose value wins'),
   reason: z.string().min(1).max(500) }),
-  out: z.object({ record: RecordOut, merge_change_id: Uuid, repointed_links: z.number().int() }) }
+  out: z.object({ record: RecordOut, merge_change_id: Uuid, repointed_links: z.number().int(), ended_links: z.array(Uuid) }) }
 export const CrmUnmerge = { in: z.object({ merge_change_id: Uuid, reason: z.string().min(1).max(500) }),
-  out: z.object({ restored: z.array(Uuid) }) }
+  out: z.object({ restored: z.array(Uuid),
+    conflicts: z.array(z.object({ kind: z.enum(['unique_key','link','list_entry']), attribute: Slug.optional(),
+      link_id: Uuid.optional(), held_by: Uuid.optional() })) }) }
 const QualityBucket = z.object({ count: z.number().int(),
-  items: z.array(z.object({ record: RecordSummary, detail: z.string() })).max(100) })
+  items: z.array(z.object({ record: RecordSummary, detail: z.string() })).max(100),
+  query_filter: Filter.describe('run via crm_records_query to paginate the full set') })
 export const CrmDataQuality = { in: z.object({ object_type: Slug.optional(),
   stale_days: z.number().int().min(1).max(3650).default(90) }),
   out: z.object({ missing_required: QualityBucket, stale: QualityBucket, orphans: QualityBucket, collisions: QualityBucket }) }
 
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),
-  format: z.enum(['jsonl','csv']), attributes: z.array(Slug).optional() })
-  .refine(a => !!a.object_type !== !!a.view, 'object_type or view'), out: z.object({ task_id: z.string() }) }
+  format: z.enum(['jsonl','csv']), attributes: z.array(Slug).optional(), reason: Reason, idempotency_key: IdempotencyKey })
+  .refine(a => !!a.object_type !== !!a.view, 'object_type or view'), out: z.object({ taskId: z.string() }) }
 export const ExportResult = z.object({ url: z.string().url(), rows: z.number().int(), expires_at: IsoDateTime })
-export const CrmChangesSince = { in: z.object({ cursor: Cursor.describe('omit for the oldest retained change'),
+export const CrmChangesSince = { in: z.object({
+  cursor: z.string().optional().describe('decimal seq from a previous page; omit to receive a fresh cursor at now'),
+  from: z.literal('beginning').optional().describe('explicit opt-in to replay full retained history'),
   object_types: z.array(Slug).optional(), kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
   out: z.object({ changes: z.array(Change), next_cursor: z.string(), has_more: z.boolean() }) }
 export const WebhookEvent = z.enum(['record.created','record.updated','record.deleted','record.merged',
   'link.created','link.ended','schema.changed'])
-export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host'),
-  events: z.array(WebhookEvent).min(1), active: z.boolean().default(true) }),
+export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host; identity — set upserts by URL'),
+  events: z.array(WebhookEvent).min(1), active: z.boolean().default(true),
+  rotate_secret: z.boolean().default(false).describe('mint a new secret for an existing webhook') }),
   out: z.object({ webhook: z.object({ id: Uuid, url: z.string(), events: z.array(WebhookEvent), active: z.boolean() }),
-    secret: z.string().optional().describe('shown once on creation') }) }
+    secret: z.string().optional().describe('creation or rotation only; secret material — never place in model context') }) }
 export const CrmWebhookList = { in: z.object({}), out: z.object({ webhooks: z.array(CrmWebhookSet.out.shape.webhook) }) }
 export const CrmWebhookDelete = { in: z.object({ id: Uuid }), out: z.object({ deleted: z.literal(true) }) }
 ```
 
-## `errors.ts`
+## `errors.ts` — the single source of truth for codes (as-const map; zod derived from it)
 
 ```ts
-export const ErrorCode = z.enum(['POLICY_DENIED','APPROVAL_REQUIRED','UNKNOWN_OBJECT_TYPE','UNKNOWN_ATTRIBUTE',
-  'ATTRIBUTE_ARCHIVED','ATTRIBUTE_READ_ONLY','VALIDATION_FAILED','VERSION_CONFLICT','DUPLICATE_FOUND','NOT_FOUND',
-  'MERGED','CARDINALITY_VIOLATION','DELETE_RESTRICTED','SCHEMA_CONFLICT','IDEMPOTENCY_MISMATCH','LIMIT_EXCEEDED','INTERNAL'])
+export const ErrorCode = {
+  POLICY_DENIED: 'POLICY_DENIED', APPROVAL_REQUIRED: 'APPROVAL_REQUIRED',
+  UNKNOWN_OBJECT_TYPE: 'UNKNOWN_OBJECT_TYPE', UNKNOWN_ATTRIBUTE: 'UNKNOWN_ATTRIBUTE',
+  ATTRIBUTE_ARCHIVED: 'ATTRIBUTE_ARCHIVED', ATTRIBUTE_READ_ONLY: 'ATTRIBUTE_READ_ONLY',
+  VALIDATION_FAILED: 'VALIDATION_FAILED', VERSION_CONFLICT: 'VERSION_CONFLICT',
+  DUPLICATE_FOUND: 'DUPLICATE_FOUND', NOT_FOUND: 'NOT_FOUND', MERGED: 'MERGED',
+  CARDINALITY_VIOLATION: 'CARDINALITY_VIOLATION', DELETE_RESTRICTED: 'DELETE_RESTRICTED',
+  RESTORE_CONFLICT: 'RESTORE_CONFLICT', SCHEMA_CONFLICT: 'SCHEMA_CONFLICT',
+  IDEMPOTENCY_MISMATCH: 'IDEMPOTENCY_MISMATCH', IDEMPOTENCY_IN_PROGRESS: 'IDEMPOTENCY_IN_PROGRESS',
+  UNKNOWN_TEMPLATE: 'UNKNOWN_TEMPLATE', TENANT_MISMATCH: 'TENANT_MISMATCH',
+  LIMIT_EXCEEDED: 'LIMIT_EXCEEDED', INTERNAL: 'INTERNAL',
+} as const
+export type ErrorCodeValue = typeof ErrorCode[keyof typeof ErrorCode]
+export const ErrorCodeSchema = z.enum(Object.values(ErrorCode) as [ErrorCodeValue, ...ErrorCodeValue[]])
+
+export class ServiceError extends Error {
+  constructor(public code: ErrorCodeValue, message: string, public details: Record<string, unknown> = {}) {
+    super(message)
+  }
+}
+export function isServiceError(e: unknown): e is ServiceError { return e instanceof ServiceError }
+
+export const NextHint = z.enum(['retry_with_approval','fetch_and_retry','use_redirect','fix_input','fatal'])
 export const ErrorPayload = z.object({
-  code: ErrorCode, message: z.string(),
-  issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),   // VALIDATION_FAILED
+  code: ErrorCodeSchema, message: z.string().describe('template text; never echoes submitted values'),
+  next: NextHint.describe('what the agent should do next'),
+  issues: z.array(z.object({ path: z.string().describe('RFC 6901 JSON Pointer'), message: z.string() })).optional(), // VALIDATION_FAILED
   current: z.number().int().optional(),                                              // VERSION_CONFLICT
   attribute: Slug.optional(), record_id: Uuid.optional(), candidates: z.array(Candidate).optional(), // DUPLICATE_FOUND
   redirect_to: Uuid.optional(),                                                      // MERGED
-  resource: z.string().optional(), action: z.string().optional(),                    // POLICY_DENIED
+  resource: z.string().optional(), action: z.string().optional(),                    // POLICY_DENIED / APPROVAL_REQUIRED
+  link_id: Uuid.optional(),                                                          // CARDINALITY_VIOLATION / DELETE_RESTRICTED
+  held_by: Uuid.optional(),                                                          // RESTORE_CONFLICT
+  limit: z.number().int().optional(),                                                // LIMIT_EXCEEDED
+  available: z.array(Slug).optional(),                                               // UNKNOWN_TEMPLATE
+  correlation_id: z.string().optional(),                                             // INTERNAL
   detail: z.string().optional(),
 })
 ```
 
-## MRTR shapes (`mrtr.ts`)
+## MRTR shapes (`mrtr.ts`) — spec 2026-07-28 conformant
+
+`inputRequests` values are standard `elicitation/create` requests; `inputResponses` values are `ElicitResult`s; both live at `tools/call` **params** level (sibling of `arguments`), with the AEAD `requestState` echoed verbatim. See `mcp-surface.md` §0.4 for the wire examples.
 
 ```ts
-export const InputRequest = z.discriminatedUnion('kind', [
-  z.object({ id: z.string(), kind: z.literal('confirmation'), message: z.string(),
-    schema: z.object({ type: z.literal('object'), properties: z.object({ confirmed: z.object({ type: z.literal('boolean') }) }),
-      required: z.tuple([z.literal('confirmed')]) }) }),
-  z.object({ id: z.literal('approval'), kind: z.literal('approval'), message: z.string(), approval_token: z.string(),
-    expires_at: IsoDateTime, required_role: z.enum(['admin','owner']) }),
-])
-export const InputResponses = z.object({
-  confirm: z.object({ confirmed: z.boolean() }).optional(),
-  approval: z.object({ approval_token: z.string(), approved: z.boolean(), note: z.string().max(500).optional() }).optional(),
+export const ElicitationRequest = z.object({
+  method: z.literal('elicitation/create'),
+  params: z.object({
+    mode: z.literal('form'),
+    message: z.string(),
+    requestedSchema: z.record(z.unknown()).describe('JSON Schema for the requested object'),
+  }),
 })
+export const InputRequests = z.record(z.string(), ElicitationRequest)
+export const ElicitResult = z.object({
+  action: z.enum(['accept','decline','cancel']),
+  content: z.record(z.unknown()).optional(),
+})
+export const InputResponses = z.record(z.string(), ElicitResult)
+
+// What DeepCRM seals inside requestState (AEAD; keyring key id 'mrtr'):
+export type RequestStatePayload = {
+  app: string; uoaUserId: string
+  tool: string; argumentsHash: string       // canonical JSON hash, auth-and-tenancy §4
+  impact: string                            // the human-readable consequence shown in the elicitation
+  approvalId?: string                       // approvals only; row is the single-use authority
+  exp: number                               // unix seconds, <= 24 h
+}
+// Server-side request shapes the confirm/approval elicitations ask for:
+export const ConfirmContent = z.object({ confirmed: z.boolean() })
+export const ApprovalContent = z.object({ approved: z.boolean(), note: z.string().max(500).optional() })
 ```

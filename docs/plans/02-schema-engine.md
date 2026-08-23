@@ -26,7 +26,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 - Create `packages/schema-engine/src/schema/load.ts` — `loadSchema(db, tenant): Promise<LoadedSchema>` (object types with attributes, relation types, matching rules; maps by slug and id); in-process cache keyed `teamId:schemaVersion` (read `teams.schema_version` first).
 - Create `packages/schema-engine/src/schema/mutate.ts` — inside one transaction each: `defineObjectType`, `updateObjectType`, `archiveObjectType`, `defineAttribute`, `updateAttribute`, `archiveAttribute`, `defineRelationType`, `archiveRelationType`, `setMatchingRules`. Rules: slug unique per tenant (`SCHEMA_CONFLICT`); `record_reference` attribute ⇒ also create/lookup its backing `RelationType` (`slug = <objectType>_<attr>`, `projectionAttributeSlug = attr`, cardinality `many_to_one` or `many_to_many` when `isMulti`); `status` never `isMulti`; `isUnique` only when `supportsUnique`; every mutation ends with `UPDATE teams SET schema_version = schema_version + 1` and `writeAudit`.
 - Create `api/src/services/schema.ts` — policy-checked wrappers (`checkPolicy(ctx,'schema','define',…)`), calling the engine; `getSchema(ctx, objectType?)`.
-- Create `api/src/services/policy.ts` — `checkPolicy` per auth-and-tenancy §4 and `seedDefaultPolicies(tx, tenant)` inserting the rows from `docs/spec/policy-defaults.json` (copy the file to `packages/schema-engine/src/policy-defaults.json`; called from `resolveTenant` on first creation). Unit test for deny-overrides and priority.
+- Create `api/src/services/policy.ts` — `checkPolicy` per auth-and-tenancy §4 (deny absolute; role from `ctx.onBehalfOf.role`; agent bindings `agent:<app>:<agentId>`) and `seedDefaultPolicies(tx, tenant)` inserting the rows from `packages/db/src/policy-defaults.json` (copy `docs/spec/policy-defaults.json` there; **imported**, so it lands in `dist` via `resolveJsonModule` — never `fs.readFile`; mapping: JSON snake_case → Prisma camelCase, `bindings: [[actorType, actorId]]` tuples → `PolicyBinding` rows). Do not wire a call site — T11 does. Unit tests: deny-absolute, priority among allows, `requires_approval` surfaced.
 - Tests (DB): define type + attributes + relation; duplicate slug conflict; `schema_version` increments; archive hides from `loadSchema` but row remains.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/schema-engine --filter=@deepcrm/api` green; `node scripts/lint-tenant-where.mjs` exits 0.
@@ -38,7 +38,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T10. **Spec:** `docs/schema-engine.md` §9; `docs/spec/templates/system.json` and `standard_crm.json` (copy verbatim).
 
 **Files:**
-- Copy `docs/spec/templates/system.json` and `standard_crm.json` into `packages/schema-engine/src/templates/` unchanged; define `TemplateSchema` (zod) that both files parse against.
+- Copy `docs/spec/templates/system.json` and `standard_crm.json` into `packages/schema-engine/src/templates/` unchanged; **import them** (`resolveJsonModule` inlines into dist — never `fs.readFile`, the Docker image copies only `dist`); define `TemplateSchema` (zod) that both parse against.
 - Create `packages/schema-engine/src/templates/apply.ts` — `applyTemplate(tx, tenant, actor, slug)`: idempotent (skip existing slugs), returns `{ added }`; `listTemplates()`.
 - Edit `api/src/services/tenancy.ts` — on first creation of a team: `seedDefaultPolicies` + `applyTemplate(system)`.
 - Tests (DB): applying `standard_crm` twice adds nothing the second time; provisioning creates `activity`, `note`, `task`, `activity_about`.
@@ -52,7 +52,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T11. **Spec:** `docs/schema-engine.md` §4 steps 2–3.
 
 **Files:**
-- Create `packages/schema-engine/src/records/validate.ts` — `validateRecordData(schema, objectType, patch, mode: 'create'|'update'): { data: ValidatedData; issues: Issue[] }` → throws `ServiceError('VALIDATION_FAILED', …, { issues })`; rejects unknown/archived/system slugs; applies `default_value` on create; `isMulti` arrays de-duplicated by `normalize`; computes `_n` shadow map `{ slug: normalized }` for normalised-matching attributes.
+- Create `packages/schema-engine/src/records/validate.ts` — `validateRecordData(schema, objectType, patch, mode: 'create'|'update'): { data; linkOps; issues }` → throws `ServiceError('VALIDATION_FAILED', …, { issues })` (paths are RFC 6901 JSON Pointers); rejects unknown/archived/system slugs; applies `default_value` on create; `isMulti` arrays de-duplicated by `normalize`; `null` unsets / `[]` empty list per §4 step 3; **extracts `record_reference` values into `linkOps`** (never into `data`, §4a); enforces the 256 KiB `data` cap; canonicalises object values (fixed key order) for JSONB equality. There is no shadow map — normalized match state lives in `record_match_keys` (§6).
 - Create `packages/schema-engine/src/records/display-name.ts` — `computeDisplayName(schema, objectType, data)`.
 - Unit tests with the `standard_crm` template loaded from JSON (no DB): required on create, null unsets on update, email normalisation, unknown attribute error lists the slug.
 
@@ -66,11 +66,11 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 **Files:**
 - Create `packages/schema-engine/src/records/locks.ts` — `lockRecords(tx, ids)` (sorted, `pg_advisory_xact_lock(hashtext($1))`).
-- Create `packages/schema-engine/src/records/unique-keys.ts` — `syncUniqueKeys(tx, tenant, schema, objectType, recordId, before, after)`; maps unique violation (`P2002`) to `DUPLICATE_FOUND` with the colliding `record_id` (query by `(attribute_id, normalized_value)`).
+- Create `packages/schema-engine/src/records/unique-keys.ts` — `syncUniqueKeys(tx, …)` writing `(attribute_id, normalizedHash, normalizedValue)`; maps `P2002` to `DUPLICATE_FOUND` (colliding id by `(attribute_id, normalized_hash)`, returned only when the caller may view it). `syncMatchKeys(tx, …)` for block rules (compound sha-256, §6).
 - Create `packages/schema-engine/src/records/changes.ts` — `diffChanges(before, after)` → `RecordChange` inserts (`set`/`unset` per slug); `writeChanges(tx, …)`.
-- Create `packages/schema-engine/src/records/write.ts` — `createRecord`, `updateRecord`, `assertRecord`, `deleteRecord`, `restoreRecord` each taking `(tx, ctx, schema, input)` and performing §4 steps 2–11 (policy is the service's job; links are T14 — here only `record_reference` handling is delegated to a `LinkWriter` interface with a no-op default so T13 compiles alone). `expected_version` ⇒ `VERSION_CONFLICT`. Deleted/merged targets ⇒ `NOT_FOUND` / `MERGED { redirect_to }`.
-- Create `api/src/services/records.ts` — transaction + policy + `writeAudit` + `enqueue('record.reindex')`; `idempotency_key` handling via `idempotency_replays`.
-- Tests (DB, `api/test/db/records.test.ts`): create person → version 1, change row `create`; update email → `set` change with old/new; assert by email updates not creates; unique email collision ⇒ `DUPLICATE_FOUND` with record id; version conflict; soft delete then get ⇒ `NOT_FOUND`, restore works; idempotent replay returns same record id.
+- Create `packages/schema-engine/src/records/write.ts` — `createRecord`, `updateRecord`, `assertRecord`, `deleteRecord`, `restoreRecord` each `(tx, ctx, schema, input, linkWriter: LinkWriter)` performing **§4 steps 0–14** (policy stays in the service; feed-seq allocation and both enqueues — `record.reindex` AND `change.deliver` — are steps 13–14 and belong here). `LinkWriter` is a **required parameter** — T13's tests pass a throwing stub and use reference-free inputs; T14 supplies the real one (no no-op default — AGENTS.md bans sentinels). `assert` implements the savepoint retry-as-update (§4b, first-element rule for multi). Until T38, reads of a merged id throw `MERGED { redirect_to }`; T38 replaces this with the transitive redirect.
+- Create `api/src/services/records.ts` — transaction + policy + `writeAudit`; idempotency per §4 step 0 (reserve in-tx, fill result in the same commit, `IDEMPOTENCY_IN_PROGRESS` on a live duplicate).
+- Tests (DB, `api/test/db/records.test.ts`): create person → version 1, `create` change with `seq` allocated; update email → `set` change with old/new; assert by email updates not creates; **two concurrent asserts of the same new email produce one record** (savepoint path); unique collision ⇒ `DUPLICATE_FOUND` with record id; version conflict; soft delete releases the email key (a new person can claim it) and restore then yields `RESTORE_CONFLICT`; idempotent replay returns the same record id and a concurrent same-key call gets `IDEMPOTENCY_IN_PROGRESS`.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/api --filter=@deepcrm/schema-engine` green; `node scripts/lint-tenant-where.mjs` exits 0.
 
@@ -82,10 +82,10 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 **Files:**
 - Create `packages/schema-engine/src/links/write.ts` — `linkRecords(tx, ctx, schema, { relationType, from, to, data?, label? })`: validate both records (tenant, type allowed, not deleted/merged), validate `data` against `edgeAttributes`, enforce cardinality (end conflicting active links with `active_until`), insert, write `link` changes on both records; `unlinkRecords` (set `active_until`, `unlink` changes); `listLinks`.
-- Create `packages/schema-engine/src/links/projection.ts` — implements the `LinkWriter` from T13: for `record_reference` attributes, diff desired ids vs active links and call `linkRecords`/`unlinkRecords`; `projectLinksIntoData(schema, objectType, links)` rebuilds `data[slug]`.
-- Edit `records/write.ts` to use the real `LinkWriter`.
+- Create `packages/schema-engine/src/links/projection.ts` — implements `LinkWriter`: for `record_reference` attributes, diff desired ids vs active links and call `linkRecords`/`unlinkRecords`; `projectLinksIntoData(schema, objectType, links)` computes the reference values **for serialized output only** (§4a — nothing is written into `records.data`).
+- Edit `api/src/services/records.ts` to construct the real `LinkWriter`; link/unlink write paired change rows (shared `group_id`) and bump `version` on both endpoints (§4 steps 6, 11).
 - Create `api/src/services/links.ts`.
-- Tests (DB): person `works_at` company via `record_reference` ⇒ link row + projection; re-pointing ends the old link; many_to_many edge data `role` stored; `restrict` on delete.
+- Tests (DB): person `works_at` company via `record_reference` ⇒ link row, and `crm`-level read projects it into output `data.company`; re-pointing ends the old link (result reports `ended_links`); many_to_many edge data `role` stored; `restrict` on delete (checked after locks).
 
 **Acceptance:** tests green.
 
@@ -111,9 +111,9 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T15. **Spec:** `docs/schema-engine.md` §6.
 
 **Files:**
-- Create `packages/schema-engine/src/matching/evaluate.ts` — `findMatches(tx, tenant, schema, objectType, data, excludeRecordId?)` → `Candidate[]` per method (`exact`, `normalized` via `_n` shadow keys / unique keys, `fuzzy` via `similarity(display_name, $) >= threshold`).
-- Edit `records/write.ts` — step 7: `block` ⇒ `DUPLICATE_FOUND { candidates }`, `warn` ⇒ attach `duplicates` to result.
-- Tests (DB): standard template rule "company by normalised name warn": creating "Asahi Europe " when "asahi europe" exists returns `duplicates` with evidence; email block rule refuses.
+- Create `packages/schema-engine/src/matching/evaluate.ts` — `findMatches(tx, …)` → `Candidate[]`: `exact`/`normalized` warn rules via key-hash lookups, `fuzzy` via `similarity(display_name, $) >= threshold` (≥ 0.5, top 20); evidence redacted per §6.
+- Edit `records/write.ts` — step 7/8: block rules enforced via `record_match_keys` unique violation ⇒ `DUPLICATE_FOUND { candidates }`; warn ⇒ attach `duplicates`. `crm_matching_rule_set` validation (block ⇒ exact/normalized only; fuzzy ⇒ warn, threshold ≥ 0.5) in `schema/mutate.ts`; setting a block rule enqueues `match-key-backfill`.
+- Tests (DB): company fuzzy-name warn rule: creating "Asahi Europe " when "asahi europe" exists returns `duplicates` with evidence; person email block rule refuses **including under two concurrent creates** (the match-key constraint, not a read, is what blocks).
 
 **Acceptance:** tests green.
 
@@ -124,7 +124,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T16. **Spec:** `docs/mcp-surface.md` §3 (`crm_record_at`, `crm_record_history`).
 
 **Files:**
-- Create `packages/schema-engine/src/records/history.ts` — `recordAt(tx, tenant, recordId, at)` replays `record_changes` up to `at` from the `create` change (apply `set`/`unset`); `recordHistory(tx, tenant, recordId, { attributes?, cursor?, limit })`.
+- Create `packages/schema-engine/src/records/history.ts` — `recordAt(tx, tenant, recordId, at)` replays `set`/`unset` changes from `create` up to `at` for stored attributes, and reconstructs reference/link state from link changes and `active_from`/`active_until` (returned as `links`); `recordHistory(tx, …)`. Both redact by **current** sensitivity (auth §5).
 - Edit `api/src/services/records.ts` — expose both with policy + redaction.
 - Tests (DB): create, update twice with explicit `occurred_at` spacing, `recordAt(t1)` returns the middle state.
 
@@ -136,6 +136,6 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 **Depends on:** T17. **Spec:** `docs/testing.md` §4.
 
-**Files:** create `packages/schema-engine/test/db/properties.test.ts` with fast-check: generate a random custom object type (3–6 attributes of random types incl. one unique email and one `record_reference` to `company`), 20–60 random ops (create/update/assert/link/unlink/delete/restore), then assert invariants (a)–(c) from testing.md (d comes in T39). `numRuns: 25`.
+**Files:** create `packages/schema-engine/test/db/properties.test.ts` with fast-check: random custom object type (3–6 attributes incl. one unique email and one `record_reference` to `company`), 20–60 random ops, then invariants: (a) stored `records.data` equals replay of `set`/`unset` changes (references excluded — they are not stored, §4a); (b) serialized reference output equals active `record_links`; (c) `record_unique_keys` equals normalized unique values of live records; plus (e) every change row has a `seq` and per-team seqs are strictly increasing in commit order. `numRuns: 25`. (Invariant (d) merge/unmerge comes in T39.)
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/schema-engine` green in < 3 min.

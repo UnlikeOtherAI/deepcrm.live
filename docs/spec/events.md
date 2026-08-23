@@ -19,21 +19,23 @@ An **event** is a `Change` (see `contracts.md` → `records.ts`) plus a derived 
 | `unlink` | `link.ended` |
 | schema mutation (no record) | `schema.changed` — emitted from a synthetic change row with `record = null`, `attribute` = affected slug, `new_value = { object_type, schema_version }` |
 
-`seq` (bigint autoincrement) is the cursor and ordering key across all consumers. Redaction: events about `restricted` attributes carry no `old_value`/`new_value` unless the consumer's principal may view them; webhooks are evaluated as `role:admin`.
+`seq` is **per-team and commit-ordered** — allocated from `teams.feed_seq` as the last statement before commit (schema-engine §4 step 13), so a consumer's cursor can never pass an in-flight transaction's lower seq (review C1). Link/unlink events appear once per endpoint (paired rows share `group_id`); consumers dedupe on `group_id` when they only care about the edge.
+
+Redaction: every event passes the same `redactForActor` pass as a record read, by the **current** sensitivity, retroactively; `snapshot` payloads never appear in any event (reviews S5.3/S5.4). Webhook payloads get the same redaction — the receiving endpoint is not a principal and no admin shortcut applies (review S6.2).
 
 ## 2. Pull — `crm_changes_since`
 
-- `cursor` = decimal string of the last `seq` seen; omit ⇒ from the oldest retained row.
+- `cursor` = decimal string of the last `seq` seen. **Omitting it returns an empty page with a fresh cursor at now** — replaying full retained history is the explicit opt-in `from: "beginning"` (review M13).
 - Returns up to `limit` events with `seq > cursor`, ascending, filtered by `object_types`/`kinds`; `next_cursor` = last `seq` returned (or the input cursor when empty); `has_more`.
-- Retention: `record_changes` are never deleted, so a cursor never expires. Consumers store the cursor (Nessie: on the trigger's state).
+- Retention: change rows are immutable **except** they cascade when retention hard-deletes a record `DEEPCRM_RETENTION_DAYS` after its soft delete. A cursor therefore never expires, but a consumer lagging more than the retention window can miss the tail of hard-deleted records' histories — documented, accepted (review B41). Consumers store the cursor (Nessie: on the trigger's state).
 
 ## 3. Push — webhooks
 
 ### Registration
-`crm_webhook_set { url, events[], active }` — `url` must be `https://`, public host (SSRF guard). Secret: 32 random bytes, hex; returned once; stored sealed (AES-256-GCM keyring).
+`crm_webhook_set { url, events[], active, rotate_secret? }` — owner-only **and approval-gated** (a webhook is an outward data replay channel; review S6.2). Identity is the URL (upsert; the secret rotates only with `rotate_secret: true`). `url` must be `https://`, public host, port 443, no userinfo. Secret: 32 random bytes hex, returned once (secret material — the integration code storing it must keep it out of model context), sealed with the keyring (`kid`-versioned ciphertexts). **A new webhook starts at the current max seq** — it never replays history; historical export is `crm_export`, which carries its own approval.
 
 ### Delivery
-Worker job `change.deliver` per team, triggered by the write path (debounced: `visibleAt = now + 30 s`, idempotency `deliver:<teamId>:<floor(now/30s)>`).
+Worker job `change.deliver` per team, triggered by the write path (debounced: `visibleAt = now + 30 s`, idempotency `deliver:<teamId>:<floor(now/30s)>` — the single debounce constant). Delivery always goes through `safeFetch`: fresh DNS resolution, connection pinned to the vetted IPs, private/loopback/link-local refused at connect time, redirects not followed — on **every** attempt, not just registration (review S6.1).
 
 ```
 POST <url>
@@ -49,6 +51,7 @@ X-DeepCRM-Signature: sha256=<hex hmac>     HMAC-SHA256(secret, "<timestamp>.<raw
   "organization": "<UOA org id>",
   "since_seq": "1040",
   "until_seq": "1077",
+  "backlog_remaining": 0,
   "events": [ { "event": "record.updated", "seq": "1041", ...Change } , ... ]   // ≤ 500, ascending
 }
 ```
@@ -58,7 +61,9 @@ Receiver verification: reject if `|now − timestamp| > 300 s`; recompute HMAC o
 ### Acknowledgement and retry
 - Any `2xx` ⇒ `webhooks.last_delivered_seq = until_seq`.
 - Otherwise retry the **same batch** with backoff 1 m, 5 m, 30 m, 2 h, 12 h (five attempts); then `active = false`, `last_error` set, and a `schema.changed`-style marker is **not** emitted (no event about events). `crm_webhook_list` shows `active:false` + `last_error`; re-enable with `crm_webhook_set { active: true }` which resumes from `last_delivered_seq`.
-- Ordering guarantee: per webhook, batches are delivered in `seq` order and never overlap (the job takes `pg_advisory_xact_lock(hashtext('webhook:'||id))`).
+- Ordering guarantee: per webhook, batches are delivered in `seq` order and never overlap (the job takes the webhook advisory lock, namespace 4).
+- Catch-up throttle: at most 10 batches (5,000 events) per job run; a long backlog resumes on the next scheduled run, and the envelope's `backlog_remaining` tells the receiver how far behind it is (review m13).
+- Receivers MUST dedupe on `(webhook id, until_seq)` and reject `until_seq ≤` the last one seen (review S7.3).
 
 ## 4. Delivery adapters (design seam)
 

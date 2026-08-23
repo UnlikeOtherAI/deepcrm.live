@@ -11,18 +11,146 @@
       "icon": "person",
       "primary_attribute": "name",
       "attributes": [
-        { "slug": "name", "name": "Name", "description": "The person's name.", "type": "personal_name", "is_required": true, "is_system": true },
-        { "slug": "emails", "name": "Emails", "description": "Email addresses; the first is primary. Unique across people.", "type": "email", "is_multi": true, "is_unique": true, "is_indexed": true, "sensitivity": "internal" },
-        { "slug": "phones", "name": "Phones", "description": "Phone numbers in any format; stored as E.164.", "type": "phone", "is_multi": true, "sensitivity": "confidential", "config": { "type": "phone", "defaultRegion": "GB" } },
-        { "slug": "title", "name": "Job title", "description": "Role at their company.", "type": "text", "config": { "type": "text", "maxLength": 200 } },
-        { "slug": "company", "name": "Company", "description": "The company this person works at.", "type": "record_reference", "is_indexed": true, "config": { "type": "record_reference", "objectTypes": ["company"], "relationTypeSlug": "person_works_at" } },
-        { "slug": "linkedin", "name": "LinkedIn", "description": "Profile URL.", "type": "url" },
-        { "slug": "location", "name": "Location", "description": "Where they are based.", "type": "location" },
-        { "slug": "owner", "name": "Owner", "description": "The human or agent responsible for this relationship.", "type": "actor_reference", "is_indexed": true },
-        { "slug": "source", "name": "Source", "description": "How we came to know this person.", "type": "select",
-          "config": { "type": "select", "options": [ { "id": "inbound", "label": "Inbound" }, { "id": "outbound", "label": "Outbound" }, { "id": "referral", "label": "Referral" }, { "id": "event", "label": "Event" }, { "id": "partner", "label": "Partner" }, { "id": "other", "label": "Other" } ] } },
-        { "slug": "tags", "name": "Tags", "description": "Free labels.", "type": "select", "is_multi": true, "config": { "type": "select", "options": [ { "id": "champion", "label": "Champion" }, { "id": "decision_maker", "label": "Decision maker" }, { "id": "influencer", "label": "Influencer" }, { "id": "vip", "label": "VIP" } ] } },
-        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "The person's name.",
+          "type": "personal_name",
+          "is_required": true,
+          "is_system": true
+        },
+        {
+          "slug": "emails",
+          "name": "Emails",
+          "description": "Email addresses; the first is primary. Unique across people.",
+          "type": "email",
+          "is_multi": true,
+          "is_unique": true,
+          "is_indexed": true,
+          "sensitivity": "internal"
+        },
+        {
+          "slug": "phones",
+          "name": "Phones",
+          "description": "Phone numbers in any format; stored as E.164.",
+          "type": "phone",
+          "is_multi": true,
+          "sensitivity": "confidential",
+          "config": {
+            "type": "phone",
+            "defaultRegion": "GB"
+          }
+        },
+        {
+          "slug": "title",
+          "name": "Job title",
+          "description": "Role at their company.",
+          "type": "text",
+          "config": {
+            "type": "text",
+            "maxLength": 200
+          }
+        },
+        {
+          "slug": "company",
+          "name": "Company",
+          "description": "The company this person works at.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "company"
+            ],
+            "relationTypeSlug": "person_works_at"
+          }
+        },
+        {
+          "slug": "linkedin",
+          "name": "LinkedIn",
+          "description": "Profile URL.",
+          "type": "url"
+        },
+        {
+          "slug": "location",
+          "name": "Location",
+          "description": "Where they are based.",
+          "type": "location"
+        },
+        {
+          "slug": "source",
+          "name": "Source",
+          "description": "How we came to know this person.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "inbound",
+                "label": "Inbound"
+              },
+              {
+                "id": "outbound",
+                "label": "Outbound"
+              },
+              {
+                "id": "referral",
+                "label": "Referral"
+              },
+              {
+                "id": "event",
+                "label": "Event"
+              },
+              {
+                "id": "partner",
+                "label": "Partner"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "tags",
+          "name": "Tags",
+          "description": "Free labels.",
+          "type": "select",
+          "is_multi": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "champion",
+                "label": "Champion"
+              },
+              {
+                "id": "decision_maker",
+                "label": "Decision maker"
+              },
+              {
+                "id": "influencer",
+                "label": "Influencer"
+              },
+              {
+                "id": "vip",
+                "label": "VIP"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "last_activity_at",
+          "name": "Last activity",
+          "description": "Most recent interaction (computed).",
+          "type": "timestamp_system",
+          "is_system": true,
+          "config": {
+            "type": "timestamp_system",
+            "source": "last_activity_at"
+          }
+        }
       ]
     },
     {
@@ -34,17 +162,174 @@
       "icon": "company",
       "primary_attribute": "name",
       "attributes": [
-        { "slug": "name", "name": "Name", "description": "Trading name.", "type": "text", "is_required": true, "is_system": true, "is_indexed": true, "config": { "type": "text", "maxLength": 200 } },
-        { "slug": "domains", "name": "Domains", "description": "Web domains; the registrable domain is unique across companies.", "type": "domain", "is_multi": true, "is_unique": true, "is_indexed": true },
-        { "slug": "industry", "name": "Industry", "description": "Sector.", "type": "select",
-          "config": { "type": "select", "options": [ { "id": "software", "label": "Software" }, { "id": "finance", "label": "Finance" }, { "id": "manufacturing", "label": "Manufacturing" }, { "id": "retail", "label": "Retail" }, { "id": "healthcare", "label": "Healthcare" }, { "id": "government", "label": "Government" }, { "id": "education", "label": "Education" }, { "id": "media", "label": "Media" }, { "id": "energy", "label": "Energy" }, { "id": "other", "label": "Other" } ] } },
-        { "slug": "size", "name": "Size", "description": "Headcount band.", "type": "select",
-          "config": { "type": "select", "options": [ { "id": "s1_10", "label": "1–10" }, { "id": "s11_50", "label": "11–50" }, { "id": "s51_200", "label": "51–200" }, { "id": "s201_1000", "label": "201–1,000" }, { "id": "s1001_5000", "label": "1,001–5,000" }, { "id": "s5000_plus", "label": "5,000+" } ] } },
-        { "slug": "annual_revenue", "name": "Annual revenue", "description": "Approximate yearly revenue.", "type": "currency", "sensitivity": "confidential", "config": { "type": "currency", "defaultCurrency": "GBP" } },
-        { "slug": "location", "name": "Headquarters", "description": "Main office.", "type": "location" },
-        { "slug": "owner", "name": "Owner", "description": "Account owner (human or agent).", "type": "actor_reference", "is_indexed": true },
-        { "slug": "tags", "name": "Tags", "description": "Free labels.", "type": "select", "is_multi": true, "config": { "type": "select", "options": [ { "id": "customer", "label": "Customer" }, { "id": "prospect", "label": "Prospect" }, { "id": "partner", "label": "Partner" }, { "id": "competitor", "label": "Competitor" }, { "id": "churned", "label": "Churned" } ] } },
-        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "Trading name.",
+          "type": "text",
+          "is_required": true,
+          "is_system": true,
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 200
+          }
+        },
+        {
+          "slug": "domains",
+          "name": "Domains",
+          "description": "Web domains; the registrable domain is unique across companies.",
+          "type": "domain",
+          "is_multi": true,
+          "is_unique": true,
+          "is_indexed": true
+        },
+        {
+          "slug": "industry",
+          "name": "Industry",
+          "description": "Sector.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "software",
+                "label": "Software"
+              },
+              {
+                "id": "finance",
+                "label": "Finance"
+              },
+              {
+                "id": "manufacturing",
+                "label": "Manufacturing"
+              },
+              {
+                "id": "retail",
+                "label": "Retail"
+              },
+              {
+                "id": "healthcare",
+                "label": "Healthcare"
+              },
+              {
+                "id": "government",
+                "label": "Government"
+              },
+              {
+                "id": "education",
+                "label": "Education"
+              },
+              {
+                "id": "media",
+                "label": "Media"
+              },
+              {
+                "id": "energy",
+                "label": "Energy"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "size",
+          "name": "Size",
+          "description": "Headcount band.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "s1_10",
+                "label": "1–10"
+              },
+              {
+                "id": "s11_50",
+                "label": "11–50"
+              },
+              {
+                "id": "s51_200",
+                "label": "51–200"
+              },
+              {
+                "id": "s201_1000",
+                "label": "201–1,000"
+              },
+              {
+                "id": "s1001_5000",
+                "label": "1,001–5,000"
+              },
+              {
+                "id": "s5000_plus",
+                "label": "5,000+"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "annual_revenue",
+          "name": "Annual revenue",
+          "description": "Approximate yearly revenue.",
+          "type": "currency",
+          "sensitivity": "confidential",
+          "config": {
+            "type": "currency",
+            "defaultCurrency": "GBP"
+          }
+        },
+        {
+          "slug": "location",
+          "name": "Headquarters",
+          "description": "Main office.",
+          "type": "location"
+        },
+        {
+          "slug": "tags",
+          "name": "Tags",
+          "description": "Free labels.",
+          "type": "select",
+          "is_multi": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "customer",
+                "label": "Customer"
+              },
+              {
+                "id": "prospect",
+                "label": "Prospect"
+              },
+              {
+                "id": "partner",
+                "label": "Partner"
+              },
+              {
+                "id": "competitor",
+                "label": "Competitor"
+              },
+              {
+                "id": "churned",
+                "label": "Churned"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "last_activity_at",
+          "name": "Last activity",
+          "description": "Most recent interaction (computed).",
+          "type": "timestamp_system",
+          "is_system": true,
+          "config": {
+            "type": "timestamp_system",
+            "source": "last_activity_at"
+          }
+        }
       ]
     },
     {
@@ -56,49 +341,296 @@
       "icon": "deal",
       "primary_attribute": "name",
       "attributes": [
-        { "slug": "name", "name": "Name", "description": "Deal title, e.g. 'Asahi Europe — packaging pilot'.", "type": "text", "is_required": true, "is_system": true, "config": { "type": "text", "maxLength": 200 } },
-        { "slug": "stage", "name": "Stage", "description": "Pipeline stage. Moving it records stage history.", "type": "status", "is_required": true, "is_indexed": true, "default_value": "lead",
-          "config": { "type": "status", "options": [
-            { "id": "lead", "label": "Lead", "category": "open", "position": 0 },
-            { "id": "qualified", "label": "Qualified", "category": "open", "position": 1 },
-            { "id": "proposal", "label": "Proposal", "category": "open", "position": 2 },
-            { "id": "negotiation", "label": "Negotiation", "category": "open", "position": 3 },
-            { "id": "won", "label": "Won", "category": "won", "position": 4 },
-            { "id": "lost", "label": "Lost", "category": "lost", "position": 5 } ] } },
-        { "slug": "amount", "name": "Amount", "description": "Expected contract value.", "type": "currency", "is_indexed": true, "config": { "type": "currency", "defaultCurrency": "GBP" } },
-        { "slug": "close_date", "name": "Close date", "description": "Expected or actual close.", "type": "date", "is_indexed": true },
-        { "slug": "probability", "name": "Probability", "description": "Likelihood to close, 0–100.", "type": "percent" },
-        { "slug": "company", "name": "Company", "description": "The account this deal is with.", "type": "record_reference", "is_indexed": true, "config": { "type": "record_reference", "objectTypes": ["company"], "relationTypeSlug": "deal_for_company" } },
-        { "slug": "contacts", "name": "Contacts", "description": "People involved in the deal.", "type": "record_reference", "is_multi": true, "config": { "type": "record_reference", "objectTypes": ["person"], "relationTypeSlug": "deal_contacts" } },
-        { "slug": "owner", "name": "Owner", "description": "Deal owner (human or agent).", "type": "actor_reference", "is_indexed": true },
-        { "slug": "lost_reason", "name": "Lost reason", "description": "Why the deal was lost.", "type": "select",
-          "config": { "type": "select", "options": [ { "id": "price", "label": "Price" }, { "id": "competitor", "label": "Competitor" }, { "id": "timing", "label": "Timing" }, { "id": "no_decision", "label": "No decision" }, { "id": "fit", "label": "Poor fit" }, { "id": "other", "label": "Other" } ] } },
-        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "Deal title, e.g. 'Asahi Europe — packaging pilot'.",
+          "type": "text",
+          "is_required": true,
+          "is_system": true,
+          "config": {
+            "type": "text",
+            "maxLength": 200
+          }
+        },
+        {
+          "slug": "stage",
+          "name": "Stage",
+          "description": "Pipeline stage. Moving it records stage history.",
+          "type": "status",
+          "is_required": true,
+          "is_indexed": true,
+          "default_value": "lead",
+          "config": {
+            "type": "status",
+            "options": [
+              {
+                "id": "lead",
+                "label": "Lead",
+                "category": "open",
+                "position": 0
+              },
+              {
+                "id": "qualified",
+                "label": "Qualified",
+                "category": "open",
+                "position": 1
+              },
+              {
+                "id": "proposal",
+                "label": "Proposal",
+                "category": "open",
+                "position": 2
+              },
+              {
+                "id": "negotiation",
+                "label": "Negotiation",
+                "category": "open",
+                "position": 3
+              },
+              {
+                "id": "won",
+                "label": "Won",
+                "category": "won",
+                "position": 4
+              },
+              {
+                "id": "lost",
+                "label": "Lost",
+                "category": "lost",
+                "position": 5
+              }
+            ]
+          }
+        },
+        {
+          "slug": "amount",
+          "name": "Amount",
+          "description": "Expected contract value.",
+          "type": "currency",
+          "is_indexed": true,
+          "config": {
+            "type": "currency",
+            "defaultCurrency": "GBP"
+          }
+        },
+        {
+          "slug": "close_date",
+          "name": "Close date",
+          "description": "Expected or actual close.",
+          "type": "date",
+          "is_indexed": true
+        },
+        {
+          "slug": "probability",
+          "name": "Probability",
+          "description": "Likelihood to close, 0–100.",
+          "type": "percent"
+        },
+        {
+          "slug": "company",
+          "name": "Company",
+          "description": "The account this deal is with.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "company"
+            ],
+            "relationTypeSlug": "deal_for_company"
+          }
+        },
+        {
+          "slug": "contacts",
+          "name": "Contacts",
+          "description": "People involved in the deal.",
+          "type": "record_reference",
+          "is_multi": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "person"
+            ],
+            "relationTypeSlug": "deal_contacts"
+          }
+        },
+        {
+          "slug": "lost_reason",
+          "name": "Lost reason",
+          "description": "Why the deal was lost.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "price",
+                "label": "Price"
+              },
+              {
+                "id": "competitor",
+                "label": "Competitor"
+              },
+              {
+                "id": "timing",
+                "label": "Timing"
+              },
+              {
+                "id": "no_decision",
+                "label": "No decision"
+              },
+              {
+                "id": "fit",
+                "label": "Poor fit"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "last_activity_at",
+          "name": "Last activity",
+          "description": "Most recent interaction (computed).",
+          "type": "timestamp_system",
+          "is_system": true,
+          "config": {
+            "type": "timestamp_system",
+            "source": "last_activity_at"
+          }
+        }
       ]
     }
   ],
   "relation_types": [
-    { "slug": "person_works_at", "from_object_type": "person", "to_object_type": "company", "forward_name": "works at", "inverse_name": "employs", "cardinality": "many_to_one", "on_delete": "unlink", "description": "Employment. Ending a link keeps the history (the person left).",
+    {
+      "slug": "person_works_at",
+      "from_object_type": "person",
+      "to_object_type": "company",
+      "forward_name": "works at",
+      "inverse_name": "employs",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Employment. Ending a link keeps the history (the person left).",
       "edge_attributes": [
-        { "slug": "role", "name": "Role", "description": "Title while at this company.", "type": "text", "config": { "type": "text", "maxLength": 200 } },
-        { "slug": "since", "name": "Since", "description": "Start date.", "type": "date" } ] },
-    { "slug": "deal_for_company", "from_object_type": "deal", "to_object_type": "company", "forward_name": "for", "inverse_name": "deals", "cardinality": "many_to_one", "on_delete": "restrict", "description": "The account of the deal." },
-    { "slug": "deal_contacts", "from_object_type": "deal", "to_object_type": "person", "forward_name": "involves", "inverse_name": "deals", "cardinality": "many_to_many", "on_delete": "unlink", "description": "People on the deal, with their role in it.",
+        {
+          "slug": "role",
+          "name": "Role",
+          "description": "Title while at this company.",
+          "type": "text",
+          "config": {
+            "type": "text",
+            "maxLength": 200
+          }
+        },
+        {
+          "slug": "since",
+          "name": "Since",
+          "description": "Start date.",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "slug": "deal_for_company",
+      "from_object_type": "deal",
+      "to_object_type": "company",
+      "forward_name": "for",
+      "inverse_name": "deals",
+      "cardinality": "many_to_one",
+      "on_delete": "restrict",
+      "description": "The account of the deal."
+    },
+    {
+      "slug": "deal_contacts",
+      "from_object_type": "deal",
+      "to_object_type": "person",
+      "forward_name": "involves",
+      "inverse_name": "deals",
+      "cardinality": "many_to_many",
+      "on_delete": "unlink",
+      "description": "People on the deal, with their role in it.",
       "edge_attributes": [
-        { "slug": "role", "name": "Role in deal", "description": "Their part in this deal.", "type": "select",
-          "config": { "type": "select", "options": [ { "id": "champion", "label": "Champion" }, { "id": "decision_maker", "label": "Decision maker" }, { "id": "economic_buyer", "label": "Economic buyer" }, { "id": "technical", "label": "Technical evaluator" }, { "id": "blocker", "label": "Blocker" } ] } } ] }
+        {
+          "slug": "role",
+          "name": "Role in deal",
+          "description": "Their part in this deal.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "champion",
+                "label": "Champion"
+              },
+              {
+                "id": "decision_maker",
+                "label": "Decision maker"
+              },
+              {
+                "id": "economic_buyer",
+                "label": "Economic buyer"
+              },
+              {
+                "id": "technical",
+                "label": "Technical evaluator"
+              },
+              {
+                "id": "blocker",
+                "label": "Blocker"
+              }
+            ]
+          }
+        }
+      ]
+    }
   ],
   "matching_rules": {
     "person": [
-      { "attributes": ["emails"], "method": "normalized", "action": "block" },
-      { "attributes": ["name", "company"], "method": "normalized", "action": "warn" }
+      {
+        "attributes": [
+          "emails"
+        ],
+        "method": "normalized",
+        "action": "block"
+      },
+      {
+        "attributes": [
+          "name",
+          "company"
+        ],
+        "method": "normalized",
+        "action": "warn"
+      }
     ],
     "company": [
-      { "attributes": ["domains"], "method": "normalized", "action": "block" },
-      { "attributes": ["name"], "method": "fuzzy", "threshold": 0.6, "action": "warn" }
+      {
+        "attributes": [
+          "domains"
+        ],
+        "method": "normalized",
+        "action": "block"
+      },
+      {
+        "attributes": [
+          "name"
+        ],
+        "method": "fuzzy",
+        "threshold": 0.6,
+        "action": "warn"
+      }
     ],
     "deal": [
-      { "attributes": ["name", "company"], "method": "normalized", "action": "warn" }
+      {
+        "attributes": [
+          "name",
+          "company"
+        ],
+        "method": "normalized",
+        "action": "warn"
+      }
     ]
   }
 }

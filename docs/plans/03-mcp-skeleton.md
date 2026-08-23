@@ -9,10 +9,10 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 **Files (create) in `packages/mcp-inbound/src/`:**
 - `headers.ts` — `readInboundHeaders(headers: Record<string, unknown>): InboundHeaders` (case-insensitive; bearer extraction).
 - `app-key.ts` — `parseAppKeys(env: string): Map<sha256hex, name>`; `verifyAppKey(keys, bearer)` timing-safe on sha256 of the bearer.
-- `uoa-delegation.ts` — `verifyUoaDelegation(jwt, { jwks, issuer, audience, now })` via `jose.jwtVerify` → `{ sub, org, team, tv, scope }`; requires `scope` to include `ai.invoke`.
-- `nessie-context.ts` — `verifyNessieContext(jwt, { jwks, now })` → provenance; enforces `exp - iat ≤ 300`, clock tolerance 30 s.
+- `uoa-delegation.ts` — `verifyUoaDelegation(jwt, { jwks, issuer, audience, now })` via `jose.jwtVerify` → `{ sub, org, team, role, tv, scope }` (claims zod-validated; `role` defaults `member`); requires `scope` ∋ `ai.invoke`, `iat` present, `exp − iat ≤ 900 s`.
+- `nessie-context.ts` — `verifyNessieContext(jwt, { jwks, audience, issuer, now })` → provenance; enforces `aud`/`iss`, `exp - iat ≤ 300`, clock tolerance 30 s. `seen-set.ts` — in-process 300 s `requestId` single-use set consulted by destructive tools (auth §1).
 - `authenticate.ts` — `authenticate(headers, opts): Promise<{ ok: true; principal } | { ok: false; reason }>`; `sub` mismatch between delegation and context ⇒ fail; `REQUIRE_AUTH=false` ⇒ `devPrincipal()` regardless of headers.
-- Tests with a generated RSA key pair (`jose.generateKeyPair`) and a local JWKS resolver: happy path; expired; wrong audience; sub mismatch; missing bearer; dev mode.
+- Tests with a generated RSA key pair and a local JWKS resolver: happy path (role claim through); expired; wrong audience on either token; over-long delegation lifetime; sub mismatch; type-confused claims rejected; missing bearer; dev mode.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/mcp-inbound` green.
 
@@ -23,12 +23,12 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 **Depends on:** T19. **Spec:** `docs/mcp-surface.md` §0.1; `docs/auth-and-tenancy.md` §1; deepsignal `api/src/mcp-http.ts` (pattern).
 
 **Files:**
-- Create `api/src/routes/oauth-metadata.ts` — `GET /.well-known/oauth-protected-resource` → `{ resource: DEEPCRM_API_PUBLIC_URL, authorization_servers: [UOA_ISSUER], bearer_methods_supported: ['header'] }`.
-- Create `api/src/mcp/server.ts` — `buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer` with `new McpServer({ name: 'deepcrm', version })`; registers tool groups (empty until T22+) via `registerSchemaTools(server, ctx, deps)` etc.
+- Create `api/src/routes/oauth-metadata.ts` — `GET /.well-known/oauth-protected-resource` → `{ resource, authorization_servers: [UOA_ISSUER], bearer_methods_supported: ['header'] }`; when `UOA_ISSUER` is unset (dev) the route answers 404 (documented in the file).
+- Create `api/src/mcp/server.ts` — `buildMcpServer(ctx, deps): McpServer`; registers tool groups (empty until T22+) and implements `server/discover` (mcp-surface §0.1) plus `resultType: "complete"` on ordinary results and top-level `ttlMs`/`cacheScope: "private"` on list/read results (document in a comment where SDK 1.30 exposes each seam; a thin result-wrapper is acceptable).
 - Create `api/src/plugins/mcp-http.ts` — Fastify route `POST /mcp`: `authenticate` → 401 with `WWW-Authenticate` on failure; `resolveTenant` + `buildActorContext`; `const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })` (stateless); `await server.connect(transport)`; `await transport.handleRequest(req.raw, reply.raw, req.body)`; `reply.hijack()`. `GET`/`DELETE /mcp` ⇒ 405. Add `_meta` cache hints to list results through a `server.server.setRequestHandler` wrapper or the SDK's list options — whichever the SDK 1.30 API offers; document the choice in a comment.
 - Edit `api/src/app.ts` — register both.
 - Create `api/test/mcp/harness.ts` — `startTestServer(opts)` returns `{ client: Client, close }` using `StreamableHTTPClientTransport(new URL('http://127.0.0.1:<port>/mcp'), { requestInit: { headers } })`.
-- Create `api/test/mcp/transport.test.ts` — dev mode: `client.listTools()` returns `[]`; with `REQUIRE_AUTH=true` and no headers: HTTP 401 and `WWW-Authenticate` present.
+- Create `api/test/mcp/transport.test.ts` — dev mode: `client.listTools()` **succeeds and returns an array** (do not assert emptiness — later tasks add tools); `server/discover` answers; with `REQUIRE_AUTH=true` and no headers: HTTP 401 with `WWW-Authenticate`.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/api` green; `curl -s http://localhost:5656/.well-known/oauth-protected-resource` (dev server) prints JSON with `resource`.
 
@@ -40,7 +40,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 **Files:**
 - Create `api/src/mcp/tools/result.ts` — `ok(structured, summary: string)` → `{ content: [{ type:'text', text: summary }], structuredContent }`; `toolError(err)` → `{ isError: true, content: [{type:'text', text: code+': '+message}], structuredContent: { code, message, ...details } }` mapping `ServiceError`; unknown errors ⇒ `INTERNAL` (logged with requestId, message not leaked).
-- Create `api/src/mcp/tools/input-required.ts` — `inputRequired(requests: InputRequest[])` building the MRTR result shape from §0.4; `readInputResponses(extra)` reading `inputResponses` from the call's params/`_meta` per SDK 1.30 (document where the SDK exposes it).
+- Create `api/src/mcp/tools/input-required.ts` — `inputRequired(elicitations, requestStatePayload)` building the spec MRTR shape from §0.4 (elicitation map + AEAD `requestState`, keyring kid `mrtr`); `readMrtr(params)` unwrapping `inputResponses`/`requestState` from `tools/call` params before zod validation; `verifyRequestState(state, ctx, tool, argsHash)`.
 - Create `api/src/mcp/tools/common-args.ts` — zod fragments `reason`, `idempotency_key`, `expected_version`, `cursor`, `limit` with `.describe()` text copied from §0.2.
 - Create `api/src/mcp/tools/register.ts` — `defineTool(server, { name, description, input: zodShape, handler })` wrapper that: validates, calls handler, catches → `toolError`, records duration in logs by tool name.
 - Unit tests for mapping.
@@ -56,7 +56,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 **Files:**
 - Create `api/src/mcp/tools/schema.ts` — register the 11 schema tools with the exact names/descriptions/inputs from §2, calling `services/schema.ts` and `templates/apply.ts`. Archive tools: when values/records exist, return `inputRequired([{ id:'confirm', kind:'confirmation', message, schema }])` unless `inputResponses.confirm.confirmed === true`.
 - Create `api/src/mcp/resources.ts` — `crm://schema`, `crm://schema/{object_type}` (resource template), `crm://templates`.
-- Create `api/test/mcp/schema.test.ts` — via harness: `crm_template_apply standard_crm` → `crm_schema_get` lists person/company/deal; `crm_object_type_define subscription` with a `record_reference` to company; `crm_attribute_archive` returns `input_required` first, succeeds with confirmation; `resources/read crm://schema` returns `schema_version`.
+- Create `api/test/mcp/schema.test.ts` — via harness: `crm_template_apply standard_crm` → `crm_schema_get` lists person/company/deal; unknown template ⇒ `UNKNOWN_TEMPLATE {available}`; `crm_object_type_define subscription` with a `record_reference` to company; `crm_attribute_archive` returns spec-shaped `input_required` (elicitation + `requestState`), succeeds on the retry with `inputResponses` + echoed state, and a tampered state is re-challenged; `resources/read crm://schema` returns `schema_version` and `resources/templates/list` lists the two URI templates.
 
 **Acceptance:** api tests green.
 
@@ -92,7 +92,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 - Create `api/test/mcp/surface.test.ts` — parse `docs/mcp-surface.md` tables for `` `crm_*` `` names in §2–§8; assert `listTools()` names ⊆ documented and every documented tool that is **implemented so far** is present (maintain an explicit `NOT_YET: string[]` list in the test that shrinks as phases land — the list must be empty by T42).
 - Add to `register.ts`: throw at registration if `description.length > 300` or any input field lacks `.describe()`.
 
-**Acceptance:** api tests green; `NOT_YET` contains exactly the tools from §5–§8 plus `crm_records_bulk_assert`.
+**Acceptance:** api tests green; `NOT_YET` contains exactly the tools from §5–§8 plus `crm_records_bulk_assert`, `crm_records_count`, `crm_records_get_many` (the §3 additions land in T23's file but count/get_many ship with T31's query work — keep them in `NOT_YET` until then).
 
 ---
 

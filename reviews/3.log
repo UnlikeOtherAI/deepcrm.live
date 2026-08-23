@@ -1,0 +1,2879 @@
+Reading additional input from stdin...
+OpenAI Codex v0.145.0
+--------
+workdir: /Volumes/External/Projects/deepcrm.live
+model: k3-256k
+provider: kimi
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 01a03023-3e7b-7a23-9422-cd2b56bd7059
+--------
+user
+You are an AI agent (an LLM tool-user) evaluating DeepCRM's MCP surface AS ITS CONSUMER, plus checking protocol conformance. Docs only, no code yet. Read ALL of: docs/mcp-surface.md, docs/spec/contracts.md, docs/spec/protocol-flows.md, docs/brief.md section 6, docs/spec/templates/*.json. Your angle: CAN AN AGENT ACTUALLY USE THIS WELL, and IS IT CONFORMANT TO MCP SPEC 2026-07-28. Evaluate: (a) tool ergonomics for a mid-tier model — ambiguous tool choices (create vs assert vs bulk_assert; record_get vs records_query vs search; link via links[] vs crm_link), argument foot-guns (Filter grammar complexity, data patch null-clears semantics, match_attribute must be unique, cursor handling), error recoverability (does every error tell the agent what to do next?), description quality vs the 300-char cap, missing tools an agent will want (e.g. counting, aggregation beyond pipeline, batch get, schema diff, undo of a single change); (b) MCP 2026-07-28 conformance — the MRTR input_required/inputResponses shape as documented in section 0.4 vs the actual spec (verify: is resultType:'input_required' the real spec mechanism? where do inputResponses go on retry?), Tasks extension method names (tasks/get, tasks/update, tasks/cancel — which exist?), stateless transport requirements (Mcp-Method/Mcp-Name headers, _meta protocolVersion/clientCapabilities), cache hints _meta shape, structuredContent + content conventions, resources templates syntax. Consult the web (modelcontextprotocol.io spec 2026-07-28 changelog and schema) if available to you; if not, flag conformance items as 'verify against spec' rather than guessing. For every finding: severity, exact doc+section, scenario, concrete fix. Do NOT modify any existing file. Write full findings to reviews/3-agent-consumer-mcp.md (create it). No praise.
+exec
+/bin/zsh -lc 'ls docs docs/spec docs/spec/templates reviews 2>&1; wc -l docs/mcp-surface.md docs/spec/contracts.md docs/spec/protocol-flows.md docs/brief.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+docs:
+architecture.md
+auth-and-tenancy.md
+brief.md
+deployment.md
+mcp-surface.md
+plans
+schema-engine.md
+spec
+testing.md
+
+docs/spec:
+contracts.md
+events.md
+nessie-integration.md
+policy-defaults.json
+protocol-flows.md
+templates
+
+docs/spec/templates:
+standard_crm.json
+system.json
+
+reviews:
+1.log
+2.log
+3.log
+     144 docs/mcp-surface.md
+     465 docs/spec/contracts.md
+     134 docs/spec/protocol-flows.md
+     391 docs/brief.md
+    1134 total
+
+exec
+/bin/zsh -lc 'cat docs/mcp-surface.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# MCP surface
+
+The product. One streamable-HTTP endpoint, MCP spec **2026-07-28**, stateless. Tool names, descriptions and schemas here are normative; code registers exactly these, and `pnpm docs:mcp` regenerates the tables in §2–§8 from the registrations.
+
+## 0. Conventions
+
+### 0.1 Transport
+- `POST /mcp` — one JSON-RPC request per HTTP request. `GET`/`DELETE /mcp` ⇒ 405. Headers per [auth-and-tenancy.md](auth-and-tenancy.md) §1. Response: JSON (no SSE stream needed — no server-initiated messages are used).
+- `tools/list`, `resources/list`, `prompts/list` results carry `_meta["io.modelcontextprotocol/cache"] = { ttlMs: 300000, cacheScope: "tenant" }` and an `etag` = `schema_version`.
+- Server info: `{ name: "deepcrm", version: <package version> }`.
+
+### 0.2 Argument conventions
+- Object types, attributes, relation types, lists and views are addressed by **slug**; records, links and changes by **uuid**.
+- Every mutating tool accepts optional `reason: string` (stored on the change) and `idempotency_key: string` (replay-safe for 24 h).
+- Every write that touches an existing record accepts optional `expected_version: number`.
+- `limit` defaults 50, max 200; `cursor` is opaque.
+
+### 0.3 Result conventions
+- Results are `structuredContent` JSON (plus a one-line `content[0].text` summary for clients that show text). Shapes below are the `structuredContent`.
+- A **record** renders as `{ id, object_type, display_name, version, data, owner, created_at, updated_at, last_activity_at, redacted_attributes: [], links?: … , redirected_from? }`.
+- Errors: `isError: true`, `structuredContent: { code, message, ...details }` with codes from `schema-engine.md` §10.
+
+### 0.4 Multi round-trip (MRTR) — confirmations and approvals
+When a call needs a decision before it proceeds, the tool returns `resultType: "input_required"` with `inputRequests`:
+
+```json
+{ "resultType": "input_required",
+  "inputRequests": [{ "id": "confirm", "kind": "confirmation",
+     "message": "Archiving attribute 'fax' will hide 12 existing values. Proceed?",
+     "schema": { "type": "object", "properties": { "confirmed": { "type": "boolean" } }, "required": ["confirmed"] } }] }
+```
+The client re-issues the same `tools/call` with `inputResponses: { confirm: { confirmed: true } }`. Approval-gated actions use `kind: "approval"` with `approval_token`; the re-issue must carry `{ approval_token, approved: true }` **and** come from a principal whose role is admin/owner (the Nessie agent obtains the human's decision in-channel). Tokens expire after 24 h.
+
+### 0.5 Long-running work — Tasks extension
+`crm_records_bulk_assert`, `crm_find_duplicates`, `crm_export` return `{ task_id }`; clients poll `tasks/get { taskId }` (extension `io.modelcontextprotocol/tasks`) which maps to `queue_jobs.{status, progress, result}`. `tasks/cancel` marks the job cancelled if still queued.
+
+## 1. Resources
+
+| URI | Content |
+|---|---|
+| `crm://schema` | `{ schema_version, object_types: [ObjectTypeSummary], relation_types: [...], matching_rules: [...] }` |
+| `crm://schema/{object_type}` | full `ObjectTypeDetail` (attributes with type, config, flags, sensitivity, description) |
+| `crm://templates` | available template slugs with descriptions |
+| `crm://views/{slug}` | a saved view's definition |
+
+## 2. Schema tools
+
+| Tool | Description (as registered) | Input | Output |
+|---|---|---|---|
+| `crm_schema_get` | Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by `schema_version`. | `{ object_type?: slug }` | `crm://schema` body or one `ObjectTypeDetail` |
+| `crm_object_type_define` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with `crm_attribute_define`. | `{ slug, singular_name, plural_name, description, icon?, attributes?: AttributeSpec[], primary_attribute?: slug }` | `ObjectTypeDetail` |
+| `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type, singular_name?, plural_name?, description?, icon?, primary_attribute? }` | `ObjectTypeDetail` |
+| `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type, reason? }` | `{ archived: true, records: n }` |
+| `crm_attribute_define` | Add an attribute (field) to an object type. Use `record_reference` to relate to other object types. Unique attributes enable `crm_record_assert`. | `{ object_type, ...AttributeSpec }` | `AttributeDetail` |
+| `crm_attribute_update` | Change an attribute's name, description, options, required/indexed/sensitivity flags. Type and slug are immutable. Tightening (required, unique) reports violations via MRTR before applying. | `{ object_type, attribute, name?, description?, config?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }` | `AttributeDetail` |
+| `crm_attribute_archive` | Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value. | `{ object_type, attribute, reason? }` | `{ archived: true, records_with_values: n }` |
+| `crm_relation_type_define` | Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. | `{ slug, from_object_type: slug \| null, to_object_type: slug \| null, forward_name, inverse_name, description?, cardinality, on_delete?, edge_attributes?: AttributeSpec[] }` | `RelationTypeDetail` |
+| `crm_relation_type_archive` | Archive a relation type; links are kept but inactive. | `{ relation_type, reason? }` | `{ archived: true, links: n }` |
+| `crm_matching_rule_set` | Replace the duplicate-matching rules for an object type. Rules decide what `crm_record_create` does when a likely duplicate exists (block / warn / allow). | `{ object_type, rules: [{ attributes: [slug], method: exact\|normalized\|fuzzy, threshold?, action }] }` | `{ rules }` |
+| `crm_template_apply` | Apply a schema template (e.g. `standard_crm`: people, companies, deals). Idempotent: existing slugs untouched. | `{ template }` | `{ added: { object_types, attributes, relation_types } }` |
+
+`AttributeSpec = { slug, name, description, type, config?, is_multi?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }`. Policy: all `define` on `schema`.
+
+## 3. Record tools
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_record_create` | Create a record. Returns the record, plus `duplicates` when a matching rule with action `warn` found likely duplicates. Fails with `DUPLICATE_FOUND` on a unique-attribute collision or a `block` rule — then use `crm_record_assert` or `crm_merge_records`. | `{ object_type, data: {slug: value}, links?: [{ relation_type, to_record_id, data? }], owner?: Actor, reason?, idempotency_key? }` | `{ record, duplicates?: Candidate[] }` |
+| `crm_record_update` | Patch attributes on a record. Keys set to `null` are cleared. Pass `expected_version` to avoid overwriting concurrent edits. | `{ id, data, owner?, expected_version?, reason?, idempotency_key? }` | `{ record }` |
+| `crm_record_assert` | Create-or-update by a unique attribute (upsert), e.g. person by email, company by domain. The safe default for any sync or import. | `{ object_type, match_attribute: slug, data, links?, owner?, reason?, idempotency_key? }` | `{ record, created: boolean }` |
+| `crm_record_get` | Fetch one record by id, or by a unique attribute value. Optionally include active links (grouped by relation) and the recent timeline. | `{ id? , object_type?, match_attribute?, value?, include_links?: boolean, include_timeline?: number }` | `{ record, links?, timeline? }` |
+| `crm_records_query` | List records of one object type with a structured filter, sort and cursor. Use `crm_search` for free-text. Filter grammar: see `schema-engine.md` §5. | `{ object_type, filter?, sort?, attributes?: [slug], cursor?, limit? }` | `{ records, next_cursor, total? }` |
+| `crm_records_bulk_assert` | Upsert many rows by a unique attribute as a background Task (cap `DEEPCRM_MAX_BULK_ROWS`). Poll `tasks/get`. | `{ object_type, match_attribute, rows: [{ data, links? }], reason? }` | `{ task_id }` → result `{ created, updated, failed: [{ index, code, message }] }` |
+| `crm_record_delete` | Soft-delete a record (restorable for the retention window). Links are ended per relation `on_delete`. Admin or approval. | `{ id, reason?, expected_version? }` | `{ deleted: true }` |
+| `crm_record_restore` | Restore a soft-deleted record and its links. | `{ id }` | `{ record }` |
+| `crm_record_at` | The record's attribute values as they were at a point in time, reconstructed from history. | `{ id, at: datetime }` | `{ record_at: { data, version_at, as_of } }` |
+| `crm_record_history` | Field-level change history for one record (who changed what, when, why). | `{ id, attributes?: [slug], cursor?, limit? }` | `{ changes: Change[], next_cursor }` |
+
+## 4. Link tools
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_link` | Relate two records through a relation type, optionally with link attributes (e.g. role, since). Cardinality is enforced: a `*_to_one` link replaces the existing one. | `{ relation_type, from_record_id, to_record_id, data?, label?, reason?, idempotency_key? }` | `{ link }` |
+| `crm_unlink` | End an active link (kept in history). | `{ link_id?, relation_type?, from_record_id?, to_record_id?, reason? }` | `{ unlinked: true }` |
+| `crm_links_list` | Active links of a record, optionally filtered by relation type and direction, with the related records' summaries. | `{ record_id, relation_type?, direction?: from\|to\|both, include_history?: boolean, cursor?, limit? }` | `{ links: [{ link, related: RecordSummary }], next_cursor }` |
+
+## 5. Lists, views
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_list_create` | Create a curated list of records (any object type, or mixed) with optional per-entry attributes — e.g. "Q4 target accounts" with a `priority` per entry. | `{ slug, name, description?, object_type?, attributes?: AttributeSpec[] }` | `ListDetail` |
+| `crm_list_add` | Add records to a list with optional entry data. | `{ list, entries: [{ record_id, data? }] }` | `{ added: n }` |
+| `crm_list_remove` | Remove records from a list. | `{ list, record_ids }` | `{ removed: n }` |
+| `crm_list_entries` | Entries of a list with their records. | `{ list, cursor?, limit? }` | `{ entries: [{ entry, record }], next_cursor }` |
+| `crm_view_save` | Save a reusable query (filter + sort + attributes) for an object type. | `{ slug, name, object_type, filter, sort?, attributes?, description? }` | `ViewDetail` |
+| `crm_view_run` | Run a saved view. | `{ view, cursor?, limit? }` | same as `crm_records_query` |
+
+## 6. Activities, timeline, tasks, pipeline
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_activity_log` | Log an interaction (email, call, meeting, message…) against one or more records. Idempotent on `external_ref`. Updates `last_activity_at` on linked records. | `{ kind, occurred_at, subject?, body?, direction?, participants?: Actor[], about: [record_id], external_ref?, reason? }` | `{ record }` (the activity record) |
+| `crm_note_add` | Attach a note to one or more records. | `{ title?, body, about: [record_id] }` | `{ record }` |
+| `crm_record_timeline` | Chronological activities and changes for a record; `hops: 1` also includes linked records (a company's people and deals). | `{ id, hops?: 0\|1, kinds?: [activity\|change\|note\|task], since?, cursor?, limit? }` | `{ items: TimelineItem[], next_cursor }` |
+| `crm_task_create` | Create a task linked to records, assigned to an agent or a human. | `{ title, body?, due_at?, assignee?: Actor, priority?, about?: [record_id] }` | `{ record }` |
+| `crm_task_update` | Update a task's status, assignee, due date. | `{ id, status?, assignee?, due_at?, priority?, title?, body? }` | `{ record }` |
+| `crm_tasks_list` | Tasks by status/assignee/due window. | `{ status?, assignee?: Actor, due_before?, due_after?, about?: record_id, cursor?, limit? }` | `{ records, next_cursor }` |
+| `crm_pipeline_summary` | Stage-by-stage counts, amounts and average time-in-stage for any object type with a `status` attribute (e.g. deals). Derived from history. | `{ object_type, status_attribute?: slug, amount_attribute?: slug, filter?, since? }` | `{ stages: [{ id, label, category, count, amount_sum?, avg_days_in_stage }] , conversions: [{ from, to, count }] }` |
+
+## 7. Search, quality, merge
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_search` | Free-text search across records: `keyword` (exact words), `semantic` (meaning), or `hybrid` (default). Restrict to object types. | `{ query, object_types?, mode?, limit? }` | `{ hits: [{ record: RecordSummary, score, match: keyword\|semantic\|both }] }` |
+| `crm_find_duplicates` | Scan an object type for likely duplicates using matching rules and semantic similarity. Background Task; returns candidate groups with evidence. Never merges. | `{ object_type, filter?, include_semantic?: boolean }` | `{ task_id }` → `{ groups: [{ records: [RecordSummary], evidence }] }` |
+| `crm_merge_records` | Merge duplicates into a survivor: per-attribute survivor values (override with `field_choices`), union of multi-values, links and list entries re-pointed, losers become redirects. Reversible with `crm_unmerge` within retention. Approval-gated by default. | `{ survivor_id, merged_ids: [id], field_choices?: { slug: record_id }, reason }` | `{ record, merge_change_id, repointed_links: n }` |
+| `crm_unmerge` | Undo a merge from its snapshot. | `{ merge_change_id, reason }` | `{ restored: [id] }` |
+| `crm_data_quality` | Report: required attributes missing, stale records (no activity in N days), orphans (deals without company/contact), unique collisions predating a rule. Deterministic; the agent decides what to fix. | `{ object_type?, stale_days?: number }` | `{ missing_required, stale, orphans, collisions }` each `[{ record: RecordSummary, detail }]` with counts |
+
+## 8. IO, change feed, webhooks
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_export` | Export an object type or view to JSONL/CSV as a Task; result carries a signed download URL valid for 1 h. Approval-gated by default. | `{ object_type?, view?, format: jsonl\|csv, attributes? }` | `{ task_id }` → `{ url, rows, expires_at }` |
+| `crm_changes_since` | Global change feed for the workspace since a cursor: every create/set/unset/link/unlink/delete/merge with actor and provenance. Use on schedules to react to what changed. | `{ cursor?: string, object_types?, kinds?, limit? }` | `{ changes: Change[], next_cursor, has_more }` |
+| `crm_webhook_set` | Register (or update) an HMAC-signed webhook URL that receives coalesced change batches. Admin only. | `{ url, events: [record.*\|link.*\|schema.*], active? }` | `{ webhook: { id, url, events, active }, secret: string (shown once) }` |
+| `crm_webhook_list` | List webhooks (secrets never returned). | `{}` | `{ webhooks }` |
+| `crm_webhook_delete` | Delete a webhook. | `{ id }` | `{ deleted: true }` |
+
+Webhook payload: `POST url` with `X-DeepCRM-Signature: sha256=<hmac>` over the body, `X-DeepCRM-Delivery: <id>`, body `{ team: uoaTeamId, since_seq, until_seq, changes: Change[] }`, coalesced per 30 s window, retried with backoff (1 m, 5 m, 30 m, 2 h, 12 h) then parked with `last_error`.
+
+## 9. Prompts
+
+| Name | Arguments | Purpose |
+|---|---|---|
+| `crm/qualify-lead` | `record_id` | Steps: fetch record + timeline + company, check required attributes, propose stage move, log activity. |
+| `crm/prepare-account-review` | `company_record_id` | Gather people, open deals, last 90 days of activity, data-quality issues; produce a review. |
+| `crm/clean-duplicates` | `object_type` | Run `crm_find_duplicates`, review groups with evidence, merge only with human confirmation. |
+
+Prompts are text scaffolds referencing tool names; they contain no logic.
+
+## 10. Tool count and grouping
+
+47 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (10), `crm_link*` (3), `crm_list_*`/`crm_view_*` (6), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters so a client's find/load meta-tools work.
+
+exec
+/bin/zsh -lc 'cat docs/spec/contracts.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Contracts — shared types and every tool's input/output (zod)
+
+Normative. `packages/schemas/src/*` is a verbatim copy of the code blocks below, split by the file names in the headings. Tool registrations in `api/src/mcp/tools/*` import these and nothing else for argument shapes. `docs/mcp-surface.md` is the prose; this file is the types.
+
+Conventions: import lines are shown only in the first block — every other file imports `z` and its sibling modules as used. Every field has `.describe()` (the text agents see). Outputs are **not** validated at runtime (types only) except where noted. `z` is `zod@3.25`.
+
+## `primitives.ts`
+
+```ts
+import { z } from 'zod'
+
+export const Uuid = z.string().uuid().describe('UUID')
+export const Slug = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/)
+  .describe('snake_case identifier, 2–63 chars, starts with a letter')
+export const IsoDateTime = z.string().datetime({ offset: true }).describe('ISO 8601 timestamp')
+export const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('YYYY-MM-DD')
+export const Limit = z.number().int().min(1).max(200).default(50).describe('page size, 1–200')
+export const Cursor = z.string().min(1).optional().describe('opaque cursor from a previous page')
+export const Reason = z.string().max(500).optional()
+  .describe('why this change is being made; stored on the change history')
+export const IdempotencyKey = z.string().min(8).max(128).optional()
+  .describe('replay-safe key: same key + same arguments within 24h returns the original result')
+export const ExpectedVersion = z.number().int().positive().optional()
+  .describe('fail with VERSION_CONFLICT if the record version differs (optimistic concurrency)')
+
+export const ActorType = z.enum(['human', 'agent', 'system'])
+export const Actor = z.object({
+  type: z.enum(['human', 'agent']).describe('human = UOA user, agent = Nessie agent'),
+  id: z.string().min(1).describe('UOA user id or agent id'),
+})
+export type Actor = z.infer<typeof Actor>
+```
+
+## `attribute-values.ts` — value shapes per attribute type
+
+```ts
+export const CurrencyValue = z.object({
+  amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/).describe('decimal as string, up to 4 dp'),
+  currency: z.string().length(3).toUpperCase().describe('ISO 4217'),
+})
+export const LocationValue = z.object({
+  line1: z.string().max(200).optional(), line2: z.string().max(200).optional(),
+  city: z.string().max(120).optional(), region: z.string().max(120).optional(),
+  postal: z.string().max(32).optional(),
+  country: z.string().length(2).toUpperCase().optional().describe('ISO 3166-1 alpha-2'),
+  lat: z.number().min(-90).max(90).optional(), lng: z.number().min(-180).max(180).optional(),
+})
+export const PersonalNameValue = z.object({
+  first: z.string().max(120).optional(), last: z.string().max(120).optional(),
+  full: z.string().max(250).optional().describe('derived from first+last when absent'),
+}).refine(v => v.full || v.first || v.last, 'at least one of first, last, full')
+export const SelectOption = z.object({
+  id: Slug, label: z.string().min(1).max(120), color: z.string().max(32).optional(),
+})
+export const StatusOption = SelectOption.extend({
+  category: z.enum(['open', 'won', 'lost', 'neutral']).describe('pipeline semantics of this stage'),
+  position: z.number().int().min(0),
+})
+```
+
+## `attribute-config.ts` — `attributes.config` per type
+
+```ts
+export const AttributeType = z.enum([
+  'text','rich_text','number','currency','percent','boolean','date','datetime','select','status',
+  'rating','email','phone','url','domain','location','personal_name','actor_reference',
+  'record_reference','timestamp_system','json',
+])
+export const AttributeConfig = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), maxLength: z.number().int().min(1).max(4000).default(4000) }),
+  z.object({ type: z.literal('rich_text') }),
+  z.object({ type: z.literal('number'), precision: z.number().int().min(0).max(10).optional(),
+             min: z.number().optional(), max: z.number().optional() }),
+  z.object({ type: z.literal('currency'), defaultCurrency: z.string().length(3).default('USD') }),
+  z.object({ type: z.literal('percent') }),
+  z.object({ type: z.literal('boolean') }),
+  z.object({ type: z.literal('date') }),
+  z.object({ type: z.literal('datetime') }),
+  z.object({ type: z.literal('select'), options: z.array(SelectOption).min(1).max(200) }),
+  z.object({ type: z.literal('status'), options: z.array(StatusOption).min(2).max(50) }),
+  z.object({ type: z.literal('rating'), max: z.number().int().min(1).max(10).default(5) }),
+  z.object({ type: z.literal('email') }),
+  z.object({ type: z.literal('phone'), defaultRegion: z.string().length(2).default('GB') }),
+  z.object({ type: z.literal('url') }),
+  z.object({ type: z.literal('domain') }),
+  z.object({ type: z.literal('location') }),
+  z.object({ type: z.literal('personal_name') }),
+  z.object({ type: z.literal('actor_reference'),
+             allow: z.array(z.enum(['human','agent'])).default(['human','agent']) }),
+  z.object({ type: z.literal('record_reference'),
+             objectTypes: z.array(Slug).min(1).describe('allowed target object types'),
+             relationTypeSlug: Slug.optional().describe('backing relation; generated when absent') }),
+  z.object({ type: z.literal('timestamp_system'),
+             source: z.enum(['created_at','updated_at','last_activity_at']) }),
+  z.object({ type: z.literal('json'), schema: z.record(z.unknown()).optional()
+             .describe('optional JSON Schema the value must satisfy') }),
+])
+```
+
+## `schema-specs.ts` — definitions and details
+
+```ts
+export const Sensitivity = z.enum(['public','internal','confidential','restricted'])
+export const Cardinality = z.enum(['one_to_one','one_to_many','many_to_one','many_to_many'])
+export const OnDelete = z.enum(['unlink','cascade','restrict'])
+
+export const AttributeSpec = z.object({
+  slug: Slug, name: z.string().min(1).max(120),
+  description: z.string().max(500).describe('shown to agents; say what the value means'),
+  type: AttributeType,
+  config: z.record(z.unknown()).optional().describe('type-specific config; see attribute-config.ts'),
+  is_multi: z.boolean().default(false).describe('accepts an array of values'),
+  is_required: z.boolean().default(false),
+  is_unique: z.boolean().default(false).describe('enforced; enables crm_record_assert on this attribute'),
+  is_indexed: z.boolean().default(false).describe('creates an index for filtering/sorting'),
+  sensitivity: Sensitivity.default('internal'),
+  default_value: z.unknown().optional(),
+})
+export type AttributeSpec = z.infer<typeof AttributeSpec>
+
+export const AttributeDetail = AttributeSpec.extend({
+  id: Uuid, is_system: z.boolean(), position: z.number().int(), archived_at: IsoDateTime.nullable(),
+})
+export const ObjectTypeDetail = z.object({
+  id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(),
+  icon: z.string().nullable(), kind: z.enum(['system','standard','custom']),
+  primary_attribute: Slug.nullable(), attributes: z.array(AttributeDetail),
+  relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(),
+    other_object_type: Slug.nullable(), cardinality: Cardinality })),
+  archived_at: IsoDateTime.nullable(),
+})
+export const RelationTypeDetail = z.object({
+  id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(),
+  forward_name: z.string(), inverse_name: z.string(), description: z.string(),
+  cardinality: Cardinality, on_delete: OnDelete, edge_attributes: z.array(AttributeDetail),
+  is_system: z.boolean(), archived_at: IsoDateTime.nullable(),
+})
+export const MatchingRule = z.object({
+  attributes: z.array(Slug).min(1).max(4),
+  method: z.enum(['exact','normalized','fuzzy']),
+  threshold: z.number().min(0.3).max(1).optional().describe('fuzzy only; trigram similarity'),
+  action: z.enum(['block','warn','allow']),
+})
+export const SchemaSnapshot = z.object({
+  schema_version: z.number().int(),
+  object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true,
+    plural_name: true, description: true, kind: true, primary_attribute: true })
+    .extend({ attribute_count: z.number().int() })),
+  relation_types: z.array(RelationTypeDetail),
+  matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'),
+})
+```
+
+## `records.ts` — record shapes
+
+```ts
+export const RecordData = z.record(Slug, z.unknown()).describe('attribute slug → value')
+
+export const RecordSummary = z.object({
+  id: Uuid, object_type: Slug, display_name: z.string(),
+})
+export const RecordOut = RecordSummary.extend({
+  version: z.number().int(), data: RecordData,
+  owner: Actor.nullable(),
+  created_at: IsoDateTime, updated_at: IsoDateTime, last_activity_at: IsoDateTime.nullable(),
+  redacted_attributes: z.array(Slug).describe('attributes hidden by policy'),
+  redirected_from: Uuid.optional().describe('present when the requested id was merged into this record'),
+})
+export type RecordOut = z.infer<typeof RecordOut>
+
+export const LinkInput = z.object({
+  relation_type: Slug, to_record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional().describe('edge attribute values'),
+  label: z.string().max(120).optional(),
+})
+export const LinkOut = z.object({
+  id: Uuid, relation_type: Slug, from_record_id: Uuid, to_record_id: Uuid,
+  label: z.string().nullable(), data: z.record(z.unknown()),
+  active_from: IsoDateTime, active_until: IsoDateTime.nullable(),
+})
+export const Candidate = z.object({
+  record: RecordSummary, rule_position: z.number().int().nullable(),
+  evidence: z.array(z.object({ kind: z.enum(['unique','exact','normalized','fuzzy','semantic']),
+    attribute: Slug.nullable(), value: z.unknown(), score: z.number().optional() })),
+})
+export const Change = z.object({
+  id: Uuid, seq: z.string().describe('monotonic cursor value'),
+  record: RecordSummary,
+  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge']),
+  attribute: Slug.nullable(), relation_type: Slug.nullable(), link_id: Uuid.nullable(),
+  old_value: z.unknown().optional(), new_value: z.unknown().optional(),
+  actor: z.object({ type: ActorType, id: z.string() }), on_behalf_of: z.string().nullable(),
+  provenance: z.object({ run_id: z.string().nullable(), tool_call_id: z.string().nullable(),
+    request_id: z.string() }),
+  reason: z.string().nullable(), occurred_at: IsoDateTime,
+})
+export const TimelineItem = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('activity'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('note'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('task'), record: RecordOut, about: z.array(RecordSummary),
+    occurred_at: IsoDateTime }),
+  z.object({ kind: z.literal('change'), change: Change, occurred_at: IsoDateTime }),
+])
+```
+
+## `filter.ts` — query grammar
+
+```ts
+export const FilterOp = z.enum(['eq','neq','in','not_in','is_null','is_not_null','contains',
+  'starts_with','gt','gte','lt','lte','between'])
+export const SystemField = z.enum(['created_at','updated_at','last_activity_at','display_name','owner'])
+
+export type Filter =
+  | { and: Filter[] } | { or: Filter[] } | { not: Filter }
+  | { attribute: string; op: z.infer<typeof FilterOp>; value?: unknown }
+  | { system: z.infer<typeof SystemField>; op: z.infer<typeof FilterOp>; value?: unknown }
+  | { linked_to: { relation: string; record_id: string; direction?: 'from' | 'to' } }
+  | { text: string }
+
+export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
+  z.object({ and: z.array(Filter).min(1) }),
+  z.object({ or: z.array(Filter).min(1) }),
+  z.object({ not: Filter }),
+  z.object({ attribute: Slug, op: FilterOp, value: z.unknown().optional() }),
+  z.object({ system: SystemField, op: FilterOp, value: z.unknown().optional() }),
+  z.object({ linked_to: z.object({ relation: Slug, record_id: Uuid,
+    direction: z.enum(['from','to']).default('from') }) }),
+  z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }),
+])).describe('see docs/schema-engine.md §5')
+
+export const Sort = z.array(z.object({
+  attribute: Slug.optional(), system: SystemField.optional(),
+  direction: z.enum(['asc','desc']).default('asc'),
+}).refine(s => !!s.attribute !== !!s.system, 'exactly one of attribute or system')).max(3)
+```
+
+Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
+
+| ops | types |
+|---|---|
+| `eq neq in not_in is_null is_not_null` | all |
+| `contains starts_with` | text, email, url, domain, personal_name, select (multi), rich_text (contains only) |
+| `gt gte lt lte between` | number, currency (compares `amount`), percent, rating, date, datetime, timestamp_system, system timestamps |
+
+## `tools.ts` — every tool's input and output
+
+```ts
+// ── schema ───────────────────────────────────────────────────────────────────
+export const CrmSchemaGet = { in: z.object({ object_type: Slug.optional() }),
+  out: z.union([SchemaSnapshot, ObjectTypeDetail]) }
+export const CrmObjectTypeDefine = { in: z.object({
+  slug: Slug, singular_name: z.string().min(1).max(80), plural_name: z.string().min(1).max(80),
+  description: z.string().min(1).max(500).describe('what a record of this type represents'),
+  icon: z.string().max(64).optional(), attributes: z.array(AttributeSpec).max(100).optional(),
+  primary_attribute: Slug.optional().describe('attribute used as display name') }),
+  out: ObjectTypeDetail }
+export const CrmObjectTypeUpdate = { in: z.object({ object_type: Slug,
+  singular_name: z.string().min(1).max(80).optional(), plural_name: z.string().min(1).max(80).optional(),
+  description: z.string().max(500).optional(), icon: z.string().max(64).optional(),
+  primary_attribute: Slug.optional() }), out: ObjectTypeDetail }
+export const CrmObjectTypeArchive = { in: z.object({ object_type: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), records: z.number().int() }) }
+export const CrmAttributeDefine = { in: AttributeSpec.extend({ object_type: Slug }), out: AttributeDetail }
+export const CrmAttributeUpdate = { in: z.object({ object_type: Slug, attribute: Slug,
+  name: z.string().min(1).max(120).optional(), description: z.string().max(500).optional(),
+  config: z.record(z.unknown()).optional(), is_required: z.boolean().optional(),
+  is_unique: z.boolean().optional(), is_indexed: z.boolean().optional(),
+  sensitivity: Sensitivity.optional(), default_value: z.unknown().optional() }), out: AttributeDetail }
+export const CrmAttributeArchive = { in: z.object({ object_type: Slug, attribute: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), records_with_values: z.number().int() }) }
+export const CrmRelationTypeDefine = { in: z.object({ slug: Slug,
+  from_object_type: Slug.nullable().describe('null = any object type'),
+  to_object_type: Slug.nullable().describe('null = any object type'),
+  forward_name: z.string().min(1).max(80).describe('e.g. "works at"'),
+  inverse_name: z.string().min(1).max(80).describe('e.g. "employs"'),
+  description: z.string().max(500).optional(), cardinality: Cardinality,
+  on_delete: OnDelete.default('unlink'), edge_attributes: z.array(AttributeSpec).max(20).optional() }),
+  out: RelationTypeDetail }
+export const CrmRelationTypeArchive = { in: z.object({ relation_type: Slug, reason: Reason }),
+  out: z.object({ archived: z.literal(true), links: z.number().int() }) }
+export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug, rules: z.array(MatchingRule).max(10) }),
+  out: z.object({ rules: z.array(MatchingRule) }) }
+export const CrmTemplateApply = { in: z.object({ template: z.enum(['standard_crm','saas','agency']) }),
+  out: z.object({ added: z.object({ object_types: z.array(Slug), attributes: z.array(z.string()),
+    relation_types: z.array(Slug) }) }) }
+
+// ── records ──────────────────────────────────────────────────────────────────
+const WriteCommon = { reason: Reason, idempotency_key: IdempotencyKey }
+export const CrmRecordCreate = { in: z.object({ object_type: Slug, data: RecordData,
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
+  out: z.object({ record: RecordOut, duplicates: z.array(Candidate).optional() }) }
+export const CrmRecordUpdate = { in: z.object({ id: Uuid, data: RecordData.describe('null clears a value'),
+  owner: Actor.nullable().optional(), expected_version: ExpectedVersion, ...WriteCommon }),
+  out: z.object({ record: RecordOut }) }
+export const CrmRecordAssert = { in: z.object({ object_type: Slug,
+  match_attribute: Slug.describe('a unique attribute present in data'), data: RecordData,
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
+  out: z.object({ record: RecordOut, created: z.boolean() }) }
+export const CrmRecordGet = { in: z.object({ id: Uuid.optional(), object_type: Slug.optional(),
+  match_attribute: Slug.optional(), value: z.unknown().optional(),
+  include_links: z.boolean().default(false), include_timeline: z.number().int().min(0).max(50).default(0)
+    .describe('number of recent timeline items to include') })
+  .refine(a => a.id || (a.object_type && a.match_attribute && a.value !== undefined),
+    'id, or object_type + match_attribute + value'),
+  out: z.object({ record: RecordOut, links: z.record(Slug, z.array(z.object({ link: LinkOut,
+    related: RecordSummary }))).optional(), timeline: z.array(TimelineItem).optional() }) }
+export const CrmRecordsQuery = { in: z.object({ object_type: Slug, filter: Filter.optional(),
+  sort: Sort.optional(), attributes: z.array(Slug).max(50).optional().describe('project only these'),
+  include_total: z.boolean().default(false), cursor: Cursor, limit: Limit }),
+  out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(),
+    total: z.number().int().optional() }) }
+export const CrmRecordsBulkAssert = { in: z.object({ object_type: Slug, match_attribute: Slug,
+  rows: z.array(z.object({ data: RecordData, links: z.array(LinkInput).max(20).optional() })).min(1),
+  reason: Reason }), out: z.object({ task_id: z.string() }) }
+export const BulkAssertResult = z.object({ created: z.number().int(), updated: z.number().int(),
+  failed: z.array(z.object({ index: z.number().int(), code: z.string(), message: z.string() })) })
+export const CrmRecordDelete = { in: z.object({ id: Uuid, expected_version: ExpectedVersion, reason: Reason }),
+  out: z.object({ deleted: z.literal(true) }) }
+export const CrmRecordRestore = { in: z.object({ id: Uuid }), out: z.object({ record: RecordOut }) }
+export const CrmRecordAt = { in: z.object({ id: Uuid, at: IsoDateTime }),
+  out: z.object({ record_at: z.object({ data: RecordData, version_at: z.number().int(), as_of: IsoDateTime }) }) }
+export const CrmRecordHistory = { in: z.object({ id: Uuid, attributes: z.array(Slug).optional(),
+  cursor: Cursor, limit: Limit }), out: z.object({ changes: z.array(Change), next_cursor: z.string().nullable() }) }
+
+// ── links ────────────────────────────────────────────────────────────────────
+export const CrmLink = { in: z.object({ relation_type: Slug, from_record_id: Uuid, to_record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional(), label: z.string().max(120).optional(), ...WriteCommon }),
+  out: z.object({ link: LinkOut }) }
+export const CrmUnlink = { in: z.object({ link_id: Uuid.optional(), relation_type: Slug.optional(),
+  from_record_id: Uuid.optional(), to_record_id: Uuid.optional(), reason: Reason })
+  .refine(a => a.link_id || (a.relation_type && a.from_record_id && a.to_record_id), 'link_id or triple'),
+  out: z.object({ unlinked: z.literal(true) }) }
+export const CrmLinksList = { in: z.object({ record_id: Uuid, relation_type: Slug.optional(),
+  direction: z.enum(['from','to','both']).default('both'), include_history: z.boolean().default(false),
+  cursor: Cursor, limit: Limit }),
+  out: z.object({ links: z.array(z.object({ link: LinkOut, related: RecordSummary })),
+    next_cursor: z.string().nullable() }) }
+
+// ── lists & views ────────────────────────────────────────────────────────────
+export const ListDetail = z.object({ id: Uuid, slug: Slug, name: z.string(), description: z.string(),
+  object_type: Slug.nullable(), attributes: z.array(AttributeDetail), entry_count: z.number().int() })
+export const CrmListCreate = { in: z.object({ slug: Slug, name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(), object_type: Slug.optional(),
+  attributes: z.array(AttributeSpec).max(20).optional() }), out: ListDetail }
+export const CrmListAdd = { in: z.object({ list: Slug, entries: z.array(z.object({ record_id: Uuid,
+  data: z.record(Slug, z.unknown()).optional() })).min(1).max(500) }), out: z.object({ added: z.number().int() }) }
+export const CrmListRemove = { in: z.object({ list: Slug, record_ids: z.array(Uuid).min(1).max(500) }),
+  out: z.object({ removed: z.number().int() }) }
+export const CrmListEntries = { in: z.object({ list: Slug, cursor: Cursor, limit: Limit }),
+  out: z.object({ entries: z.array(z.object({ entry: z.object({ id: Uuid, data: z.record(z.unknown()),
+    position: z.number().int() }), record: RecordOut })), next_cursor: z.string().nullable() }) }
+export const ViewDetail = z.object({ id: Uuid, slug: Slug, name: z.string(), description: z.string(),
+  object_type: Slug, filter: Filter, sort: Sort, attributes: z.array(Slug) })
+export const CrmViewSave = { in: z.object({ slug: Slug, name: z.string().min(1).max(120), object_type: Slug,
+  filter: Filter, sort: Sort.optional(), attributes: z.array(Slug).optional(),
+  description: z.string().max(500).optional() }), out: ViewDetail }
+export const CrmViewRun = { in: z.object({ view: Slug, cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+
+// ── activity, tasks, pipeline ────────────────────────────────────────────────
+export const ActivityKind = z.enum(['email','call','meeting','note','message','task_event','custom'])
+export const CrmActivityLog = { in: z.object({ kind: ActivityKind, occurred_at: IsoDateTime,
+  subject: z.string().max(300).optional(), body: z.string().max(100_000).optional(),
+  direction: z.enum(['inbound','outbound','internal']).optional(),
+  participants: z.array(Actor).max(50).optional(), about: z.array(Uuid).min(1).max(20),
+  external_ref: z.string().max(300).optional().describe('source id; re-logging the same ref updates'),
+  reason: Reason }), out: z.object({ record: RecordOut }) }
+export const CrmNoteAdd = { in: z.object({ title: z.string().max(300).optional(),
+  body: z.string().min(1).max(100_000), about: z.array(Uuid).min(1).max(20) }),
+  out: z.object({ record: RecordOut }) }
+export const CrmRecordTimeline = { in: z.object({ id: Uuid, hops: z.union([z.literal(0), z.literal(1)]).default(0)
+  .describe('1 = include linked records\' items'), kinds: z.array(z.enum(['activity','change','note','task'])).optional(),
+  since: IsoDateTime.optional(), cursor: Cursor, limit: Limit }),
+  out: z.object({ items: z.array(TimelineItem), next_cursor: z.string().nullable() }) }
+export const TaskStatus = z.enum(['open','in_progress','done','cancelled'])
+export const TaskPriority = z.enum(['low','normal','high','urgent'])
+export const CrmTaskCreate = { in: z.object({ title: z.string().min(1).max(300), body: z.string().max(20_000).optional(),
+  due_at: IsoDateTime.optional(), assignee: Actor.optional(), priority: TaskPriority.default('normal'),
+  about: z.array(Uuid).max(20).optional() }), out: z.object({ record: RecordOut }) }
+export const CrmTaskUpdate = { in: z.object({ id: Uuid, status: TaskStatus.optional(), assignee: Actor.nullable().optional(),
+  due_at: IsoDateTime.nullable().optional(), priority: TaskPriority.optional(),
+  title: z.string().min(1).max(300).optional(), body: z.string().max(20_000).optional() }),
+  out: z.object({ record: RecordOut }) }
+export const CrmTasksList = { in: z.object({ status: TaskStatus.optional(), assignee: Actor.optional(),
+  due_before: IsoDateTime.optional(), due_after: IsoDateTime.optional(), about: Uuid.optional(),
+  cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+export const CrmPipelineSummary = { in: z.object({ object_type: Slug,
+  status_attribute: Slug.optional().describe('defaults to the only status attribute'),
+  amount_attribute: Slug.optional(), filter: Filter.optional(), since: IsoDateTime.optional() }),
+  out: z.object({ stages: z.array(z.object({ id: Slug, label: z.string(), category: StatusOption.shape.category,
+    count: z.number().int(), amount_sum: CurrencyValue.nullable(), avg_days_in_stage: z.number().nullable() })),
+    conversions: z.array(z.object({ from: Slug, to: Slug, count: z.number().int() })) }) }
+
+// ── search, quality, merge ───────────────────────────────────────────────────
+export const CrmSearch = { in: z.object({ query: z.string().min(1).max(500), object_types: z.array(Slug).optional(),
+  mode: z.enum(['keyword','semantic','hybrid']).default('hybrid'), limit: z.number().int().min(1).max(50).default(10) }),
+  out: z.object({ hits: z.array(z.object({ record: RecordSummary, score: z.number(),
+    match: z.enum(['keyword','semantic','both']) })) }) }
+export const CrmFindDuplicates = { in: z.object({ object_type: Slug, filter: Filter.optional(),
+  include_semantic: z.boolean().default(true) }), out: z.object({ task_id: z.string() }) }
+export const FindDuplicatesResult = z.object({ groups: z.array(z.object({ records: z.array(RecordSummary),
+  evidence: z.array(Candidate.shape.evidence.element) })) })
+export const CrmMergeRecords = { in: z.object({ survivor_id: Uuid, merged_ids: z.array(Uuid).min(1).max(10),
+  field_choices: z.record(Slug, Uuid).optional().describe('attribute → record whose value wins'),
+  reason: z.string().min(1).max(500) }),
+  out: z.object({ record: RecordOut, merge_change_id: Uuid, repointed_links: z.number().int() }) }
+export const CrmUnmerge = { in: z.object({ merge_change_id: Uuid, reason: z.string().min(1).max(500) }),
+  out: z.object({ restored: z.array(Uuid) }) }
+const QualityBucket = z.object({ count: z.number().int(),
+  items: z.array(z.object({ record: RecordSummary, detail: z.string() })).max(100) })
+export const CrmDataQuality = { in: z.object({ object_type: Slug.optional(),
+  stale_days: z.number().int().min(1).max(3650).default(90) }),
+  out: z.object({ missing_required: QualityBucket, stale: QualityBucket, orphans: QualityBucket, collisions: QualityBucket }) }
+
+// ── io, feed, webhooks ───────────────────────────────────────────────────────
+export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),
+  format: z.enum(['jsonl','csv']), attributes: z.array(Slug).optional() })
+  .refine(a => !!a.object_type !== !!a.view, 'object_type or view'), out: z.object({ task_id: z.string() }) }
+export const ExportResult = z.object({ url: z.string().url(), rows: z.number().int(), expires_at: IsoDateTime })
+export const CrmChangesSince = { in: z.object({ cursor: Cursor.describe('omit for the oldest retained change'),
+  object_types: z.array(Slug).optional(), kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
+  out: z.object({ changes: z.array(Change), next_cursor: z.string(), has_more: z.boolean() }) }
+export const WebhookEvent = z.enum(['record.created','record.updated','record.deleted','record.merged',
+  'link.created','link.ended','schema.changed'])
+export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host'),
+  events: z.array(WebhookEvent).min(1), active: z.boolean().default(true) }),
+  out: z.object({ webhook: z.object({ id: Uuid, url: z.string(), events: z.array(WebhookEvent), active: z.boolean() }),
+    secret: z.string().optional().describe('shown once on creation') }) }
+export const CrmWebhookList = { in: z.object({}), out: z.object({ webhooks: z.array(CrmWebhookSet.out.shape.webhook) }) }
+export const CrmWebhookDelete = { in: z.object({ id: Uuid }), out: z.object({ deleted: z.literal(true) }) }
+```
+
+## `errors.ts`
+
+```ts
+export const ErrorCode = z.enum(['POLICY_DENIED','APPROVAL_REQUIRED','UNKNOWN_OBJECT_TYPE','UNKNOWN_ATTRIBUTE',
+  'ATTRIBUTE_ARCHIVED','ATTRIBUTE_READ_ONLY','VALIDATION_FAILED','VERSION_CONFLICT','DUPLICATE_FOUND','NOT_FOUND',
+  'MERGED','CARDINALITY_VIOLATION','DELETE_RESTRICTED','SCHEMA_CONFLICT','IDEMPOTENCY_MISMATCH','LIMIT_EXCEEDED','INTERNAL'])
+export const ErrorPayload = z.object({
+  code: ErrorCode, message: z.string(),
+  issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),   // VALIDATION_FAILED
+  current: z.number().int().optional(),                                              // VERSION_CONFLICT
+  attribute: Slug.optional(), record_id: Uuid.optional(), candidates: z.array(Candidate).optional(), // DUPLICATE_FOUND
+  redirect_to: Uuid.optional(),                                                      // MERGED
+  resource: z.string().optional(), action: z.string().optional(),                    // POLICY_DENIED
+  detail: z.string().optional(),
+})
+```
+
+## MRTR shapes (`mrtr.ts`)
+
+```ts
+export const InputRequest = z.discriminatedUnion('kind', [
+  z.object({ id: z.string(), kind: z.literal('confirmation'), message: z.string(),
+    schema: z.object({ type: z.literal('object'), properties: z.object({ confirmed: z.object({ type: z.literal('boolean') }) }),
+      required: z.tuple([z.literal('confirmed')]) }) }),
+  z.object({ id: z.literal('approval'), kind: z.literal('approval'), message: z.string(), approval_token: z.string(),
+    expires_at: IsoDateTime, required_role: z.enum(['admin','owner']) }),
+])
+export const InputResponses = z.object({
+  confirm: z.object({ confirmed: z.boolean() }).optional(),
+  approval: z.object({ approval_token: z.string(), approved: z.boolean(), note: z.string().max(500).optional() }).optional(),
+})
+```
+
+exec
+/bin/zsh -lc "cat docs/spec/protocol-flows.md; sed -n '/"'^## 6'"\\|"'^# .*6'"\\./,"'$p'"' docs/brief.md | head -120; grep -n \""'^#" docs/brief.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+# Protocol flows
+
+Wire-level sequences for the interactions that define the product. JSON-RPC bodies are abbreviated to the parts that matter; every `tools/call` carries MCP 2026-07-28 `_meta` (`io.modelcontextprotocol/protocolVersion`, `clientCapabilities`) and the HTTP headers `Mcp-Method: tools/call`, `Mcp-Name: <tool>`.
+
+## F1 — Authenticated call
+
+```
+Nessie worker ──POST /mcp──────────────────────────────────────────────▶ deepcrm-api
+  Authorization: Bearer dck_…            (app key, SHA-256 matched to DEEPCRM_APP_KEYS)
+  X-UOA-Delegation: eyJ…                 (RS256; sub/org/team/tv/scope)
+  X-Nessie-Context: eyJ…                 (RS256; agentId/runId/toolCallId/requestId; ttl ≤ 300s)
+  { "jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"crm_record_get","arguments":{"id":"…"}} }
+
+deepcrm-api: authenticate → Principal
+             resolveTenant(org, team) → (organization_id, team_id)   [upsert 1:1 mirrors]
+             buildActorContext → actor = agent:<agentId>, onBehalfOf = sub
+             buildMcpServer(ctx) → transport.handleRequest
+             tool → service(ctx, args) → policy → engine → redact
+◀── 200 { "result": { "content":[{"type":"text","text":"Anna Novak (person)"}],
+                      "structuredContent": { "record": { … } } } }
+```
+Failure: any header invalid ⇒ `401` + `WWW-Authenticate: Bearer resource_metadata="https://api.deepcrm.live/.well-known/oauth-protected-resource"`; no JSON-RPC body.
+
+## F2 — Session start (schema discovery)
+
+```
+tools/list            ← _meta cache { ttlMs: 300000, cacheScope: "tenant" }, etag = schema_version
+resources/read crm://schema   → SchemaSnapshot (object types, relations, rules)
+resources/read crm://schema/deal → ObjectTypeDetail (attributes with descriptions)
+```
+The agent caches both by `schema_version`; a `schema.changed` event or a `SCHEMA_CONFLICT`/`UNKNOWN_ATTRIBUTE` error is the cue to re-read.
+
+## F3 — Create with duplicate detection
+
+```
+tools/call crm_record_create { object_type:"company", data:{ name:"Asahi Europe", domains:["asahi.eu"] } }
+
+case A  no match          → { record, version:1 }                       + record.created event
+case B  warn rule (fuzzy name 0.6 vs "Asahi Europe Ltd")
+                          → { record, duplicates:[{ record:{id,…}, rule_position:1,
+                                evidence:[{kind:"fuzzy",attribute:"name",score:0.71}] }] }
+case C  unique domain collision / block rule
+                          → isError { code:"DUPLICATE_FOUND", attribute:"domains", record_id:"…",
+                                candidates:[…] }
+```
+Agent's follow-ups for C: `crm_record_assert` (update the existing), or `crm_merge_records` if two already exist.
+
+## F4 — Sync-safe upsert (assert)
+
+```
+crm_record_assert { object_type:"person", match_attribute:"emails",
+                    data:{ emails:["anna@asahi.eu"], name:{full:"Anna Novak"}, company:"<companyId>" },
+                    idempotency_key:"gmail:msg:18f2…" }
+→ { record, created:true }            first time
+→ { record, created:false }           later sync, same email: patch applied, version+1 (no-op patch ⇒ no change rows)
+→ same idempotency_key + same args    → identical stored result, no write
+→ same key + different args           → isError IDEMPOTENCY_MISMATCH
+```
+
+## F5 — Confirmation (MRTR) on a destructive schema change
+
+```
+crm_attribute_archive { object_type:"person", attribute:"fax" }
+← { "resultType":"input_required",
+    "inputRequests":[{ "id":"confirm","kind":"confirmation",
+       "message":"Archiving 'fax' hides 12 existing values (kept in history). Proceed?",
+       "schema":{…confirmed:boolean…} }] }
+
+crm_attribute_archive { object_type:"person", attribute:"fax" }  + inputResponses:{ confirm:{ confirmed:true } }
+← { archived:true, records_with_values:12 }                      + schema.changed event
+```
+
+## F6 — Approval (MRTR + human in Nessie)
+
+```
+agent (member) → crm_merge_records { survivor_id:A, merged_ids:[B], reason:"same person, two emails" }
+← input_required [{ id:"approval", kind:"approval", approval_token:"apr_…", expires_at:+24h,
+     required_role:"admin", message:"Merge 'Anna Novak' (B) into 'Anna Nováková' (A)?" }]
+     (server: approval_requests row pending, arguments_hash stored)
+
+agent → posts the question in the Nessie channel; an admin replies "yes"
+agent (same run or later, principal now carries the admin's delegation) →
+  crm_merge_records { …identical args… } + inputResponses:{ approval:{ approval_token:"apr_…", approved:true } }
+← { record:A, merge_change_id:"…", repointed_links:3 }           approval row → consumed; audit: approval.consumed
+
+rejections: approved:false ⇒ row rejected, tool returns isError POLICY_DENIED { detail:"approval rejected" }
+            different args  ⇒ APPROVAL_REQUIRED { detail:"arguments changed since approval" }
+            member re-issues ⇒ APPROVAL_REQUIRED { detail:"approver must be admin or owner" }
+```
+
+## F7 — Long-running work (Tasks extension)
+
+```
+crm_records_bulk_assert { object_type:"person", match_attribute:"emails", rows:[…2,000…] }
+← { task_id:"job_…" }
+tasks/get { taskId:"job_…" }  → { status:"working", progress:{ done:600, total:2000 } }
+tasks/get                     → { status:"completed", result:{ created:1800, updated:190, failed:[{index:77,code:"VALIDATION_FAILED",message:"emails[0]: invalid"}] } }
+tasks/cancel                  → only while queued; running jobs finish their current batch then stop, status "cancelled"
+```
+
+## F8 — Reacting to changes (scheduled agent)
+
+```
+trigger fires (Nessie schedule, state.cursor = "1040")
+crm_changes_since { cursor:"1040", object_types:["deal"], kinds:["set"] }
+← { changes:[{ seq:"1041", kind:"set", attribute:"stage", old_value:"proposal", new_value:"negotiation", record:{…} }, …],
+    next_cursor:"1077", has_more:false }
+agent acts (e.g. crm_task_create "Draft contract" about the deal), stores next_cursor in trigger state
+```
+
+## F9 — Timeline read for a human question
+
+```
+"What's going on with Asahi?" →
+crm_record_get { object_type:"company", match_attribute:"domains", value:"asahi.eu", include_links:true }
+crm_record_timeline { id:<companyId>, hops:1, limit:30 }
+← items: [ activity(call, about:[Anna, deal]), change(deal.stage proposal→negotiation), task(open "Draft contract"), … ]
+```
+
+## F10 — Tenant provisioning (first call from a new team)
+
+```
+authenticate ok, team unknown →
+  INSERT organizations (external_org_id)  [if absent]
+  INSERT teams (external_team_id, schema_version 0)
+  seedDefaultPolicies(team)                         (docs/spec/policy-defaults.json)
+  applyTemplate(team, "system")                    (activity, note, task)
+  audit: tenant.provisioned
+→ the original tool call proceeds. `standard_crm` is NOT auto-applied; the agent calls crm_template_apply.
+```
+
+## F11 — Webhook delivery
+
+See `events.md` §3. Sequence: write commits → `enqueue change.deliver (visible +30 s)` → worker locks webhook → selects `seq > last_delivered_seq` → POST with signature → 2xx advances cursor → else backoff.
+1:# DeepCRM.live — Product & Architecture Brief
+11:## 1. Vision
+24:## 2. What makes a good CRM (and what we fold in)
+51:## 3. The protocol decision — MCP, "Matrix", or something newer?
+53:### 3.1 What "Matrix" actually is in the agent world
+59:### 3.2 The protocol landscape, honestly
+68:### 3.3 MCP itself just changed shape — and in our favour
+80:### 3.4 Decision
+89:### 3.5 Matrix as the connective fabric *between* products (not the CRM's interface)
+103:## 4. Architecture — the Nessie pattern, headless
+105:### 4.1 What Nessie's backend is
+109:### 4.2 Topology
+133:### 4.3 Reused from Nessie verbatim (the house pattern)
+153:### 4.4 What differs for a headless MCP CRM
+164:## 5. The composable data-type engine (centrepiece)
+166:### 5.1 Design goals
+173:### 5.2 Storage model — *Decision*
+187:### 5.3 Metadata model
+221:### 5.4 Write path (the invariant list)
+236:### 5.5 Pipelines, activities, timeline — generic over the schema
+243:### 5.6 Seeded templates (the "standard" CRM, expressed in the engine)
+255:### 5.7 Search
+261:### 5.8 Dedup & merge
+267:### 5.9 Permissions
+280:## 6. The MCP tool surface
+286:### 6.1 Schema (discovery and definition)
+297:### 6.2 Records, links, lists
+306:### 6.3 Pipelines, activities, tasks
+315:### 6.4 Search, quality, dedup
+322:### 6.5 Change feed
+327:### 6.6 Prompts and resources
+332:### 6.7 Tool-list size
+338:## 7. Cross-cutting
+349:## 8. Phasing (proposal)
+358:## 9. Open questions for you
+376:## 10. Sources
+
+exec
+/bin/zsh -lc "sed -n '280,340p' docs/brief.md; echo ---; cat docs/spec/templates/system.json; echo ---; head -100 docs/spec/templates/standard_crm.json" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+## 6. The MCP tool surface
+
+> The normative, exhaustive list (47 tools, exact names, inputs, outputs, MRTR and Task behaviour) is [mcp-surface.md](mcp-surface.md); this section is the design overview.
+
+Design rules: few, generic, well-described tools over the schema (not one tool per object type — the tool list must stay stable and cacheable as the schema grows); every mutating tool takes `reason?` and `idempotency_key?`; every tool that takes an id ships with the read that finds it (nessie's rule); errors are typed and actionable (`duplicate_found{candidates}`, `version_conflict{current}`, `policy_denied{resource, action}`, `input_required` via MRTR).
+
+### 6.1 Schema (discovery and definition)
+
+- `crm_schema_get(object_type?)` — the full data model or one type: attributes with types/config/sensitivity, relation types, matching rules, views, `schema_version`. Also exposed as resource `crm://schema` and `crm://schema/{object_type}` with `ttlMs`.
+- `crm_object_type_define({slug, singular_name, plural_name, description, attributes[], primary_attribute})` / `crm_object_type_update` / `crm_object_type_archive`.
+- `crm_attribute_define({object_type, slug, name, description, type, config, is_multi, is_required, is_unique, is_indexed, sensitivity})` / `crm_attribute_update` / `crm_attribute_archive`.
+- `crm_relation_type_define({slug, from, to, forward_name, inverse_name, cardinality, on_delete, edge_attributes?})` / `crm_relation_type_archive`.
+- `crm_matching_rule_set({object_type, rules[]})`.
+- `crm_template_apply({template: 'standard_crm' | 'saas' | 'agency' | …})` — idempotent seeding.
+
+Schema mutations that lose data (archive with values, cardinality tightening, unique on a column with existing collisions) return MRTR `input_required` with the impact ("12 records have multiple values") before proceeding.
+
+### 6.2 Records, links, lists
+
+- `crm_record_create({object_type, data, links?})`, `crm_record_update({id, data, expected_version?})`, `crm_record_assert({object_type, match_attribute, data})` (upsert by unique attribute), `crm_record_get({id | object_type + match_attribute + value, include_links?, include_timeline?})`, `crm_record_delete({id})` (soft), `crm_record_restore({id})`.
+- `crm_records_query({object_type, filter, sort, cursor, limit, attributes?})` — structured; returns `records[]`, `next_cursor`, `total?`.
+- `crm_records_bulk_assert({object_type, match_attribute, rows[]})` — a **Task**; returns `task_id`, progress via `tasks/get`, result = per-row outcome.
+- `crm_link({relation_type, from, to, data?})`, `crm_unlink({link_id | triple})`, `crm_links_list({record_id, relation_type?, direction?})`.
+- `crm_record_at({id, at})` — the record as it was at a timestamp.
+- `crm_list_create/add/remove/entries` and `crm_view_save/run`.
+
+### 6.3 Pipelines, activities, tasks
+
+- `crm_pipeline_summary({object_type, status_attribute, group_by?})` — counts, amounts, time-in-stage per stage (derived from `record_changes`).
+- `crm_activity_log({kind, occurred_at, subject, body, participants, about: [record ids], external_ref?})` — idempotent on `external_ref`.
+- `crm_record_timeline({id, hops?, kinds?, cursor})`.
+- `crm_task_create/update/list` (assignee = agent or human actor reference; `due_at`; `status`). Tasks are CRM records, so everything above applies; these are conveniences with sharper descriptions.
+
+Approval: when policy marks an action as requiring approval (merge, delete, export, schema `define` by a member's agent), the tool returns MRTR `input_required` with an `approval_token`. The Nessie agent either gets the human's yes in-channel and re-issues, or raises a Nessie `ApprovalRequest`; DeepCRM records the approval in its own `ApprovalRequest` table with the same `continuationToken` semantics nessie uses.
+
+### 6.4 Search, quality, dedup
+
+- `crm_search({query, object_types?, mode, limit})`.
+- `crm_find_duplicates({object_type, scope?})` (Task), `crm_merge_records(...)`, `crm_unmerge({merge_change_id})`.
+- `crm_data_quality({object_type?})` — missing required values, stale (no activity in N days), orphan deals (no company/contact), unique-key collisions that predate a rule.
+- `crm_export({object_type | view, format: jsonl|csv})` (Task; result is a short-lived signed download URL through the shared file chokepoint pattern).
+
+### 6.5 Change feed
+
+- `crm_changes_since({cursor, object_types?, kinds?, limit})` — the global tenant change feed from `record_changes` (cursor = `(occurred_at, id)`), so an agent on a Nessie schedule can "do something about what changed since last run" cheaply.
+- `crm_webhook_set({url, events[], secret_ref})` — outbound HMAC-signed, delivery-shaped (coalesced per window, retried by the worker) exactly like DeepSignal's insight webhook into Nessie. The Nessie side already knows how to turn a product webhook into a rolling digest message.
+
+### 6.6 Prompts and resources
+
+- Resources: `crm://schema`, `crm://schema/{type}`, `crm://templates`, `crm://views/{id}`.
+- Prompts (few, optional): `crm/qualify-lead`, `crm/prepare-account-review`, `crm/clean-duplicates` — reusable instruction scaffolds that reference the tools above; they carry no logic.
+
+### 6.7 Tool-list size
+
+47 tools (see [mcp-surface.md](mcp-surface.md) §10). Nessie defers MCP schemas behind `mcp_find_tools`/`mcp_load_tools` above 12 inline tools, so DeepCRM groups its tools with consistent prefixes (`crm_schema_*`, `crm_record*`, `crm_link*`, `crm_search`, …) and short descriptions so the find/load step works well, and sets `ttlMs` on `tools/list` so clients do not refetch per call.
+
+---
+
+## 7. Cross-cutting
+
+- **Provenance on every row.** `record_changes.provenance` carries `{agentId, runId, toolCallId, requestId}` from `X-Nessie-Context`; an agent-written value is always traceable to the run and the person it acted for. This is the CRM answer to "why does this say that?".
+---
+{
+  "slug": "system",
+  "description": "System object types every tenant has: activity, note, task, and their 'about' relations. Applied automatically on tenant provisioning.",
+  "object_types": [
+    {
+      "slug": "activity",
+      "kind": "system",
+      "singular_name": "Activity",
+      "plural_name": "Activities",
+      "description": "An interaction that happened: an email, call, meeting, message or custom event, linked to the records it was about.",
+      "icon": "activity",
+      "primary_attribute": "subject",
+      "attributes": [
+        { "slug": "kind", "name": "Kind", "description": "What sort of interaction this was.", "type": "select", "is_required": true, "is_system": true,
+          "config": { "type": "select", "options": [
+            { "id": "email", "label": "Email" }, { "id": "call", "label": "Call" }, { "id": "meeting", "label": "Meeting" },
+            { "id": "note", "label": "Note" }, { "id": "message", "label": "Message" }, { "id": "task_event", "label": "Task event" },
+            { "id": "custom", "label": "Custom" } ] } },
+        { "slug": "occurred_at", "name": "Occurred at", "description": "When the interaction happened.", "type": "datetime", "is_required": true, "is_indexed": true, "is_system": true },
+        { "slug": "direction", "name": "Direction", "description": "Inbound (they contacted us), outbound (we contacted them) or internal.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "inbound", "label": "Inbound" }, { "id": "outbound", "label": "Outbound" }, { "id": "internal", "label": "Internal" } ] } },
+        { "slug": "subject", "name": "Subject", "description": "One-line summary.", "type": "text", "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Body", "description": "Full content or notes of the interaction (markdown).", "type": "rich_text" },
+        { "slug": "participants", "name": "Participants", "description": "Humans and agents who took part.", "type": "actor_reference", "is_multi": true },
+        { "slug": "external_ref", "name": "External reference", "description": "Id in the source system (email message id, calendar event id). Re-logging the same ref updates the activity.", "type": "text", "is_unique": true, "config": { "type": "text", "maxLength": 300 } }
+      ]
+    },
+    {
+      "slug": "note",
+      "kind": "system",
+      "singular_name": "Note",
+      "plural_name": "Notes",
+      "description": "A free-form note attached to one or more records.",
+      "icon": "note",
+      "primary_attribute": "title",
+      "attributes": [
+        { "slug": "title", "name": "Title", "description": "Short title; derived from the first line of the body when absent.", "type": "text", "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Body", "description": "The note (markdown).", "type": "rich_text", "is_required": true }
+      ]
+    },
+    {
+      "slug": "task",
+      "kind": "system",
+      "singular_name": "Task",
+      "plural_name": "Tasks",
+      "description": "A to-do assigned to a human or an agent, optionally about records.",
+      "icon": "task",
+      "primary_attribute": "title",
+      "attributes": [
+        { "slug": "title", "name": "Title", "description": "What needs doing.", "type": "text", "is_required": true, "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Details", "description": "Further detail (markdown).", "type": "rich_text" },
+        { "slug": "status", "name": "Status", "description": "Task state.", "type": "status", "is_required": true, "is_indexed": true, "default_value": "open",
+          "config": { "type": "status", "options": [
+            { "id": "open", "label": "Open", "category": "open", "position": 0 },
+            { "id": "in_progress", "label": "In progress", "category": "open", "position": 1 },
+            { "id": "done", "label": "Done", "category": "won", "position": 2 },
+            { "id": "cancelled", "label": "Cancelled", "category": "lost", "position": 3 } ] } },
+        { "slug": "due_at", "name": "Due", "description": "Deadline.", "type": "datetime", "is_indexed": true },
+        { "slug": "assignee", "name": "Assignee", "description": "Who owns the task (human or agent).", "type": "actor_reference", "is_indexed": true },
+        { "slug": "priority", "name": "Priority", "description": "Urgency.", "type": "select", "default_value": "normal",
+          "config": { "type": "select", "options": [ { "id": "low", "label": "Low" }, { "id": "normal", "label": "Normal" }, { "id": "high", "label": "High" }, { "id": "urgent", "label": "Urgent" } ] } }
+      ]
+    }
+  ],
+  "relation_types": [
+    { "slug": "activity_about", "from_object_type": "activity", "to_object_type": null, "forward_name": "about", "inverse_name": "activities", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this activity concerns." },
+    { "slug": "note_about", "from_object_type": "note", "to_object_type": null, "forward_name": "about", "inverse_name": "notes", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this note concerns." },
+    { "slug": "task_about", "from_object_type": "task", "to_object_type": null, "forward_name": "about", "inverse_name": "tasks", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this task concerns." }
+  ],
+  "matching_rules": {}
+}
+---
+{
+  "slug": "standard_crm",
+  "description": "The classic CRM: people, companies and deals with a sales pipeline, plus the relations and duplicate rules between them.",
+  "object_types": [
+    {
+      "slug": "person",
+      "kind": "standard",
+      "singular_name": "Person",
+      "plural_name": "People",
+      "description": "An individual contact: a lead, customer, partner or stakeholder.",
+      "icon": "person",
+      "primary_attribute": "name",
+      "attributes": [
+        { "slug": "name", "name": "Name", "description": "The person's name.", "type": "personal_name", "is_required": true, "is_system": true },
+        { "slug": "emails", "name": "Emails", "description": "Email addresses; the first is primary. Unique across people.", "type": "email", "is_multi": true, "is_unique": true, "is_indexed": true, "sensitivity": "internal" },
+        { "slug": "phones", "name": "Phones", "description": "Phone numbers in any format; stored as E.164.", "type": "phone", "is_multi": true, "sensitivity": "confidential", "config": { "type": "phone", "defaultRegion": "GB" } },
+        { "slug": "title", "name": "Job title", "description": "Role at their company.", "type": "text", "config": { "type": "text", "maxLength": 200 } },
+        { "slug": "company", "name": "Company", "description": "The company this person works at.", "type": "record_reference", "is_indexed": true, "config": { "type": "record_reference", "objectTypes": ["company"], "relationTypeSlug": "person_works_at" } },
+        { "slug": "linkedin", "name": "LinkedIn", "description": "Profile URL.", "type": "url" },
+        { "slug": "location", "name": "Location", "description": "Where they are based.", "type": "location" },
+        { "slug": "owner", "name": "Owner", "description": "The human or agent responsible for this relationship.", "type": "actor_reference", "is_indexed": true },
+        { "slug": "source", "name": "Source", "description": "How we came to know this person.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "inbound", "label": "Inbound" }, { "id": "outbound", "label": "Outbound" }, { "id": "referral", "label": "Referral" }, { "id": "event", "label": "Event" }, { "id": "partner", "label": "Partner" }, { "id": "other", "label": "Other" } ] } },
+        { "slug": "tags", "name": "Tags", "description": "Free labels.", "type": "select", "is_multi": true, "config": { "type": "select", "options": [ { "id": "champion", "label": "Champion" }, { "id": "decision_maker", "label": "Decision maker" }, { "id": "influencer", "label": "Influencer" }, { "id": "vip", "label": "VIP" } ] } },
+        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+      ]
+    },
+    {
+      "slug": "company",
+      "kind": "standard",
+      "singular_name": "Company",
+      "plural_name": "Companies",
+      "description": "An organisation: customer, prospect, partner or competitor.",
+      "icon": "company",
+      "primary_attribute": "name",
+      "attributes": [
+        { "slug": "name", "name": "Name", "description": "Trading name.", "type": "text", "is_required": true, "is_system": true, "is_indexed": true, "config": { "type": "text", "maxLength": 200 } },
+        { "slug": "domains", "name": "Domains", "description": "Web domains; the registrable domain is unique across companies.", "type": "domain", "is_multi": true, "is_unique": true, "is_indexed": true },
+        { "slug": "industry", "name": "Industry", "description": "Sector.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "software", "label": "Software" }, { "id": "finance", "label": "Finance" }, { "id": "manufacturing", "label": "Manufacturing" }, { "id": "retail", "label": "Retail" }, { "id": "healthcare", "label": "Healthcare" }, { "id": "government", "label": "Government" }, { "id": "education", "label": "Education" }, { "id": "media", "label": "Media" }, { "id": "energy", "label": "Energy" }, { "id": "other", "label": "Other" } ] } },
+        { "slug": "size", "name": "Size", "description": "Headcount band.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "s1_10", "label": "1–10" }, { "id": "s11_50", "label": "11–50" }, { "id": "s51_200", "label": "51–200" }, { "id": "s201_1000", "label": "201–1,000" }, { "id": "s1001_5000", "label": "1,001–5,000" }, { "id": "s5000_plus", "label": "5,000+" } ] } },
+        { "slug": "annual_revenue", "name": "Annual revenue", "description": "Approximate yearly revenue.", "type": "currency", "sensitivity": "confidential", "config": { "type": "currency", "defaultCurrency": "GBP" } },
+        { "slug": "location", "name": "Headquarters", "description": "Main office.", "type": "location" },
+        { "slug": "owner", "name": "Owner", "description": "Account owner (human or agent).", "type": "actor_reference", "is_indexed": true },
+        { "slug": "tags", "name": "Tags", "description": "Free labels.", "type": "select", "is_multi": true, "config": { "type": "select", "options": [ { "id": "customer", "label": "Customer" }, { "id": "prospect", "label": "Prospect" }, { "id": "partner", "label": "Partner" }, { "id": "competitor", "label": "Competitor" }, { "id": "churned", "label": "Churned" } ] } },
+        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+      ]
+    },
+    {
+      "slug": "deal",
+      "kind": "standard",
+      "singular_name": "Deal",
+      "plural_name": "Deals",
+      "description": "A sales opportunity moving through a pipeline.",
+      "icon": "deal",
+      "primary_attribute": "name",
+      "attributes": [
+        { "slug": "name", "name": "Name", "description": "Deal title, e.g. 'Asahi Europe — packaging pilot'.", "type": "text", "is_required": true, "is_system": true, "config": { "type": "text", "maxLength": 200 } },
+        { "slug": "stage", "name": "Stage", "description": "Pipeline stage. Moving it records stage history.", "type": "status", "is_required": true, "is_indexed": true, "default_value": "lead",
+          "config": { "type": "status", "options": [
+            { "id": "lead", "label": "Lead", "category": "open", "position": 0 },
+            { "id": "qualified", "label": "Qualified", "category": "open", "position": 1 },
+            { "id": "proposal", "label": "Proposal", "category": "open", "position": 2 },
+            { "id": "negotiation", "label": "Negotiation", "category": "open", "position": 3 },
+            { "id": "won", "label": "Won", "category": "won", "position": 4 },
+            { "id": "lost", "label": "Lost", "category": "lost", "position": 5 } ] } },
+        { "slug": "amount", "name": "Amount", "description": "Expected contract value.", "type": "currency", "is_indexed": true, "config": { "type": "currency", "defaultCurrency": "GBP" } },
+        { "slug": "close_date", "name": "Close date", "description": "Expected or actual close.", "type": "date", "is_indexed": true },
+        { "slug": "probability", "name": "Probability", "description": "Likelihood to close, 0–100.", "type": "percent" },
+        { "slug": "company", "name": "Company", "description": "The account this deal is with.", "type": "record_reference", "is_indexed": true, "config": { "type": "record_reference", "objectTypes": ["company"], "relationTypeSlug": "deal_for_company" } },
+        { "slug": "contacts", "name": "Contacts", "description": "People involved in the deal.", "type": "record_reference", "is_multi": true, "config": { "type": "record_reference", "objectTypes": ["person"], "relationTypeSlug": "deal_contacts" } },
+        { "slug": "owner", "name": "Owner", "description": "Deal owner (human or agent).", "type": "actor_reference", "is_indexed": true },
+        { "slug": "lost_reason", "name": "Lost reason", "description": "Why the deal was lost.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "price", "label": "Price" }, { "id": "competitor", "label": "Competitor" }, { "id": "timing", "label": "Timing" }, { "id": "no_decision", "label": "No decision" }, { "id": "fit", "label": "Poor fit" }, { "id": "other", "label": "Other" } ] } },
+        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+      ]
+    }
+  ],
+  "relation_types": [
+    { "slug": "person_works_at", "from_object_type": "person", "to_object_type": "company", "forward_name": "works at", "inverse_name": "employs", "cardinality": "many_to_one", "on_delete": "unlink", "description": "Employment. Ending a link keeps the history (the person left).",
+      "edge_attributes": [
+        { "slug": "role", "name": "Role", "description": "Title while at this company.", "type": "text", "config": { "type": "text", "maxLength": 200 } },
+        { "slug": "since", "name": "Since", "description": "Start date.", "type": "date" } ] },
+    { "slug": "deal_for_company", "from_object_type": "deal", "to_object_type": "company", "forward_name": "for", "inverse_name": "deals", "cardinality": "many_to_one", "on_delete": "restrict", "description": "The account of the deal." },
+    { "slug": "deal_contacts", "from_object_type": "deal", "to_object_type": "person", "forward_name": "involves", "inverse_name": "deals", "cardinality": "many_to_many", "on_delete": "unlink", "description": "People on the deal, with their role in it.",
+      "edge_attributes": [
+        { "slug": "role", "name": "Role in deal", "description": "Their part in this deal.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "champion", "label": "Champion" }, { "id": "decision_maker", "label": "Decision maker" }, { "id": "economic_buyer", "label": "Economic buyer" }, { "id": "technical", "label": "Technical evaluator" }, { "id": "blocker", "label": "Blocker" } ] } } ] }
+  ],
+  "matching_rules": {
+    "person": [
+      { "attributes": ["emails"], "method": "normalized", "action": "block" },
+      { "attributes": ["name", "company"], "method": "normalized", "action": "warn" }
+    ],
+    "company": [
+      { "attributes": ["domains"], "method": "normalized", "action": "block" },
+      { "attributes": ["name"], "method": "fuzzy", "threshold": 0.6, "action": "warn" }
+    ],
+    "deal": [
+
+exec
+/bin/zsh -lc "tail -30 docs/spec/templates/standard_crm.json; grep -n \"Mcp-Method\\|Mcp-Name\\|protocolVersion\\|2026-07-28\" docs/*.md docs/spec/*.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+          "config": { "type": "select", "options": [ { "id": "price", "label": "Price" }, { "id": "competitor", "label": "Competitor" }, { "id": "timing", "label": "Timing" }, { "id": "no_decision", "label": "No decision" }, { "id": "fit", "label": "Poor fit" }, { "id": "other", "label": "Other" } ] } },
+        { "slug": "last_activity_at", "name": "Last activity", "description": "Most recent interaction (computed).", "type": "timestamp_system", "is_system": true, "config": { "type": "timestamp_system", "source": "last_activity_at" } }
+      ]
+    }
+  ],
+  "relation_types": [
+    { "slug": "person_works_at", "from_object_type": "person", "to_object_type": "company", "forward_name": "works at", "inverse_name": "employs", "cardinality": "many_to_one", "on_delete": "unlink", "description": "Employment. Ending a link keeps the history (the person left).",
+      "edge_attributes": [
+        { "slug": "role", "name": "Role", "description": "Title while at this company.", "type": "text", "config": { "type": "text", "maxLength": 200 } },
+        { "slug": "since", "name": "Since", "description": "Start date.", "type": "date" } ] },
+    { "slug": "deal_for_company", "from_object_type": "deal", "to_object_type": "company", "forward_name": "for", "inverse_name": "deals", "cardinality": "many_to_one", "on_delete": "restrict", "description": "The account of the deal." },
+    { "slug": "deal_contacts", "from_object_type": "deal", "to_object_type": "person", "forward_name": "involves", "inverse_name": "deals", "cardinality": "many_to_many", "on_delete": "unlink", "description": "People on the deal, with their role in it.",
+      "edge_attributes": [
+        { "slug": "role", "name": "Role in deal", "description": "Their part in this deal.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "champion", "label": "Champion" }, { "id": "decision_maker", "label": "Decision maker" }, { "id": "economic_buyer", "label": "Economic buyer" }, { "id": "technical", "label": "Technical evaluator" }, { "id": "blocker", "label": "Blocker" } ] } } ] }
+  ],
+  "matching_rules": {
+    "person": [
+      { "attributes": ["emails"], "method": "normalized", "action": "block" },
+      { "attributes": ["name", "company"], "method": "normalized", "action": "warn" }
+    ],
+    "company": [
+      { "attributes": ["domains"], "method": "normalized", "action": "block" },
+      { "attributes": ["name"], "method": "fuzzy", "threshold": 0.6, "action": "warn" }
+    ],
+    "deal": [
+      { "attributes": ["name", "company"], "method": "normalized", "action": "warn" }
+    ]
+  }
+}
+docs/architecture.md:8:MCP client (Nessie agent run, or any 2026-07-28 client)
+docs/auth-and-tenancy.md:19:Future (brief §9 Q3): a non-Nessie client presenting only a UOA OAuth token (CIMD per MCP 2026-07-28). The seam is `packages/mcp-inbound/src/authenticate.ts` returning `Principal`; adding a second strategy does not touch tools.
+docs/brief.md:70:The **MCP 2026-07-28 specification** (stable as of this month) is the one to build on ([release post](https://blog.modelcontextprotocol.io/posts/2026-07-28/), [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)):
+docs/brief.md:75:- **Header-based routing** (`Mcp-Method`, `Mcp-Name`) — rate limiting and metering per tool at the Caddy edge without parsing bodies.
+docs/brief.md:82:**Build on MCP 2026-07-28 now; keep the service layer protocol-agnostic; do not build on or for Matrix.**
+docs/brief.md:341:- **Rate limits & metering** at the edge on `Mcp-Name`, per app key × tenant; bulk tools are Tasks with explicit caps (`DEEPCRM_MAX_BULK_ROWS`).
+docs/brief.md:351:1. **Engine + MCP skeleton** — tenancy/auth seam, metadata tables, records/links/changes, validation, `crm_schema_*`, `crm_record_*`, `crm_link*`, `crm_records_query`, audit chain. Standard template seeded. Stateless `/mcp` on 2026-07-28 SDK.
+docs/brief.md:379:- MCP 2026-07-28 specification — [release post](https://blog.modelcontextprotocol.io/posts/2026-07-28/), [key changes / changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), [release candidate post](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/), [SDK betas](https://blog.modelcontextprotocol.io/posts/sdk-betas-2026-07-28/).
+docs/mcp-surface.md:3:The product. One streamable-HTTP endpoint, MCP spec **2026-07-28**, stateless. Tool names, descriptions and schemas here are normative; code registers exactly these, and `pnpm docs:mcp` regenerates the tables in §2–§8 from the registrations.
+docs/spec/protocol-flows.md:3:Wire-level sequences for the interactions that define the product. JSON-RPC bodies are abbreviated to the parts that matter; every `tools/call` carries MCP 2026-07-28 `_meta` (`io.modelcontextprotocol/protocolVersion`, `clientCapabilities`) and the HTTP headers `Mcp-Method: tools/call`, `Mcp-Name: <tool>`.
+
+codex
+Now let me check the actual MCP spec 2026-07-28 to verify conformance claims.
+exec
+/bin/zsh -lc 'curl -sL --max-time 30 https://modelcontextprotocol.io/specification/2026-07-28/changelog -o /tmp/mcp-changelog.html; echo "exit $?"; wc -c /tmp/mcp-changelog.html; grep -oi '"'<title>["'^<]*'"' /tmp/mcp-changelog.html" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 208ms:
+exit 0
+  298645 /tmp/mcp-changelog.html
+<title>Key Changes - Model Context Protocol
+
+exec
+/bin/zsh -lc 'curl -sL --max-time 30 https://modelcontextprotocol.io/specification/2026-07-28/changelog.md -o /tmp/mcp-changelog.md; wc -c /tmp/mcp-changelog.md; head -c 3000 /tmp/mcp-changelog.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 243ms:
+   11892 /tmp/mcp-changelog.md
+> ## Documentation Index
+> Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Key Changes
+
+<div id="enable-section-numbers" />
+
+This document lists changes made to the Model Context Protocol (MCP) specification since
+the previous revision, [2025-11-25](/specification/2025-11-25).
+
+## Major changes
+
+1. Remove protocol-level sessions and the `Mcp-Session-Id` header from the Streamable HTTP transport. List endpoints (`tools/list`, `resources/list`, `prompts/list`) no longer vary per-connection. Servers that need cross-call state use explicit, server-minted handles passed as ordinary tool arguments ([SEP-2567](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567)).
+
+2. Make MCP stateless: remove the `initialize`/`notifications/initialized` handshake. Every request now carries its protocol version and client capabilities in `_meta` (`io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities`). Clients SHOULD identify themselves on each request (`io.modelcontextprotocol/clientInfo`), and servers SHOULD identify themselves in each result's `_meta` (`io.modelcontextprotocol/serverInfo`). Version mismatches return `UnsupportedProtocolVersionError` ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+3. Add `server/discover`: servers MUST implement this RPC to advertise their supported protocol versions, capabilities, and identity. Clients MAY call it before any other request for up-front version selection, or use it as a backward-compatibility probe on STDIO ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+4. Replace the HTTP GET endpoint and `resources/subscribe`/`resources/unsubscribe` with `subscriptions/listen`: a single long-lived POST-response stream for opted-in server-to-client change notifications. Clients opt in to specific types (`toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, `resourceSubscriptions`); the server acknowledges and tags notifications with `io.modelcontextprotocol/subscriptionId`. Request-scoped notifications such as `notifications/progress` and `notifications/message` continue to flow on the response stream of the request they relate to, not the `subscriptions/listen` stream ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+5. Remove `ping`, `logging/setLevel`, and `notifications/roots/list_changed`. Log level is now set per-request via `io.modelcontextprotocol/logLevel` in `_meta`; servers MUST NOT emit `notifications/message` for requests that did not include this field ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+6. Move experimental tasks out of the core protocol and into an official extension (`io.modelcontextprotocol/tasks`). The redesigned extension replaces the blocking `tasks/result` method with pollin
+exec
+/bin/zsh -lc 'cat /tmp/mcp-changelog.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+> ## Documentation Index
+> Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Key Changes
+
+<div id="enable-section-numbers" />
+
+This document lists changes made to the Model Context Protocol (MCP) specification since
+the previous revision, [2025-11-25](/specification/2025-11-25).
+
+## Major changes
+
+1. Remove protocol-level sessions and the `Mcp-Session-Id` header from the Streamable HTTP transport. List endpoints (`tools/list`, `resources/list`, `prompts/list`) no longer vary per-connection. Servers that need cross-call state use explicit, server-minted handles passed as ordinary tool arguments ([SEP-2567](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567)).
+
+2. Make MCP stateless: remove the `initialize`/`notifications/initialized` handshake. Every request now carries its protocol version and client capabilities in `_meta` (`io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities`). Clients SHOULD identify themselves on each request (`io.modelcontextprotocol/clientInfo`), and servers SHOULD identify themselves in each result's `_meta` (`io.modelcontextprotocol/serverInfo`). Version mismatches return `UnsupportedProtocolVersionError` ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+3. Add `server/discover`: servers MUST implement this RPC to advertise their supported protocol versions, capabilities, and identity. Clients MAY call it before any other request for up-front version selection, or use it as a backward-compatibility probe on STDIO ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+4. Replace the HTTP GET endpoint and `resources/subscribe`/`resources/unsubscribe` with `subscriptions/listen`: a single long-lived POST-response stream for opted-in server-to-client change notifications. Clients opt in to specific types (`toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, `resourceSubscriptions`); the server acknowledges and tags notifications with `io.modelcontextprotocol/subscriptionId`. Request-scoped notifications such as `notifications/progress` and `notifications/message` continue to flow on the response stream of the request they relate to, not the `subscriptions/listen` stream ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+5. Remove `ping`, `logging/setLevel`, and `notifications/roots/list_changed`. Log level is now set per-request via `io.modelcontextprotocol/logLevel` in `_meta`; servers MUST NOT emit `notifications/message` for requests that did not include this field ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+6. Move experimental tasks out of the core protocol and into an official extension (`io.modelcontextprotocol/tasks`). The redesigned extension replaces the blocking `tasks/result` method with polling via `tasks/get` and a new `tasks/update` for client-to-server input, removes `tasks/list`, and allows servers to return task handles unsolicited without per-request opt-in ([SEP-2663](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2663)).
+
+7. Multi Round-Trip Requests (MRTR) pattern introduced which replaces the previous approach of sending server-initiated requests, such as `roots/list`, `sampling/createMessage`, or `elicitation/create`. Servers return an `InputRequiredResult` (`resultType: "input_required"`) whose `inputRequests` field carries the requests for the additional information needed to process the request. Clients respond with `inputResponses` on a retry of the original request providing the requested information. ([SEP-2322](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322)).
+
+8. All results now carry a required `resultType` field: `"complete"` for ordinary results and `"input_required"` for [multi round-trip request](/specification/2026-07-28/basic/patterns/mrtr) interim results. Clients **MUST** treat results from earlier-protocol servers that omit the field as `"complete"` ([SEP-2322](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322)).
+
+9. Remove SSE stream resumability and message redelivery (the `Last-Event-ID` header and SSE event IDs) from the Streamable HTTP transport. A broken response stream loses the in-flight request; clients **MUST** re-issue it as a new request with a new request ID ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)).
+
+## Minor changes
+
+1. Add `extensions` field to `ClientCapabilities` and `ServerCapabilities` to support optional [extensions](/docs/extensions/overview) beyond the core protocol.
+2. Document OpenTelemetry trace context propagation conventions for `_meta` keys (`traceparent`, `tracestate`, `baggage`) ([SEP-414](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/414)).
+3. Servers **SHOULD** return tools from `tools/list` in a deterministic order to enable client-side caching and improve LLM prompt cache hit rates.
+4. Require standard MCP request headers (`Mcp-Method`, `Mcp-Name`) on Streamable HTTP POST requests, and add support for custom headers from tool parameters via `x-mcp-header` ([SEP-2243](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2243)).
+5. Require `ttlMs` and `cacheScope` fields on results returned by `tools/list`, `prompts/list`, `resources/list`, `resources/read`, and `resources/templates/list` via a new `CacheableResult` interface. `ttlMs` is a freshness hint (in milliseconds) allowing clients to cache responses and reduce polling; `cacheScope` (`"public"` or `"private"`) controls whether shared intermediaries may cache the response. Both fields complement existing `listChanged` notifications ([SEP-2549](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2549)).
+6. Change resource not found error code from `-32002` to `-32602` (Invalid Params) to align with JSON-RPC specification.
+7. Authorization servers **SHOULD** include the `iss` parameter in authorization responses per
+   [RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207), and MCP clients **MUST** validate a
+   present `iss` against the recorded issuer before redeeming the authorization code
+   ([SEP-2468](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2468)).
+8. Require MCP clients to specify an appropriate `application_type` during Dynamic Client
+   Registration to avoid OpenID Connect redirect URI conflicts
+   ([SEP-837](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/837)).
+9. Clarify that client credentials are bound to the authorization server that issued them:
+   clients **MUST** key persisted credentials by the issuer identifier, **MUST NOT** reuse them
+   with a different authorization server, and **MUST** re-register when the authorization server
+   changes ([SEP-2352](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2352)).
+10. Loosen `inputSchema` and `outputSchema` to allow any JSON Schema 2020-12 keywords, and
+    `structuredContent` to allow any JSON value. Add `$ref` resolution requirements and
+    composition-keyword resource bounds
+    ([SEP-2106](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2106)).
+11. Remove the `notifications/elicitation/complete` notification and the
+    `elicitationId` field of URL mode elicitation requests, both introduced in
+    `2025-11-25`. Under the
+    [Multi Round-Trip Requests](/specification/2026-07-28/basic/patterns/mrtr) pattern, the
+    client learns the outcome of an out-of-band interaction by retrying the original
+    request, so a server-initiated completion signal — and the identifier used to
+    correlate it — no longer fit the protocol. Servers needing to correlate an
+    elicitation across retries encode their own identifier in `requestState`.
+12. Define an [error code allocation policy](/specification/2026-07-28/basic/index#error-codes)
+    partitioning the JSON-RPC server-error range: `-32000` to `-32019` remains
+    implementation-defined (existing SDK usage is grandfathered), `-32020` to `-32099` is
+    reserved for the MCP specification. Renumber the error codes introduced in this draft
+    accordingly — `HeaderMismatch` `-32001` → `-32020`, `MissingRequiredClientCapability`
+    `-32003` → `-32021`, `UnsupportedProtocolVersion` `-32004` → `-32022` — and add
+    `HeaderMismatchError` to the schema, which previously existed only in transport prose.
+
+## Deprecated
+
+Features listed here remain part of the specification but are scheduled for removal under the [feature lifecycle and deprecation policy](/community/feature-lifecycle). New implementations should not adopt them. The [deprecated features registry](/specification/2026-07-28/deprecated) tracks every feature currently in the Deprecated state.
+
+1. Deprecate the Roots, Sampling, and Logging features
+   ([SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577)).
+   These features remain fully functional during the deprecation window but new
+   implementations should not add support for them. Suggested migrations: pass
+   directories or files via tool parameters, resource URIs, or server
+   configuration instead of Roots; integrate directly with LLM provider APIs
+   instead of Sampling; log to `stderr` (stdio) or use OpenTelemetry instead of
+   Logging.
+
+2. Reclassify the HTTP+SSE transport (deprecated since protocol version
+   `2025-03-26`) as Deprecated under the feature lifecycle policy
+   ([SEP-2596](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2596)).
+   Migrate to [Streamable HTTP](/specification/2026-07-28/basic/transports/streamable-http).
+
+3. Reclassify the `includeContext` values `"thisServer"` and `"allServers"`
+   (soft-deprecated since protocol version `2025-11-25`) as Deprecated
+   ([SEP-2596](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2596)).
+   Omit the field or use `"none"`; these values will be removed no later than
+   the Sampling feature itself.
+
+4. Deprecate the OAuth 2.0 Dynamic Client Registration Protocol
+   ([RFC7591](https://datatracker.ietf.org/doc/html/rfc7591)) as a client registration
+   mechanism in favor of
+   [Client ID Metadata Documents](/specification/2026-07-28/basic/authorization/client-registration#client-id-metadata-documents)
+   ([PR #2858](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2858)).
+   It remains available for backwards compatibility with authorization servers that do
+   not support Client ID Metadata Documents.
+
+## Other schema changes
+
+1. `schema.json` now correctly reflects that the Typescript definition of minimum/maximum/default are `number`'s and not just `integers`. This was caused by running the generator using `--defaultNumberType integer` ([PR#2710](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2710)).
+
+## Governance and process updates
+
+1. Adopt a specification
+   [feature lifecycle and deprecation policy](/community/feature-lifecycle)
+   defining the Active, Deprecated, and Removed feature states, a minimum
+   twelve-month deprecation window, and a
+   [registry of deprecated features](/specification/2026-07-28/deprecated)
+   ([SEP-2596](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2596)).
+
+## Process changes
+
+1. Formalize PR-based SEP workflow with markdown files in `seps/` directory, PR-derived numbering, sponsor responsibilities, and status management via PR labels ([SEP-1850](https://github.com/modelcontextprotocol/specification/pull/1850)).
+
+## Full changelog
+
+For a complete list of all changes that have been made since the last protocol revision,
+[see GitHub](https://github.com/modelcontextprotocol/specification/compare/2025-11-25...2026-07-28).
+
+codex
+Excellent — the spec changelog is fetched and I can verify directly against it. Let me grab a bit more detail on the MRTR shape and Tasks extension to be precise.
+exec
+/bin/zsh -lc "curl -sL --max-time 30 https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr.md -o /tmp/mrtr.md; wc -c /tmp/mrtr.md; grep -n \"inputResponses\\|resultType\\|requestState\\|schema\\|kind\" /tmp/mrtr.md | head -60" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 366ms:
+   13629 /tmp/mrtr.md
+62:An [`InputRequests`](/specification/2026-07-28/schema#inputrequests) object is a map of server-client requests.
+64:values are request objects (e.g., [`ElicitRequest`](/specification/2026-07-28/schema#elicitrequest), [`CreateMessageRequest`](/specification/2026-07-28/schema#createmessagerequest), or [`ListRootsRequest`](/specification/2026-07-28/schema#listrootsrequest)).
+103:An [`InputResponses`](/specification/2026-07-28/schema#inputresponses) object is a map of client responses to the server requests.
+104:Keys correspond to the keys in the `InputRequests` map; values are the client's result for each request (e.g., [`ElicitResult`](/specification/2026-07-28/schema#elicitresult), [`CreateMessageResult`](/specification/2026-07-28/schema#createmessageresult), or [`ListRootsResult`](/specification/2026-07-28/schema#listrootsresult)).
+128:An [`InputRequiredResult`](/specification/2026-07-28/schema#inputrequiredresult) is a type of [`Result`](/specification/2026-07-28/basic#responses),
+131:* `inputRequests` *(optional)*: An [`InputRequests`](/specification/2026-07-28/schema#inputrequests) map of server-initiated requests that the client must fulfill.
+132:* `requestState` *(optional)*: An opaque string meaningful only to the server. Clients **MUST NOT** inspect, parse, modify, or make any assumptions about its contents.
+139:    "resultType": "input_required",
+179:    "requestState": "AEAD-protected blob"
+202:The server encodes any needed context into the `requestState` field, which the client echoes back on retry.
+211:    S-->>C: InputRequiredResult (id: 1, ElicitRequest, requestState)
+217:    note over C: Client retries tool call <br/> with inputResponses and requestState
+218:    C->>S: tools/call (id: 2, ElicitResult, requestState)
+232:   * `inputRequests` values are request objects that **MUST** be one of [`ElicitRequest`](/specification/2026-07-28/schema#elicitrequest), [`CreateMessageRequest`](/specification/2026-07-28/schema#createmessagerequest), or [`ListRootsRequest`](/specification/2026-07-28/schema#listrootsrequest)
+234:3. The `InputRequiredResult` **MAY** include a `requestState` field. If specified, this field is an opaque string meaningful only to the server. Servers are free to encode the state in any format (e.g. base64-encoded JSON, encrypted JWT, serialized binary).
+236:4. If a client request contains a `requestState` field, servers **MUST** treat `requestState` as an attacker-controlled input. If `requestState` influences authorization, resource access, or business logic, servers **MUST** protect its integrity (e.g. HMAC or AEAD)
+239:5. To prevent replay, servers **SHOULD** include the following inside the integrity-protected `requestState` payload and verify each on receipt:
+246:       Servers for which a given `requestState` must be consumed at most once
+250:6. Servers **MUST** include at least one of `inputRequests` or `requestState` in every `InputRequiredResult` response.
+261:2. If an `InputRequiredResult` contains the `requestState` field, the client **MUST** echo back the exact value of that field when retrying the original request.
+262:   Clients **MUST NOT** inspect, parse, modify, or make any assumptions about the `requestState` contents. If the `InputRequiredResult` does not contain a `requestState` field, the client **MUST NOT** include one in the retry.
+264:4. Both the `inputRequests` and `requestState` fields affect only the client's retry of the original request. They **MUST NOT** be used for any other request that the client may be sending in parallel.
+269:Protocol errors (malformed JSON, invalid schema, internal server errors) **SHOULD** return a JSON-RPC error response with an appropriate error code and message.
+278:Because `requestState` passes through the client, malicious or compromised clients could attempt to modify it to alter server behavior,
+
+exec
+/bin/zsh -lc "sed -n '1,130p' /tmp/mrtr.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+> ## Documentation Index
+> Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Multi Round-Trip Requests
+
+<div id="enable-section-numbers" />
+
+<Note>
+  Multi Round-Trip Requests (MRTR) was introduced in this version of the MCP
+  specification. This replaces the previous approach of sending server-initiated
+  requests. Servers **MUST** send server-to-client requests (such as
+  `roots/list`, `sampling/createMessage`, or `elicitation/create`) using the
+  MRTR pattern. The previous pattern of server-initiated requests is no longer
+  supported. This is a breaking change.
+</Note>
+
+<Note>
+  For brevity, the request examples on this page omit the `_meta` request
+  metadata (`io.modelcontextprotocol/protocolVersion`,
+  `io.modelcontextprotocol/clientInfo`, and
+  `io.modelcontextprotocol/clientCapabilities`). Every request **MUST** include
+  the required `_meta` fields; see
+  [`_meta`](/specification/2026-07-28/basic/index#meta).
+</Note>
+
+## Multi Round-Trip Requests
+
+The Model Context Protocol (MCP) defines several ways for servers to request additional information
+from users during the processing of client requests (such as
+`roots/list`, `sampling/createMessage`, or `elicitation/create`). The **multi round-trip requests** pattern
+provides a standardized way to handle these server-requests without requiring a shared storage layer across
+server instances or requiring stateful load balancing.
+
+The high level flow functions as follows:
+
+1. Client sends an initial request to the server with the parameters needed to perform the operation.
+2. Server determines that additional information is required to fulfill the request and responds requesting more information.
+3. Client gathers the requested information from the user or other sources, then retries the original request including the additional requested information.
+4. Server determines it has sufficient information to complete the operation, and responds with the final result.
+
+```mermaid theme={null}
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: client request (id: 1, request params)
+    note over S: Server needs more info <br/> to process request.
+    S-->>C: Request for additional input.
+
+    note over C: Client gathers input and <br/> retries initial request.
+    C->>S: client request (id: 2, request params, requested input)
+    note over S: Server has enough information <br/> to complete the request.
+    S-->>C: Result (id: 2, result)
+```
+
+### Core Types
+
+This flow is implemented in MCP using the following Types.
+
+#### InputRequests
+
+An [`InputRequests`](/specification/2026-07-28/schema#inputrequests) object is a map of server-client requests.
+Keys are server-assigned string identifiers;
+values are request objects (e.g., [`ElicitRequest`](/specification/2026-07-28/schema#elicitrequest), [`CreateMessageRequest`](/specification/2026-07-28/schema#createmessagerequest), or [`ListRootsRequest`](/specification/2026-07-28/schema#listrootsrequest)).
+
+```json theme={null}
+{
+  "github_login": {
+    "method": "elicitation/create",
+    "params": {
+      "mode": "form",
+      "message": "Please provide your GitHub username",
+      "requestedSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" }
+        },
+        "required": ["name"]
+      }
+    }
+  },
+  "capital_of_france": {
+    "method": "sampling/createMessage",
+    "params": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "What is the capital of France?"
+          }
+        }
+      ],
+      "systemPrompt": "You are a helpful assistant.",
+      "maxTokens": 100
+    }
+  }
+}
+```
+
+#### InputResponses
+
+An [`InputResponses`](/specification/2026-07-28/schema#inputresponses) object is a map of client responses to the server requests.
+Keys correspond to the keys in the `InputRequests` map; values are the client's result for each request (e.g., [`ElicitResult`](/specification/2026-07-28/schema#elicitresult), [`CreateMessageResult`](/specification/2026-07-28/schema#createmessageresult), or [`ListRootsResult`](/specification/2026-07-28/schema#listrootsresult)).
+
+```json theme={null}
+{
+  "github_login": {
+    "action": "accept",
+    "content": {
+      "name": "octocat"
+    }
+  },
+  "capital_of_france": {
+    "role": "assistant",
+    "content": {
+      "type": "text",
+      "text": "The capital of France is Paris."
+    },
+    "model": "claude-3-sonnet-20240307",
+    "stopReason": "endTurn"
+  }
+}
+```
+
+#### InputRequiredResult
+
+An [`InputRequiredResult`](/specification/2026-07-28/schema#inputrequiredresult) is a type of [`Result`](/specification/2026-07-28/basic#responses),
+indicating that additional input is needed before the request can be completed.
+
+
+exec
+/bin/zsh -lc "sed -n '130,275p' /tmp/mrtr.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+
+* `inputRequests` *(optional)*: An [`InputRequests`](/specification/2026-07-28/schema#inputrequests) map of server-initiated requests that the client must fulfill.
+* `requestState` *(optional)*: An opaque string meaningful only to the server. Clients **MUST NOT** inspect, parse, modify, or make any assumptions about its contents.
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resultType": "input_required",
+    "inputRequests": {
+      // Elicitation request.
+      "github_login": {
+        "method": "elicitation/create",
+        "params": {
+          "mode": "form",
+          "message": "Please provide your GitHub username",
+          "requestedSchema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" }
+            },
+            "required": ["name"]
+          }
+        }
+      },
+      // Sampling request.
+      "capital_of_france": {
+        "method": "sampling/createMessage",
+        "params": {
+          "messages": [
+            {
+              "role": "user",
+              "content": {
+                "type": "text",
+                "text": "What is the capital of France?"
+              }
+            }
+          ],
+          "modelPreferences": {
+            "hints": [{ "name": "claude-3-sonnet" }],
+            "intelligencePriority": 0.8,
+            "speedPriority": 0.5
+          },
+          "systemPrompt": "You are a helpful assistant.",
+          "maxTokens": 100
+        }
+      }
+    },
+    "requestState": "AEAD-protected blob"
+  }
+}
+```
+
+### Supported Requests
+
+Servers **MAY** send `InputRequiredResult` responses on the following client requests:
+
+| Client Request                                                                   | Supports InputRequiredResult |
+| -------------------------------------------------------------------------------- | ---------------------------- |
+| [`prompts/get`](/specification/2026-07-28/server/prompts#getting-a-prompt)       | Yes                          |
+| [`resources/read`](/specification/2026-07-28/server/resources#reading-resources) | Yes                          |
+| [`tools/call`](/specification/2026-07-28/server/tools#calling-tools)             | Yes                          |
+
+Servers **MUST NOT** send `InputRequiredResult` responses on any other client requests.
+
+### Basic Workflow
+
+The basic workflow describes how a server can request additional input from the client as part of a client-server request.
+In this example we use `tools/call` as the client request, but the same pattern applies to any of the supported requests listed above.
+
+Notably, it allows servers to request additional information without maintaining any server-side state.
+The server encodes any needed context into the `requestState` field, which the client echoes back on retry.
+
+```mermaid theme={null}
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant S as Server
+    C->>S: tools/call (id: 1)
+    note over S: Server needs more info via Elicitation
+    S-->>C: InputRequiredResult (id: 1, ElicitRequest, requestState)
+    note over C,S: Initial Request Terminated
+
+    C->>U: Prompts user for input
+    U-->>C: Provides responses
+
+    note over C: Client retries tool call <br/> with inputResponses and requestState
+    C->>S: tools/call (id: 2, ElicitResult, requestState)
+    note over S: Server reconstitutes state<br/>Completes execution
+    S-->>C: Result (id: 2, ToolCallResult)
+```
+
+Note that the requests in each step are completely independent: the server processing the retry does not need any information beyond
+what is directly present in the retry request.
+
+#### Server Requirements (Basic Workflow)
+
+1. Servers **MAY** respond to any [supported client request](#supported-requests) with an `InputRequiredResult`.
+
+2. The `InputRequiredResult` **MAY** include an `inputRequests` field.
+   * `inputRequests` keys are server assigned identifiers and **MUST** be unique within the scope of the request.
+   * `inputRequests` values are request objects that **MUST** be one of [`ElicitRequest`](/specification/2026-07-28/schema#elicitrequest), [`CreateMessageRequest`](/specification/2026-07-28/schema#createmessagerequest), or [`ListRootsRequest`](/specification/2026-07-28/schema#listrootsrequest)
+
+3. The `InputRequiredResult` **MAY** include a `requestState` field. If specified, this field is an opaque string meaningful only to the server. Servers are free to encode the state in any format (e.g. base64-encoded JSON, encrypted JWT, serialized binary).
+
+4. If a client request contains a `requestState` field, servers **MUST** treat `requestState` as an attacker-controlled input. If `requestState` influences authorization, resource access, or business logic, servers **MUST** protect its integrity (e.g. HMAC or AEAD)
+   and **MUST** reject state that fails verification. Integrity protection **MAY** be omitted only when tampering can cause nothing worse than request failure.
+
+5. To prevent replay, servers **SHOULD** include the following inside the integrity-protected `requestState` payload and verify each on receipt:
+   * the authenticated principal, rejecting state presented by a different principal.
+   * a short expiry (TTL), rejecting state presented after it lapses;
+   * an identifier for the originating request, e.g. the method name and a digest of its salient parameters, rejecting state presented on a request that does not match.
+     <Warning>
+       Note that these measures bound the replay window and prevent cross-user
+       and cross-request reuse, but do not by themselves guarantee single-use.
+       Servers for which a given `requestState` must be consumed at most once
+       (e.g., one-time redemptions) **MUST** enforce that invariant server-side.
+     </Warning>
+
+6. Servers **MUST** include at least one of `inputRequests` or `requestState` in every `InputRequiredResult` response.
+
+7. Servers **MUST NOT** send an `inputRequests` that the client has not declared support for in its capabilities. For example, if a client does not declare support for `elicitation`, the server **MUST NOT** include any `elicitation/create` requests in the `inputRequests` field.
+
+8. Servers **MUST NOT** assume that clients will fulfill the `inputRequests` or retry the original request. Servers **MAY** choose to return an `InputRequiredResult` on multiple attempts at the same request if they want to repeatedly prompt the user for information until they have what they need to complete the request.
+
+#### Client Requirements (Basic Workflow)
+
+1. If a client receives an `InputRequiredResult` that contains the `inputRequests` field, the client **MUST** construct the requested
+   inputs before retrying the original request. If the `InputRequiredResult` does *not* contain the `inputRequests` field,
+   the client **MAY** retry the original request immediately.
+2. If an `InputRequiredResult` contains the `requestState` field, the client **MUST** echo back the exact value of that field when retrying the original request.
+   Clients **MUST NOT** inspect, parse, modify, or make any assumptions about the `requestState` contents. If the `InputRequiredResult` does not contain a `requestState` field, the client **MUST NOT** include one in the retry.
+3. The JSON-RPC `id` **MUST** be different between the initial request and the retry, as they are independent requests.
+4. Both the `inputRequests` and `requestState` fields affect only the client's retry of the original request. They **MUST NOT** be used for any other request that the client may be sending in parallel.
+
+### Error Handling
+
+Servers **SHOULD** validate that the data provided by the client is a valid `InputResponses` object and that the information inside can be correctly parsed.
+Protocol errors (malformed JSON, invalid schema, internal server errors) **SHOULD** return a JSON-RPC error response with an appropriate error code and message.
+
+If additional, unexpected parameters are provided in the `InputResponses` object, the server **SHOULD** ignore any information it does not recognize or need.
+
+If the client fails to send all the information requested in a previous `InputRequests`, and the missing information is necessary for the server to process the request,
+the server **SHOULD** respond with a new `InputRequiredResult` requesting the missing information again, rather than returning an error.
+
+
+exec
+/bin/zsh -lc "curl -sL --max-time 30 https://modelcontextprotocol.io/docs/extensions/tasks.md -o /tmp/tasks.md; wc -c /tmp/tasks.md; grep -n \"tasks/get\\|tasks/update\\|tasks/cancel\\|tasks/result\\|tasks/list\\|method\" /tmp/tasks.md | head -40" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 639ms:
+   10237 /tmp/tasks.md
+36:  The client responds via `tasks/update` — no second connection or unsolicited
+57:3. **Polling.** The client calls `tasks/get` with the `taskId`. The response
+61:4. **Mid-flight input.** If the task moves to `input_required`, the `tasks/get`
+63:   requests. The client fulfills these via `tasks/update`.
+69:6. **Cancellation.** The client can send `tasks/cancel` at any time.
+82:        Client->>Server: tasks/get (taskId)
+87:    Client->>Server: tasks/get (taskId)
+89:    Client->>Server: tasks/update (taskId, inputResponses)
+93:        Client->>Server: tasks/get (taskId)
+97:    Client->>Server: tasks/get (taskId)
+139:carries the full task state, eliminating the need for an extra `tasks/get`
+159:      "method": "...",
+181:    Call `tasks/get` with the returned `taskId`, respecting the `pollIntervalMs`
+188:    the requests to the user or model, and submit responses via `tasks/update`.
+232:  <Step title="Serve tasks/get">
+237:  <Step title="Handle tasks/update">
+242:  <Step title="Handle tasks/cancel">
+
+exec
+/bin/zsh -lc "sed -n '1,140p' /tmp/tasks.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+> ## Documentation Index
+> Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Tasks
+
+> Asynchronous task execution for long-running MCP operations
+
+The [ext-tasks repository](https://github.com/modelcontextprotocol/ext-tasks) contains the full specification and documentation for MCP Tasks.
+
+<Card title="modelcontextprotocol/ext-tasks" icon="github" href="https://github.com/modelcontextprotocol/ext-tasks">
+  Full specification and documentation for MCP Tasks.
+</Card>
+
+Not every tool call returns instantly. Some operations — CI pipelines, batch
+processing, human approvals — take seconds, minutes, or longer. MCP Tasks let
+servers return a durable handle instead of blocking, so clients can poll for
+progress, provide input when needed, and retrieve the final result after
+reconnecting.
+
+## Why not just block?
+
+You could hold the connection open until the work finishes. Tasks solve
+problems that blocking cannot:
+
+* **No long-lived connections.** Blocking ties up a connection for the duration
+  of the operation. Many clients and transport intermediaries impose timeouts
+  that make this impractical beyond a few seconds.
+* **Crash resilience.** A task ID is a durable handle. If the client
+  disconnects or restarts, it can resume polling with the same ID.
+* **Progress visibility.** Tasks carry status metadata (`working`,
+  `input_required`, `completed`, `failed`, `cancelled`) and optional status
+  messages, giving clients visibility into progress.
+* **Mid-flight interaction.** When a task needs input (e.g., an elicitation for
+  user confirmation), it moves to `input_required` and surfaces the request.
+  The client responds via `tasks/update` — no second connection or unsolicited
+  server-to-client messages required.
+* **Server-directed.** The server decides per-request whether to create a task.
+  Clients opt in once via the extension capability and handle whichever result
+  shape arrives. No per-tool warmup or per-request flag.
+
+## How Tasks work
+
+Tasks extend the standard request flow. When a server decides a request will be
+long-running, it returns a task handle instead of the final result. The client
+polls for completion.
+
+1. **Capability negotiation.** The client includes
+   `io.modelcontextprotocol/tasks` in its per-request capabilities. The server
+   advertises the same extension in its own `server/discover` capabilities.
+
+2. **Task creation.** In response to a supported request, the server returns a
+   `CreateTaskResult` (identified by `resultType: "task"`) containing a `taskId`,
+   initial status, TTL, and suggested polling interval. The task is durably
+   created before the response is sent.
+
+3. **Polling.** The client calls `tasks/get` with the `taskId`. The response
+   carries the current status and, for terminal states, the final result or
+   error.
+
+4. **Mid-flight input.** If the task moves to `input_required`, the `tasks/get`
+   response includes an `inputRequests` map with elicitations or other server
+   requests. The client fulfills these via `tasks/update`.
+
+5. **Completion.** When the status reaches `completed`, the `result` field
+   contains what the original request would have returned synchronously. If the
+   status is `failed`, the `error` field contains the JSON-RPC error.
+
+6. **Cancellation.** The client can send `tasks/cancel` at any time.
+   Cancellation is cooperative — the server acknowledges the intent but is not
+   obligated to stop the work.
+
+```mermaid theme={null}
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Client->>Server: tools/call (with tasks capability)
+    Server-->>Client: CreateTaskResult (taskId, status: working)
+
+    loop Poll until terminal
+        Client->>Server: tasks/get (taskId)
+        Server-->>Client: Task (status: working)
+    end
+
+    Note over Client,Server: Server needs user input
+    Client->>Server: tasks/get (taskId)
+    Server-->>Client: Task (status: input_required, inputRequests)
+    Client->>Server: tasks/update (taskId, inputResponses)
+    Server-->>Client: ack
+
+    loop Poll until terminal
+        Client->>Server: tasks/get (taskId)
+        Server-->>Client: Task (status: working)
+    end
+
+    Client->>Server: tasks/get (taskId)
+    Server-->>Client: Task (status: completed, result)
+```
+
+## When to use Tasks
+
+Tasks are a good fit when your use case involves:
+
+**Long-running operations.** CI pipelines, batch data processing, or model
+training jobs that take minutes or hours.
+
+**Human-in-the-loop workflows.** Approval gates, review steps, or any operation
+that pauses for user confirmation. The task moves to `input_required` and the
+client presents the request.
+
+**External job systems.** If your server wraps an API that already uses job IDs
+(cloud deployments, async APIs, queued work), return a task when you create the
+job and resolve it when the job completes.
+
+**Unreliable connections.** Mobile clients, intermittent networks, or
+environments where connections drop. Task IDs survive disconnects.
+
+**Batch processing.** Operations that process many items (bulk imports, mass
+updates) where partial progress is meaningful. Status messages report progress.
+
+## Task lifecycle
+
+| Status           | Meaning                                                                    |
+| ---------------- | -------------------------------------------------------------------------- |
+| `working`        | The operation is in progress.                                              |
+| `input_required` | The server needs client input before continuing. See `inputRequests`.      |
+| `completed`      | The operation finished. The `result` field contains the final output.      |
+| `failed`         | A JSON-RPC error occurred during execution. The `error` field has details. |
+| `cancelled`      | The operation was cancelled (not always honored).                          |
+
+`completed`, `failed`, and `cancelled` are terminal — once reached, the task's
+state does not change.
+
+## Notifications
+
+Servers can push status updates via `notifications/tasks`. Clients opt
+into these through the `subscriptions/listen` mechanism. Each notification
+carries the full task state, eliminating the need for an extra `tasks/get`
+round-trip.
+
+exec
+/bin/zsh -lc "sed -n '140,260p' /tmp/tasks.md; echo ===; grep -n \"cacheScope\\|CacheableResult\\|_meta\\|etag\" /tmp/mcp-changelog.md" in /Volumes/External/Projects/deepcrm.live
+ exited 1 in 0ms:
+round-trip.
+
+Polling is the default. If a server supports notifications, clients can rely on
+them instead of polling.
+
+## Implementation guide
+
+### For MCP clients
+
+To consume task-augmented responses, your client must:
+
+<Steps>
+  <Step title="Declare support">
+    Include the extension in its per-request capabilities:
+
+    ```jsonc theme={null}
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "...",
+      "params": {
+        // Other fields...
+        "_meta": {
+          // Other fields...
+          "io.modelcontextprotocol/clientCapabilities": {
+            "extensions": {
+              "io.modelcontextprotocol/tasks": {},
+            },
+          },
+        },
+      },
+    }
+    ```
+  </Step>
+
+  <Step title="Handle polymorphic results">
+    When issuing a supported request (e.g., `tools/call`), be prepared to receive
+    either the standard result or a `CreateTaskResult` with `resultType: "task"`.
+  </Step>
+
+  <Step title="Poll for completion">
+    Call `tasks/get` with the returned `taskId`, respecting the `pollIntervalMs`
+    value. Continue polling until the task reaches a terminal status (`completed`,
+    `failed`, or `cancelled`).
+  </Step>
+
+  <Step title="Handle input requests">
+    If the task status is `input_required`, read the `inputRequests` map, present
+    the requests to the user or model, and submit responses via `tasks/update`.
+  </Step>
+
+  <Step title="Persist task IDs">
+    Store task IDs durably so polling can resume after a client crash or restart.
+  </Step>
+</Steps>
+
+### For MCP servers
+
+To return tasks from your server:
+
+<Steps>
+  <Step title="Advertise support">
+    Include the extension in your `server/discover` capabilities:
+
+    ```jsonc theme={null}
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        // Other fields...
+        "capabilities": {
+          "extensions": {
+            "io.modelcontextprotocol/tasks": {},
+          },
+        },
+      },
+    }
+    ```
+  </Step>
+
+  <Step title="Check client capabilities">
+    Before returning a `CreateTaskResult`, verify that the client included the
+    extension in its per-request capabilities. Never return a task to a client that
+    did not declare support.
+  </Step>
+
+  <Step title="Return CreateTaskResult">
+    When a request will be long-running, respond with `resultType: "task"` and a
+    `Task` object containing a unique `taskId`, initial status, `ttlMs`, and
+    `pollIntervalMs`. The task must be durably created before sending the response.
+  </Step>
+
+  <Step title="Serve tasks/get">
+    Return the current task state on each poll. For terminal states, include the
+    `result` (on `completed`) or `error` (on `failed`) field.
+  </Step>
+
+  <Step title="Handle tasks/update">
+    Accept `inputResponses` keyed to outstanding `inputRequests`. Acknowledge with
+    an empty result. Ignore responses for unknown or already-satisfied keys.
+  </Step>
+
+  <Step title="Handle tasks/cancel">
+    Acknowledge cancellation requests with an empty result. Honor them when
+    possible, but cancellation is cooperative — the task may still reach a
+    non-`cancelled` terminal status.
+  </Step>
+</Steps>
+
+## Client support
+
+<Note>
+  MCP Tasks is an extension to the [core MCP specification](/specification/latest). Host
+  support varies by client.
+</Note>
+
+See the [client matrix](/extensions/client-matrix) for extension support across
+clients. Task support requires explicit opt-in from both client and server.
+
+## Specification
+
+zsh:1: == not found
+
+exec
+/bin/zsh -lc "grep -n \"cacheScope\\|Cacheable\\|ttlMs\" /tmp/mcp-changelog.md; curl -sL --max-time 30 https://modelcontextprotocol.io/specification/2026-07-28/basic/index.md -o /tmp/basic.md; grep -n \"_meta\\|serverInfo\\|clientInfo\" /tmp/basic.md | head -30" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 468ms:
+195:  Every request supplies this metadata in its [`_meta`](#_meta) field.
+324:### `_meta`
+326:The `_meta` property/parameter is used by MCP to allow clients and servers
+332:**Key name format:** valid `_meta` key names have two segments: an optional **prefix**, and a **name**.
+350:The following `_meta` keys are reserved by this specification:
+356:| `io.modelcontextprotocol/clientInfo`         | Client name and version                                     | Per-request protocol fields (below)                                     |
+363:define additional `_meta` keys under the `io.modelcontextprotocol/` prefix, and
+369:Client requests carry the following `io.modelcontextprotocol/*` fields in `_meta`;
+378:| `io.modelcontextprotocol/clientInfo`         | `Implementation`     | No       | Client name and version                                   |
+386:Clients **SHOULD** include `io.modelcontextprotocol/clientInfo` on every request
+399:every result's `_meta`, unless specifically configured not to do so, to
+404:| `io.modelcontextprotocol/serverInfo` | `Implementation` | No       | Server name and version |
+407:  `io.modelcontextprotocol/clientInfo` and `io.modelcontextprotocol/serverInfo`
+415:the server **MUST** include `io.modelcontextprotocol/subscriptionId` in `_meta` so the
+432:Non-normative example of trace context in `_meta`:
+444:    "_meta": {
+
+exec
+/bin/zsh -lc "sed -n '340,420p' /tmp/basic.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+  * For example: `io.modelcontextprotocol/`, `dev.mcp/`, `org.modelcontextprotocol.api/`, and `com.mcp.tools/` are all reserved.
+  * However, `com.example.mcp/` is NOT reserved, as the second label is `example`.
+
+**Name:**
+
+* Unless empty, MUST begin and end with an alphanumeric character (`[a-z0-9A-Z]`).
+* MAY contain hyphens (`-`), underscores (`_`), dots (`.`), and alphanumerics in between.
+
+**Reserved keys:**
+
+The following `_meta` keys are reserved by this specification:
+
+| Key                                          | Description                                                 | Defined in                                                              |
+| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `progressToken`                              | Opts the request into progress notifications                | [Progress](/specification/2026-07-28/basic/patterns/progress)           |
+| `io.modelcontextprotocol/protocolVersion`    | Protocol version for a request                              | Per-request protocol fields (below)                                     |
+| `io.modelcontextprotocol/clientInfo`         | Client name and version                                     | Per-request protocol fields (below)                                     |
+| `io.modelcontextprotocol/clientCapabilities` | Client capabilities relevant to a request                   | Per-request protocol fields (below)                                     |
+| `io.modelcontextprotocol/logLevel`           | Minimum log level the server should emit for a request      | [Logging](/specification/2026-07-28/server/utilities/logging)           |
+| `io.modelcontextprotocol/subscriptionId`     | Correlates a notification with its originating subscription | [Subscriptions](/specification/2026-07-28/basic/patterns/subscriptions) |
+| `traceparent`, `tracestate`, `baggage`       | OpenTelemetry trace context propagation                     | OpenTelemetry trace context (below)                                     |
+
+Official [extensions](/specification/2026-07-28/basic/versioning#extension-negotiation)
+define additional `_meta` keys under the `io.modelcontextprotocol/` prefix, and
+third-party extensions use their own vendor prefix.
+In both cases the keys are specified in the extension's documentation.
+
+**Per-request protocol fields:**
+
+Client requests carry the following `io.modelcontextprotocol/*` fields in `_meta`;
+fields marked as required **MUST** be included on every request. Servers use these
+to identify the protocol version and capabilities in use without relying on any
+prior connection state. See
+[Versioning and Compatibility][lifecycle] for version negotiation rules.
+
+| Key                                          | Type                 | Required | Description                                               |
+| -------------------------------------------- | -------------------- | -------- | --------------------------------------------------------- |
+| `io.modelcontextprotocol/protocolVersion`    | `string`             | Yes      | Protocol version for this request (e.g., `"2026-07-28"`)  |
+| `io.modelcontextprotocol/clientInfo`         | `Implementation`     | No       | Client name and version                                   |
+| `io.modelcontextprotocol/clientCapabilities` | `ClientCapabilities` | Yes      | Client capabilities relevant to this request              |
+| `io.modelcontextprotocol/logLevel`           | `LoggingLevel`       | No       | Minimum log level the server should emit for this request |
+
+A request missing any required field is malformed; the server **MUST** reject it with
+JSON-RPC error code `-32602` (Invalid params). On HTTP, the response status **MUST** be
+`400 Bad Request`.
+
+Clients **SHOULD** include `io.modelcontextprotocol/clientInfo` on every request
+unless specifically configured not to do so.
+
+A server **MUST NOT** rely on capabilities the client has not declared. If
+processing a request requires a capability the client did not include in
+`io.modelcontextprotocol/clientCapabilities`, the server **MUST** return a
+[`MissingRequiredClientCapabilityError`](/specification/2026-07-28/schema#missingrequiredclientcapabilityerror)
+(`-32021`) whose `data.requiredCapabilities` lists the missing capabilities. On
+HTTP, the response status **MUST** be `400 Bad Request`.
+
+**Per-response protocol fields:**
+
+Servers **SHOULD** include the following `io.modelcontextprotocol/*` field in
+every result's `_meta`, unless specifically configured not to do so, to
+identify themselves without relying on any prior connection state:
+
+| Key                                  | Type             | Required | Description             |
+| ------------------------------------ | ---------------- | -------- | ----------------------- |
+| `io.modelcontextprotocol/serverInfo` | `Implementation` | No       | Server name and version |
+
+<Note>
+  `io.modelcontextprotocol/clientInfo` and `io.modelcontextprotocol/serverInfo`
+  are self-reported by the sender and are not verified by the protocol. They are
+  intended for display, logging, and debugging. Implementations **SHOULD NOT**
+  use them to change the behavior of the client or server, and **SHOULD NOT**
+  rely on them for security decisions.
+</Note>
+
+On notifications delivered via a [`subscriptions/listen`][subscriptions-listen] stream,
+the server **MUST** include `io.modelcontextprotocol/subscriptionId` in `_meta` so the
+client can correlate the notification with the originating subscription request.
+
+[lifecycle]: /specification/2026-07-28/basic/versioning
+
+[subscriptions-listen]: /specification/2026-07-28/basic/patterns/subscriptions
+
+exec
+/bin/zsh -lc "curl -sL --max-time 30 https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/caching.md -o /tmp/caching.md; wc -c /tmp/caching.md; grep -n \"ttlMs\\|cacheScope\\|_meta\\|etag\\|CacheableResult\" /tmp/caching.md | head -30" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 388ms:
+       4 /tmp/caching.md
+
+exec
+/bin/zsh -lc "curl -sL --max-time 30 \"https://modelcontextprotocol.io/specification/2026-07-28/server/tools.md\" -o /tmp/tools.md; wc -c /tmp/tools.md; grep -n \"ttlMs\\|cacheScope\\|structuredContent\\|outputSchema\\|_meta\" /tmp/tools.md | head -30" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 253ms:
+   24314 /tmp/tools.md
+15:  For brevity, the request examples on this page omit the `_meta` request
+19:  the required `_meta` fields; see
+20:  [`_meta`](/specification/2026-07-28/basic/index#meta).
+129:    "ttlMs": 300000,
+130:    "cacheScope": "public"
+299:* `outputSchema`: Optional JSON Schema defining expected output structure
+494:**Structured** content is returned as a JSON value in the `structuredContent` field of a result. This can be any JSON value (object, array, string, number, boolean, or null) that conforms to the tool's `outputSchema` if one is defined.
+499:  `structuredContent` is server-produced result data and is unrelated to LLM
+528:  "outputSchema": {
+563:    "structuredContent": {
+583:  "outputSchema": {
+612:    "structuredContent": [
+700:  "structuredContent": { "basket_id": "bsk_a1b2c3" }
+795:     when validating tool inputs and outputs against `inputSchema` and `outputSchema`
+
+exec
+/bin/zsh -lc "sed -n '100,145p' /tmp/tools.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resultType": "complete",
+    "tools": [
+      {
+        "name": "get_weather",
+        "title": "Weather Information Provider",
+        "description": "Get current weather information for a location",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "City name or zip code"
+            }
+          },
+          "required": ["location"]
+        },
+        "icons": [
+          {
+            "src": "https://example.com/weather-icon.png",
+            "mimeType": "image/png",
+            "sizes": ["48x48"]
+          }
+        ]
+      }
+    ],
+    "nextCursor": "next-page-cursor",
+    "ttlMs": 300000,
+    "cacheScope": "public"
+  }
+}
+```
+
+### Calling Tools
+
+To invoke a tool, clients send a `tools/call` request:
+
+**Request:**
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+
+exec
+/bin/zsh -lc "python3 - <<'EOF'
+import re
+text = open('docs/mcp-surface.md').read()
+# extract table rows: | "'`tool` | Description | ...
+for line in text.splitlines():
+    m = re.match(r'"'\\| "'`(crm_[a-z_]+)` '"\\| (.*?) \\|', line)
+    if m:
+        desc = m.group(2)
+        print(len(desc), m.group(1))
+EOF" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+153 crm_schema_get
+138 crm_object_type_define
+70 crm_object_type_update
+101 crm_object_type_archive
+145 crm_attribute_define
+189 crm_attribute_update
+110 crm_attribute_archive
+149 crm_relation_type_define
+53 crm_relation_type_archive
+154 crm_matching_rule_set
+110 crm_template_apply
+253 crm_record_create
+124 crm_record_update
+130 crm_record_assert
+134 crm_record_get
+149 crm_records_query
+108 crm_records_bulk_assert
+120 crm_record_delete
+44 crm_record_restore
+90 crm_record_at
+72 crm_record_history
+165 crm_link
+37 crm_unlink
+114 crm_links_list
+152 crm_list_create
+47 crm_list_add
+27 crm_list_remove
+37 crm_list_entries
+70 crm_view_save
+17 crm_view_run
+156 crm_activity_log
+37 crm_note_add
+121 crm_record_timeline
+65 crm_task_create
+43 crm_task_update
+36 crm_tasks_list
+138 crm_pipeline_summary
+128 crm_search
+158 crm_find_duplicates
+254 crm_merge_records
+31 crm_unmerge
+198 crm_data_quality
+132 crm_export
+170 crm_changes_since
+99 crm_webhook_set
+39 crm_webhook_list
+17 crm_webhook_delete
+
+exec
+/bin/zsh -lc "grep -n \"structuredContent\\|resultType\\|isError\" /tmp/tools.md | head; sed -n '680,720p' /tmp/tools.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+103:    "resultType": "complete",
+162:    "resultType": "complete",
+169:    "isError": false
+187:    "resultType": "input_required",
+494:**Structured** content is returned as a JSON value in the `structuredContent` field of a result. This can be any JSON value (object, array, string, number, boolean, or null) that conforms to the tool's `outputSchema` if one is defined.
+499:  `structuredContent` is server-produced result data and is unrelated to LLM
+556:    "resultType": "complete",
+563:    "structuredContent": {
+605:    "resultType": "complete",
+612:    "structuredContent": [
+  This section is non-normative guidance for tool design. The protocol has no
+  concept of a state handle; from the wire's perspective a handle is an ordinary
+  string in a tool result and an ordinary argument to subsequent tool calls.
+</Note>
+
+MCP has no protocol-level session, so a server cannot rely on implicit
+per-connection state to relate one tool call to the next. Servers that need to
+maintain state across calls — a shopping cart, an open browser context, a
+database transaction — should do so by returning an explicit handle from a
+creation tool and accepting that handle as an argument on subsequent calls.
+
+For example, a server that manages a shopping cart might expose:
+
+```jsonc theme={null}
+// → tools/call
+{ "name": "create_basket", "arguments": {} }
+
+// ← result
+{
+  "content": [{ "type": "text", "text": "Created basket bsk_a1b2c3" }],
+  "structuredContent": { "basket_id": "bsk_a1b2c3" }
+}
+
+// → tools/call
+{
+  "name": "add_item",
+  "arguments": { "basket_id": "bsk_a1b2c3", "sku": "..." }
+}
+```
+
+The model is responsible for carrying `basket_id` forward; the server stores
+the cart contents under that key and looks them up on each call.
+
+When designing handles, servers should consider:
+
+* **Authorization.** For authenticated servers, a handle is a name, not a
+  capability. The server should validate the caller's authorization against the
+  handle on every call. For unauthenticated servers, where the handle is
+  necessarily a bearer token, it should be generated with sufficient entropy
+  (e.g., a UUIDv4) and given a bounded lifetime.
+* **Opacity.** Handles that encode internal structure invite parsing or
+
+exec
+/bin/zsh -lc "sed -n '480,520p' /tmp/tools.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+    "text": "fn main() {\n    println!(\"Hello world!\");\n}",
+    "annotations": {
+      "audience": ["user", "assistant"],
+      "priority": 0.7,
+      "lastModified": "2025-05-03T14:30:00Z"
+    }
+  }
+}
+```
+
+Embedded resources support the same [Resource annotations](/specification/2026-07-28/server/resources#annotations) as regular resources to help clients understand how to use them.
+
+#### Structured Content
+
+**Structured** content is returned as a JSON value in the `structuredContent` field of a result. This can be any JSON value (object, array, string, number, boolean, or null) that conforms to the tool's `outputSchema` if one is defined.
+
+For backwards compatibility, a tool that returns structured content SHOULD also return the serialized JSON in a TextContent block.
+
+<Note>
+  `structuredContent` is server-produced result data and is unrelated to LLM
+  "structured outputs" (schema-constrained model generation).
+</Note>
+
+#### Output Schema
+
+Tools may also provide an output schema for validation of structured results.
+If an output schema is provided:
+
+* Servers **MUST** provide structured results that conform to this schema.
+* Clients **SHOULD** validate structured results against this schema.
+
+Example tool with output schema:
+
+```json theme={null}
+{
+  "name": "get_weather_data",
+  "title": "Weather Data Retriever",
+  "description": "Get current weather data for a location",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+
+codex
+Now let me check the brief §6 references to resource URIs (`crm://views/{id}` vs mcp-surface `{slug}`) and resources template syntax expectations, plus check `docs/schema-engine.md` §5/§10 existence since tools defer to it.
+exec
+/bin/zsh -lc 'grep -n "''^## '"\\|"'^### " docs/schema-engine.md; grep -n "resources/templates/list'"\\|resources/list\" docs/mcp-surface.md docs/spec/contracts.md" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+5:## 1. Principles
+13:## 2. Prisma schema (`packages/db/prisma/schema.prisma`)
+625:## 3. Attribute type registry (`packages/schema-engine/src/attribute-types/`)
+669:## 4. Write path — `applyWrite(tx, ctx, schema, op)`
+691:## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
+710:## 6. Matching rules
+720:## 7. Merge — `planMerge` + `executeMerge`
+732:## 8. Search document
+736:## 9. Templates (`packages/schema-engine/src/templates/*.json`)
+746:## 10. Error codes (`@deepcrm/schemas/errors.ts`)
+docs/mcp-surface.md:9:- `tools/list`, `resources/list`, `prompts/list` results carry `_meta["io.modelcontextprotocol/cache"] = { ttlMs: 300000, cacheScope: "tenant" }` and an `etag` = `schema_version`.
+
+exec
+/bin/zsh -lc "sed -n '746,800p' docs/schema-engine.md; grep -n \"saas\\|agency\" docs/spec/templates/*.json | head; ls docs/spec/templates/" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+## 10. Error codes (`@deepcrm/schemas/errors.ts`)
+
+`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `LIMIT_EXCEEDED`, `INTERNAL`.
+standard_crm.json
+system.json
+
+exec
+/bin/zsh -lc "sed -n '691,745p' docs/schema-engine.md; grep -n \"duplicate\\|DUPLICATE\\|assert\" docs/schema-engine.md | sed -n '1,20p'" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
+
+```json
+{ "and": [
+    { "attribute": "stage", "op": "in", "value": ["qualified", "proposal"] },
+    { "attribute": "amount", "op": "gte", "value": 10000 },
+    { "or": [
+        { "attribute": "owner", "op": "eq", "value": { "type": "human", "id": "usr_1" } },
+        { "attribute": "tags", "op": "contains", "value": "enterprise" }
+    ]},
+    { "not": { "attribute": "close_date", "op": "is_null" } },
+    { "linked_to": { "relation": "deal_for_company", "record_id": "…", "direction": "from" } },
+    { "system": "last_activity_at", "op": "lt", "value": "2026-07-01T00:00:00Z" },
+    { "text": "packaging" }
+]}
+```
+
+Ops by type: `eq neq in not_in is_null is_not_null` (all); `contains starts_with` (text, email, url, domain, personal_name, select-multi); `gt gte lt lte between` (number, currency.amount, percent, rating, date, datetime, timestamp_system). `text` = full-text on `record_search.tsv`. Sort: `[{attribute|system, direction}]`, max 3 keys. Pagination: opaque cursor = base64 of the last sort values + id; `limit` 1–200 (default 50). Attribute values are read as `data->>slug` with casts per type; indexed attributes use expression indexes `CREATE INDEX CONCURRENTLY records_<objtype>_<slug> ON records ((data->>'slug')) WHERE object_type_id = '…'` created by the worker job `attribute.index` when `isIndexed` is set (this is DML-free schema metadata + an index; it is the one exception to "no DDL", runs `CONCURRENTLY`, and is idempotent).
+
+## 6. Matching rules
+
+`{attribute_slugs, method, threshold?, action}` ordered by `position`. Evaluate on create/assert against non-deleted, non-merged records of the same type:
+
+- `exact` — every listed attribute's raw value equal.
+- `normalized` — every listed attribute's `normalize(value)` equal (uses `record_unique_keys` when the attribute is unique, else a `data->>slug` comparison on normalised values stored in a per-attribute normalised shadow key `_n.<slug>` inside `data`).
+- `fuzzy` — `similarity(display_name, candidate) >= threshold` via `pg_trgm`, only allowed on `text`/`personal_name`/`domain`.
+
+Result: `candidates: [{record_id, rule_position, evidence: [{attribute, value}]}]`. The engine never merges on its own.
+
+## 7. Merge — `planMerge` + `executeMerge`
+
+Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id}`, `reason`.
+1. Lock all records (sorted). All same object type, same tenant, none deleted/merged.
+2. For each attribute: chosen value = `field_choices[slug]`'s value if given; else survivor's non-null; else newest non-null among merged (by that attribute's last `set` change). `isMulti` ⇒ union de-duplicated by `normalize`.
+3. Unique keys: move losers' keys to survivor where survivor lacks them; drop the rest.
+4. Links: re-point `from_record_id`/`to_record_id` from losers to survivor; collapse duplicates on `(relation_type, from, to)` keeping the oldest; enforce cardinality (a `*_to_one` conflict keeps survivor's own link and ends the loser's).
+5. List entries re-pointed (duplicate ⇒ drop the loser's).
+6. Losers: `merged_into_id = survivor`, `deleted_at = now`; one `merge` change on the survivor with `snapshot = {survivorBefore, losers: [...full pre-images including links]}`, one `merge` change on each loser.
+7. Reads by a loser id return the survivor with `redirected_from: loserId` (service-level redirect, one hop).
+8. `unmerge(merge_change_id)` restores from the snapshot within `DEEPCRM_RETENTION_DAYS`; changes made to the survivor after the merge are kept; re-linking is best-effort and reported.
+
+## 8. Search document
+
+`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). Max 8 KiB. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
+
+## 9. Templates (`packages/schema-engine/src/templates/*.json`)
+
+`standard_crm` (person, company, deal + relations + matching rules as in brief §5.6), `system` (activity, note, task, their relation types — applied automatically on tenant provision), later `saas`, `agency`. Template application is idempotent: existing slugs are left untouched; new ones added; never archives.
+
+System object types created on provision:
+- `activity`: `kind (select: email|call|meeting|note|message|task_event|custom)`, `occurred_at (datetime, required)`, `direction (select: inbound|outbound|internal)`, `subject (text)`, `body (rich_text)`, `participants (actor_reference, multi)`, `external_ref (text, unique)`.
+- `note`: `title (text)`, `body (rich_text, required)`.
+- `task`: `title (text, required)`, `body (rich_text)`, `status (status: open|in_progress|done|cancelled)`, `due_at (datetime)`, `assignee (actor_reference)`, `priority (select: low|normal|high|urgent)`.
+- Relation types (`fromObjectTypeId` set, `toObjectTypeId` null = any): `activity_about`, `note_about`, `task_about` — `many_to_many`, `on_delete: unlink`.
+
+671:Ops: `create`, `update`, `assert`, `delete`, `restore`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` with `isolationLevel: 'ReadCommitted'` and explicit advisory locks.
+675:3. **Validate & normalise** — per attribute `valueSchema`; `isMulti` ⇒ array, de-duplicated by `normalize`; `isRequired` on create ⇒ present and non-null; `record_reference` ⇒ target exists, same tenant, not deleted/merged, `objectTypes` allowed.
+678:6. **Unique keys** — delete old keys for changed unique attributes, insert new `(attribute_id, normalized)`; unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (the conflicting record id is read back in the same tx).
+679:7. **Matching rules** (create/assert only) — evaluate §6; `block` ⇒ `DUPLICATE_FOUND {candidates}`; `warn` ⇒ continue and attach `duplicates` to the result.
+687:`assert`: resolve `match_attribute` (must be `isUnique`) → normalise the incoming value → look up `record_unique_keys` → `update` if found else `create`. Returns `{record, created: boolean}`.
+712:`{attribute_slugs, method, threshold?, action}` ordered by `position`. Evaluate on create/assert against non-deleted, non-merged records of the same type:
+724:2. For each attribute: chosen value = `field_choices[slug]`'s value if given; else survivor's non-null; else newest non-null among merged (by that attribute's last `set` change). `isMulti` ⇒ union de-duplicated by `normalize`.
+726:4. Links: re-point `from_record_id`/`to_record_id` from losers to survivor; collapse duplicates on `(relation_type, from, to)` keeping the oldest; enforce cardinality (a `*_to_one` conflict keeps survivor's own link and ends the loser's).
+727:5. List entries re-pointed (duplicate ⇒ drop the loser's).
+748:`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `LIMIT_EXCEEDED`, `INTERNAL`.
+
+codex
+I have all the material I need. Let me also check a couple of details in auth docs and the webhooks section of `events.md` for the review's completeness, then write the findings.
+exec
+/bin/zsh -lc "grep -n \"resourcelistchanged\\|listChanged\\|subscriptions/listen\\|notifications\" docs/*.md docs/spec/*.md | head; grep -rn \"templates\" docs/mcp-surface.md | head" in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+docs/mcp-surface.md:43:| `crm://templates` | available template slugs with descriptions |
+
+exec
+/bin/zsh -lc 'mkdir -p reviews' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+exec
+/bin/zsh -lc "cat > reviews/3-agent-consumer-mcp.md <<'EOF'
+# Review 3 — Agent-consumer ergonomics + MCP 2026-07-28 conformance
+
+Perspective: a mid-tier LLM tool-user consuming the surface, plus a protocol
+conformance audit. Docs reviewed: "'`docs/mcp-surface.md`, `docs/spec/contracts.md`,
+`docs/spec/protocol-flows.md`, `docs/brief.md` §6, `docs/spec/templates/*.json`,
+`docs/schema-engine.md` §5/§10 (referenced by tool descriptions).
+
+Conformance claims were checked against the live MCP 2026-07-28 spec pages
+(changelog, `basic/index` (`_meta`), `basic/patterns/mrtr`, `server/tools`,
+`docs/extensions/tasks`) fetched from modelcontextprotocol.io on 2026-08-23.
+Items I could not verify against a fetched page are marked **verify against spec**.
+
+Severity: **B** = blocks/will fail on the wire or breaks agents outright;
+**M** = repeated agent failure mode / conformance gap with a workaround;
+**L** = polish, foot-gun, or documentation hole.
+
+---
+
+## Part A — MCP 2026-07-28 conformance
+
+### A1. **B** MRTR `inputRequests` shape is not the spec shape
+**Where:** `docs/mcp-surface.md` §0.4; `docs/spec/contracts.md` `mrtr.ts`;
+`docs/spec/protocol-flows.md` F5, F6.
+**Scenario:** The docs define `inputRequests` as an **array** of
+`{ id, kind: "confirmation"|"approval", message, schema }` — a bespoke DeepCRM
+discriminated union. The 2026-07-28 spec defines `inputRequests` as a **map**
+whose values MUST be one of the *standard* request objects
+(`elicitation/create`, `sampling/createMessage`, `roots/list`) with real
+`method`/`params` fields, e.g.
+`{ "confirm": { "method": "elicitation/create", "params": { "mode": "form", "message": "…", "requestedSchema": {…} } } }`.
+`kind: "confirmation"` / `kind: "approval"` do not exist in the protocol. A
+spec-conformant client (and the whole point of MRTR is that the *client*, not
+the agent, fulfills these) will not know what to do with this array; DeepCRM'"'s
+confirmation flow silently degrades to \"client ignores it, agent retries with
+a made-up "'`inputResponses` blob".
+**Fix:** Re-express both flows as standard elicitations:
+`inputRequests: { confirm: { method: "elicitation/create", params: { mode: "form", message, requestedSchema: { properties: { confirmed: { type: "boolean" } }, required: ["confirmed"] } } } }`,
+and the retry'"'s "'`inputResponses.confirm` is an `ElicitResult`
+`{ action: "accept", content: { confirmed: true } }`. The approval flow carries
+the token server-side in `requestState` (see A2), not as a bespoke
+`approval_token` field the agent must echo in a non-standard envelope.
+
+### A2. **B** No `requestState`; retry correlation is underspecified and replayable
+**Where:** `docs/mcp-surface.md` §0.4; `docs/spec/protocol-flows.md` F5/F6.
+**Scenario:** The spec'"'s retry carries "'`requestState` (opaque, integrity-protected
+blob) alongside `inputResponses`, and servers "MUST NOT inspect-modify-assume"
+rules apply to the client. F6 relies on `approval_token` + "identical args" and
+an `arguments_hash` stored in an `approval_requests` row — server-side state,
+which the spec tolerates but the docs never state how the retry is bound to the
+original request absent `requestState`. Worse, §0.4'"'s confirmation example has
+no state at all: the client retries "'`crm_attribute_archive` with
+`inputResponses: { confirm: { confirmed: true } }` — nothing binds that
+confirmation to the object/attribute/count that was shown, so a stale
+confirmation can be replayed against a different archive call by a buggy or
+racing client. The spec explicitly says servers for which state must be
+consumed at most once MUST enforce that server-side; F6 does this for approvals
+but F5 confirmations have no such binding described.
+**Fix:** Mandate `requestState` on every `InputRequiredResult` (HMAC-protected
+payload: principal, tool name, args hash, impact summary, TTL), require the echo,
+and document it in §0.4/F5/F6. This also unblocks truly stateless horizontal
+scaling of the API.
+
+### A3. **M** `inputResponses` is not part of any tool'"'s input schema
+**Where:** "'`docs/spec/contracts.md` `tools.ts` (no `inputResponses` anywhere);
+`mrtr.ts` defines `InputResponses` standalone.
+**Scenario:** In the spec, the retry is "the original request plus
+`inputResponses`/`requestState`" at the protocol params level, not inside the
+tool'"'s "'`arguments`. If DeepCRM expects `inputResponses` inside `arguments`
+(the docs are ambiguous — F5 shows it glued onto the call), then (a) zod schemas
+strip/reject unknown keys, so the retry fails validation; (b) a conformant
+client puts it at params level and the server never sees it. Either way the
+round-trip breaks in one of the two plausible readings.
+**Fix:** State explicitly: `inputResponses` and `requestState` live in
+`tools/call` *params*, sibling to `arguments`; the server unwraps them before
+zod validation. Add this to §0.4 and F5.
+
+### A4. **M** `resultType: "complete"` required on all results; never mentioned
+**Where:** `docs/mcp-surface.md` §0.3, §0.4; `docs/spec/protocol-flows.md` F1.
+**Scenario:** 2026-07-28 changelog item 8: all results carry a required
+`resultType` (`"complete"` / `"input_required"`). The docs only ever show
+`resultType` on the MRTR path; F1'"'s success example has none. An implementer
+following these docs produces results a strict 2026-07-28 client flags as
+legacy/pre-revision.
+**Fix:** Add to §0.3: every result carries "'`resultType: "complete"` unless it is
+an `InputRequiredResult`; show it in F1.
+
+### A5. **M** Tasks: creation result shape, capability gating, `tasks/update` missing
+**Where:** `docs/mcp-surface.md` §0.5; `docs/spec/protocol-flows.md` F7.
+**Scenario:** Three gaps vs the extension docs (modelcontextprotocol.io
+`docs/extensions/tasks`):
+1. Task creation must be a `CreateTaskResult` with `resultType: "task"` and a
+   `Task` object (`taskId`, initial status, `ttlMs`, `pollIntervalMs`) — and the
+   server MUST NOT return it unless the client declared
+   `extensions: { "io.modelcontextprotocol/tasks": {} }` in per-request
+   `clientCapabilities`. The docs return a plain tool result `{ task_id }` and
+   specify no capability check or fallback for non-tasks clients.
+2. `tasks/update` exists in the extension (mid-flight input) — docs mention only
+   `tasks/get`/`tasks/cancel`. If any long job ever needs input (e.g. a bulk
+   import hitting an approval-gated row), there is no documented path.
+3. `task_id` vs spec `taskId` casing is unspecified for the wire.
+**Fix:** §0.5: return `resultType: "task"` per the extension; define behavior
+when the client didn'"'t opt in (run synchronously up to a cap, or
+"'`MissingRequiredClientCapabilityError` -32021); document `tasks/update` support
+(or explicitly "not supported"); use `taskId` on the wire.
+
+### A6. **M** Cache hints: wrong shape and illegal `cacheScope` value
+**Where:** `docs/mcp-surface.md` §0.1.
+**Scenario:** Spec (`server/tools` result example; changelog SEP-2549): `ttlMs`
+and `cacheScope` are **top-level result fields** on list/read results, and
+`cacheScope ∈ {"public","private"}`. The docs put them under
+`_meta["io.modelcontextprotocol/cache"]` and invent `cacheScope: "tenant"`,
+which is not a legal value — a client keying shared caches on it will treat it
+as garbage. The custom `etag = schema_version` is fine as an extension field but
+should also be documented as DeepCRM-vendor `_meta`, not implied to be spec.
+**Fix:** Emit `ttlMs: 300000, cacheScope: "private"` as top-level fields on
+`tools/list`, `resources/list`, `resources/read`, `prompts/list` (tenant-scoped
+data ⇒ `"private"`, never `"public"`); keep `etag` as a documented
+`live.deepcrm/` vendor `_meta` key.
+
+### A7. **M** `server/discover` is MUST in 2026-07-28; undocumented
+**Where:** absent from `docs/mcp-surface.md` §0.1 and `docs/spec/protocol-flows.md`.
+**Scenario:** Changelog item 3: servers MUST implement `server/discover`
+(protocol versions, capabilities incl. the tasks extension, identity). The docs
+describe server info `{ name, version }` but no discover RPC, so a conformant
+client'"'s first call gets "'`-32601`.
+**Fix:** Add `server/discover` to §0.1 with the advertised extensions
+(`io.modelcontextprotocol/tasks`) and supported version list.
+
+### A8. **L** Per-request `_meta` and header requirements only stated in passing
+**Where:** `docs/spec/protocol-flows.md` intro line; `docs/brief.md` §3.3.
+**Scenario:** `io.modelcontextprotocol/protocolVersion` and
+`clientCapabilities` are REQUIRED on every request (missing ⇒ -32602 / HTTP 400);
+`Mcp-Method`/`Mcp-Name` headers are REQUIRED on Streamable HTTP POSTs.
+`mcp-surface.md` §0.1 (the normative surface doc) says neither; only the flows
+doc mentions them once. Server-side enforcement behavior (reject vs tolerate)
+is undefined.
+**Fix:** §0.1: state the required inbound `_meta` fields and headers and the
+exact rejection behavior; state that every result carries
+`_meta["io.modelcontextprotocol/serverInfo"]` (the docs'"' \"Server info\" bullet
+does not say where it goes).
+
+### A9. **L** "'`GET /mcp` 405 conflicts with `subscriptions/listen` if ever adopted
+**Where:** `docs/mcp-surface.md` §0.1.
+**Scenario:** 2026-07-28 replaces GET/SSE with `subscriptions/listen`, a
+long-lived POST stream. Today'"'s \"no server-initiated messages\" is coherent, but
+the docs don't say whether "'`subscriptions/listen` is unimplemented (-32601) —
+and nothing can push `toolsListChanged`/`resourcesListChanged` (schema changes!)
+to clients, which makes the 5-minute `ttlMs` the only staleness control.
+`schema.changed` webhooks exist (§8) but that'"'s a different consumer.
+**Fix:** State explicitly that "'`subscriptions/listen` is not implemented and
+that schema staleness is signaled via `SCHEMA_CONFLICT`/`UNKNOWN_ATTRIBUTE`
+errors (F2) — or plan the subscription. Also: `resources/read` on
+`crm://schema` should carry `ttlMs` (it'"'s "'`CacheableResult` too); only
+`tools/list` is mentioned in §0.1/F2.
+
+### A10. **L** No resource *templates* registered despite `{param}` URIs
+**Where:** `docs/mcp-surface.md` §1.
+**Scenario:** `crm://schema/{object_type}` and `crm://views/{slug}` are template
+URIs. Conformant discovery requires `resources/templates/list` entries with
+`uriTemplate` (RFC 6570), else clients can'"'t know "'`{object_type}` is a variable.
+The docs only tabulate static-looking URIs and never mention
+`resources/templates/list`. Also minor doc drift: brief §6.6 says
+`crm://views/{id}`, mcp-surface says `{slug}`.
+**Fix:** Register two resource templates; align the URI variable on `slug`
+everywhere.
+
+### A11. **L** `structuredContent`/`content` convention diverges from spec guidance
+**Where:** `docs/mcp-surface.md` §0.3.
+**Scenario:** Spec: "a tool that returns structured content SHOULD also return
+the serialized JSON in a TextContent block" (backwards compatibility). DeepCRM
+instead returns a *one-line summary* as `content[0].text`. That'"'s legal, but
+clients that read only "'`content` (older or simpler hosts) then cannot see e.g.
+the record id or the `next_cursor` — exactly the values the agent needs to
+continue. For mutation tools whose text summary is "Anna Novak (person)" the
+id never reaches a text-only client.
+**Fix:** Either serialize the JSON into `content` per spec guidance, or at
+minimum guarantee the text summary always contains the primary id/cursor.
+
+### A12. **L** Deterministic `tools/list` order not specified
+**Where:** `docs/mcp-surface.md` §10; absent.
+**Scenario:** Changelog minor 3: servers SHOULD return tools in deterministic
+order for client caching/prompt-cache hits. `pnpm docs:mcp` regeneration implies
+generation order; unstated whether registration order is stable.
+**Fix:** One line in §10: tools are registered and listed in the fixed order of
+§2–§8.
+
+### A13. **L** `description` length: no cap in the spec; self-imposed 300 is fine but unverified by tooling
+**Where:** `docs/mcp-surface.md` §10.
+**Scenario:** The 300-char cap is DeepCRM'"'s own rule (for find/load meta-tools),
+not a spec limit. Current longest registered descriptions: "'`crm_merge_records`
+254 chars, `crm_record_create` 253, `crm_data_quality` 198 — all under 300
+today, but nothing enforces it and the fixes proposed in Part B will push
+several descriptions past 300, forcing a choice between the cap and
+actionability.
+**Fix:** Add a lint/test asserting ≤300 (or drop the cap to a documented
+higher number) — and decide now whether description body or a companion
+`docs`-style resource carries the long guidance (see B2).
+
+---
+
+## Part B — Agent ergonomics
+
+### B1. **B** `crm_record_assert` and `crm_record_get` cannot use the template'"'s unique attributes
+**Where:** "'`docs/spec/contracts.md` `CrmRecordAssert.in.match_attribute`;
+`docs/schema-engine.md` §4 write path ("assert: …look up `record_unique_keys`");
+`docs/spec/templates/standard_crm.json` (`emails`, `domains` are
+`is_multi: true, is_unique: true`).
+**Scenario:** Every doc flow uses `match_attribute: "emails"` / `"domains"`,
+but nothing defines how the matcher picks the lookup *value* for a multi-value
+unique attribute. If the intended semantic is "any element of
+`data.emails` matches any stored key", then an upsert where *different* elements
+of the submitted array collide with *different* existing records (anna@→record1,
+anovak@→record2) has no documented outcome: update both? pick one? error? A
+mid-tier agent will hit this on the second import. `crm_record_get`'"'s
+"'`value` for `match_attribute: "emails"` is likewise undefined (scalar element?
+array?).
+**Fix:** Normative rule in `mcp-surface.md` §3 and schema-engine §4: for a
+multi-value unique match attribute, the match value is the *first array
+element* (or: every element must resolve to the same record, else
+`DUPLICATE_FOUND` with all candidates). Same rule for `crm_record_get.value`.
+Also state that `match_attribute` MUST be `is_unique` (docs imply it; the error
+code for passing a non-unique attribute — `VALIDATION_FAILED`? — is unnamed).
+
+### B2. **M** Description-only guidance for the Filter grammar; agents will flail
+**Where:** `docs/mcp-surface.md` §3 `crm_records_query` ("Filter grammar: see
+`schema-engine.md` §5"); `docs/spec/contracts.md` `filter.ts`
+(`.describe('"'see docs/schema-engine.md §5')"'`).
+**Scenario:** An agent consuming the live server cannot see
+`docs/schema-engine.md`. Its only in-band help is the zod `.describe()` text
+(a URL-less pointer to a doc file) plus whatever the client shows of the
+recursive `Filter` JSON Schema — and zod-lazy recursive unions often render
+poorly or circularly through `zod-to-json-schema`, so the agent may see a
+useless `$ref` loop. Consequence: trial-and-error querying with
+`VALIDATION_FAILED` on op/type mismatches (the op-by-type table lives only in
+docs too).
+**Fix:** (a) Ship the grammar in-band: a `crm://help/filtering` resource (or a
+`docs` field in `crm_schema_get`) with the op-by-type table and 3 worked
+examples; (b) make `VALIDATION_FAILED` issues spell out the allowed ops for the
+attribute'"'s type (\"op 'contains' not valid on type 'date'; use gte/lte/between\");
+(c) verify the generated JSON Schema for "'`Filter` is actually navigable
+(verify against SDK output) — if not, flatten to a non-recursive schema with
+`maxDepth`.
+
+### B3. **M** `data` null-clearing vs `is_multi` and required attributes is under-specified
+**Where:** `docs/spec/contracts.md` `CrmRecordUpdate.in.data` (`.describe('"'null
+clears a value')"'`); `mcp-surface.md` §3.
+**Scenario:** Three foot-guns: (1) patch `{ emails: null }` on a required
+multi attribute — rejected (`VALIDATION_FAILED`) or silently kept? Undocumented.
+(2) Patch `{ tags: [] }` — is `[]` a clear or a no-op distinct from `null`?
+Undocumented. (3) An agent that fetched a record with `redacted_attributes`
+and echoes `data` back in an update will null-clear or validate-fail on
+attributes it cannot see; nothing warns it. Mid-tier models do exactly this
+round-trip.
+**Fix:** Define in §0.2/§3: `null` = unset (rejected with `VALIDATION_FAILED`
+on `is_required`); `[]` = set to empty list (distinct from clear); and make
+`redacted_attributes` present-but-omitted so echo-back patches are naturally
+safe, plus an error message that names the redacted attribute when it is
+written.
+
+### B4. **M** create vs assert vs bulk_assert: decision rule exists but is load-bearing in one sentence
+**Where:** `docs/mcp-surface.md` §3 descriptions.
+**Scenario:** `crm_record_assert`'"'s description says \"The safe default for any
+sync or import\" — good. But "'`crm_record_create`'"'s description doesn't say
+\"prefer "'`crm_record_assert` unless you intentionally want duplicates surfaced",
+so a fresh agent doing a one-off insert has a coin flip. Worse, there'"'s no
+guidance for \"I have 30 rows\" (loop "'`assert` vs `bulk_assert` Task overhead) or
+"I have 3 rows but no unique attribute on the type" (assert is unavailable —
+fall back to create + `crm_find_duplicates`, but no tool description says so).
+`DEEPCRM_MAX_BULK_ROWS`'"'s value is discoverable nowhere in-band; an agent
+submitting 5,000 rows learns the cap only from a "'`LIMIT_EXCEEDED` it cannot
+predict.
+**Fix:** Cross-reference in descriptions ("for one-off inserts; syncing? use
+crm_record_assert; >N rows? crm_records_bulk_assert"), add a `LIMIT_EXCEEDED`
+detail field carrying the numeric cap, and consider exposing caps via
+`crm://schema` or server `server/discover` metadata.
+
+### B5. **M** record_get vs records_query vs search: no "which read do I use" story in descriptions
+**Where:** `docs/mcp-surface.md` §3, §7.
+**Scenario:** Three read tools overlap: `crm_record_get` (by id or unique
+value), `crm_records_query` (structured filter), `crm_search` (free text). The
+descriptions each describe *what*, none describe *when instead of the
+neighbour*. Classic failure: agent has "Anna at Asahi" and calls `crm_search`
+(wasteful, fuzzy) when `crm_records_query` with
+`{ attribute: "emails", op: "eq" }` is exact; or calls `crm_records_query` with
+a `text` filter when `crm_search` semantic would be better. Also,
+`crm_records_query`'"'s filter "'`{ text }` node duplicates `crm_search
+mode: keyword` — two tools doing the same thing with different words, which the
+repo'"'s own rule-zero calls a defect.
+**Fix:** Add \"use X when / use Y instead\" clauses to all three descriptions
+(budget allowing; see A13), and either drop the "'`{ text }` filter node or
+document it strictly as the composable-in-`and` variant for narrowing.
+
+### B6. **M** Linking: two mechanisms (inline `links[]` vs `crm_link`) with contradictory failure modes
+**Where:** `docs/mcp-surface.md` §3/§4; `docs/spec/contracts.md` `LinkInput`.
+**Scenario:** `crm_record_create/assert` accept `links[]`; `crm_link` exists
+separately. Undocumented: is a create with a failing link (bad target id,
+cardinality replace) atomic — record created but link dropped, or whole call
+fails? If the record is created and one link fails, the agent cannot retry the
+call (idempotency key would return the stored partial result) and must discover
+`crm_link` itself. Cardinality is also a silent foot-gun: `crm_link` on a
+`*_to_one` relation "replaces the existing one" — an agent linking a person to
+a new employer unknowingly ends the old employment link; the description says
+it, but the result `{ link }` does not report the replaced link id, so the
+agent can'"'t narrate or undo what happened.
+**Fix:** Document atomicity (recommended: all-or-nothing) in §3; add
+"'`ended_links: [link_id]` to `crm_link`'"'s output when replacement occurred.
+
+### B7. **M** Errors don't consistently say what to do next
+**Where:** "'`docs/spec/contracts.md` `errors.ts`; `docs/schema-engine.md` §10.
+**Scenario:** Good: `DUPLICATE_FOUND` carries candidates; `VERSION_CONFLICT`
+carries `current`; `MERGED` carries `redirect_to`. Gaps:
+- `POLICY_DENIED {resource, action}` doesn'"'t say whether an approval can change
+  the outcome — agent can't distinguish \"ask an admin\" from \"never possible\".
+- "'`APPROVAL_REQUIRED` (F6 rejections) returns a `detail` string but no
+  structured `approval_token`/next-step; the agent must parse prose.
+- `CARDINALITY_VIOLATION` and `DELETE_RESTRICTED` carry no offending link id,
+  so the agent can'"'t offer the fix (\"end link X first\").
+- "'`LIMIT_EXCEEDED` names no limit (see B4).
+- `VALIDATION_FAILED.issues[].path` — JSON Pointer vs dotted path is unstated;
+  agents guess wrong on array indices.
+- No error code at all for "task not found / task already terminal" on
+  `tasks/get`/`tasks/cancel` (raw JSON-RPC -32602?).
+**Fix:** Extend `ErrorPayload`: add `next: string` (machine-checkable hint
+enum: `retry_with_approval`, `fetch_and_retry`, `use_redirect`, `fix_input`,
+`fatal`) and code-specific ids (`link_id`, `limit`). Document `path` format as
+JSON Pointer (RFC 6901).
+
+### B8. **M** Cursor handling: mixing/misuse modes unspecified
+**Where:** `docs/spec/contracts.md` `Cursor` (".describe('"'opaque cursor from a
+previous page')\"); "'`mcp-surface.md` §0.2.
+**Scenario:** Agents routinely mutate filters mid-pagination ("same query but
+now only open deals") and pass the old cursor. Nothing says whether that'"'s
+rejected, silently wrong, or fine. "'`crm_changes_since`'"'s cursor is a *seq*
+(stringified int, \"omit for oldest\"), a different animal from query cursors,
+but both are typed "'`Cursor` with the same description — an agent that feeds a
+query `next_cursor` into `crm_changes_since` gets undefined behavior. Also:
+do cursors expire (retention)? `has_more` exists on `crm_changes_since` but
+not on `crm_records_query` (must infer from `next_cursor: null` — fine, but
+unstated).
+**Fix:** State in §0.2: cursors are bound to (tool, tenant, full argument set);
+a mismatched cursor returns `VALIDATION_FAILED { detail: "cursor_mismatch" }`;
+change-feed cursors are a distinct namespace (different field description,
+different error); document retention/expiry.
+
+### B9. **M** No batch get / count — guaranteed chatty flows
+**Where:** `docs/mcp-surface.md` §3 (absent).
+**Scenario:** Two flows every agent hits: (1) "here are 40 person ids from an
+external system, give me their records" — requires 40 `crm_record_get` calls or
+an `in` filter hack on a synthetic attribute; (2) "how many deals are open?" —
+requires paginating `crm_records_query` (max 200/page) just to count, or
+`include_total: true` (exists in contracts.ts but is missing from the
+mcp-surface.md input column — doc drift), which fetches a page anyway. A
+`crm_records_count` or `aggregate(group_by, metrics)` covers both;
+`crm_pipeline_summary` only works for status pipelines.
+**Fix:** Add `crm_records_count { object_type, filter } → { count }`
+(cheap, exact) and `crm_records_get_many { ids } → { records, missing }`.
+Also fix the `include_total` omission in mcp-surface.md §3.
+
+### B10. **L** No undo of a single change; no schema diff
+**Where:** `docs/mcp-surface.md` §2/§3 (absent); change feed §8.
+**Scenario:** (1) An agent sets the wrong stage on a deal. It can read
+`crm_record_history` and issue a corrective `crm_record_update`, but there'"'s no
+"'`crm_change_revert { change_id }` — for multi-attribute damage (a bad bulk
+import row) the agent must reconstruct old values by hand from `Change.old_value`,
+and `old_value` is typed `unknown` so its shape per attribute type is
+undocumented. (2) After a teammate applies a template, an agent holding a stale
+`crm://schema` cache has no way to ask "what changed since schema_version 12"
+— only full re-read. Given `schema.changed` webhooks exist, a
+`crm_schema_changes_since { version }` is the natural read.
+**Fix:** Consider `crm_change_revert` (scope: `set`/`unset` kinds only) and a
+schema diff tool, or explicitly document the manual-recovery recipe in
+`crm_record_history`'"'s description.
+
+### B11. **L** "'`crm_unlink`'"'s triple form can target the wrong link; result confirms nothing
+**Where:** "'`docs/spec/contracts.md` `CrmUnlink`.
+**Scenario:** With `relation_type + from + to` on a `many_to_many` relation that
+has *history* (link ended and re-created), the active link is presumably unique
+— but if data drift leaves two active, which ends? Undocumented. Output
+`{ unlinked: true }` doesn'"'t echo the "'`link_id` that was ended, so the agent
+cannot record or reverse it precisely (a re-`crm_link` creates a *new* link id,
+losing the edge attributes of the old one).
+**Fix:** Return `{ link_id }`; document the ambiguity behavior
+(error `CARDINALITY_VIOLATION`-style if >1 active, or deterministic newest).
+
+### B12. **L** Approval flow relies on a *different principal* retrying — auth interaction undocumented
+**Where:** `docs/spec/protocol-flows.md` F6; `docs/mcp-surface.md` §0.4.
+**Scenario:** F6 says the retry must "come from a principal whose role is
+admin/owner" — but the retry carries `X-UOA-Delegation` for *that* admin while
+the agent identity stays in `X-Nessie-Context`. Now the change'"'s "'`actor` is
+`agent:<id>` but `on_behalf_of` flips from the original user to the approving
+admin — silently rewriting provenance, and no doc says which identity lands on
+`record_changes.actor/on_behalf_of` for the approved write. An agent planning
+"the human approved, I'"'ll retry\" can accidentally make the admin the owner of
+every subsequent write in the run if delegation tokens are cached per-run.
+**Fix:** Document in F6 exactly which headers change on the approval retry and
+what lands in "'`Change.actor`/`on_behalf_of`; recommend scoping the admin
+delegation to the single retry call.
+
+### B13. **L** `owner` appears twice with different types; `Actor` on writes is forgeable-looking
+**Where:** `docs/spec/contracts.md` `RecordOut.owner: Actor.nullable()` vs
+`person.owner` attribute (`actor_reference`) in `standard_crm.json`;
+`CrmRecordCreate.owner: Actor.optional()`.
+**Scenario:** Two confusions: (1) The template gives `person` an *attribute*
+named `owner` while every record also has a system `owner` field — agents will
+set `data.owner` expecting the record-level field, or vice versa. (2) Callers
+pass `owner`/`assignee` as free-text `Actor { type, id }` — no tool validates
+that `human:usr_x` exists (it'"'s an external UOA id; fair) but nothing in the
+description warns that a typo silently attributes ownership to a nonexistent
+user, and there's no tool to resolve \"which human id is Alice?\".
+**Fix:** Rename the system field in prose (\"record owner (responsibility)\" vs
+attribute), or drop the template's "'`owner` attribute in favor of the system
+field; add `.describe()` warning that Actor ids are not validated against UOA.
+
+### B14. **L** `crm_view_run` vs `crm_records_query` duplication; views lack list/delete
+**Where:** `docs/mcp-surface.md` §5.
+**Scenario:** `crm_view_run` is `crm_records_query` with a saved filter —
+defensible — but there'"'s no "'`crm_view_delete`/`crm_view_archive` (stale views
+accumulate and pollute `crm://views/{slug}` forever) and no `crm_view_list`
+other than… nothing (the resource lists one view by slug; how does an agent
+enumerate view slugs? `crm://views/{slug}` requires knowing the slug; only
+`crm_schema_get` might carry them — brief §6.1 says the schema resource
+includes "views" but `mcp-surface.md` §1'"'s "'`crm://schema` body and
+`SchemaSnapshot` in contracts.ts do not include views. Doc drift.)
+**Fix:** Add view lifecycle tools (or document views as immutable-once-saved),
+add views to `SchemaSnapshot` (aligning contracts.ts with brief §6.1), and a
+`crm://views` index resource.
+
+### B15. **L** `crm_export` has no idempotency/reason; `crm_webhook_set` rotation story missing
+**Where:** `docs/spec/contracts.md` `CrmExport.in`, `CrmWebhookSet.in`.
+**Scenario:** (1) `crm_export` is a mutating-ish, approval-gated, expensive
+tool yet takes neither `reason` nor `idempotency_key` — a retried double-click
+spawns two jobs and two signed URLs; audit has no "why". (2)
+`crm_webhook_set` "Register (or update)" — updating the URL for an existing
+webhook: by what key? There'"'s no "'`id` input; is it upsert-by-URL? If an agent
+calls set twice with the same URL, does the second call rotate `secret`
+(invalidating the first)? Undocumented, and the secret is "shown once", so the
+failure mode is a silently dead webhook.
+**Fix:** Add `reason?`/`idempotency_key?` to `CrmExport`; define webhook
+identity (upsert by URL? return existing without rotating secret unless
+`rotate_secret: true`).
+
+### B16. **L** Prompts reference tools by name but their arguments/types are thin
+**Where:** `docs/mcp-surface.md` §9.
+**Scenario:** `crm/clean-duplicates` says "merge only with human confirmation"
+but the merge path is *approval-gated* (F6), and the prompt doesn'"'t state that
+the gate is enforced server-side (an agent could read the prompt as \"I should
+ask\", then skip it when the human isn't around). Prompts/get results format
+(messages array) is also unspecified, and there's no
+"'`resources/templates/list`/prompts caching statement (prompts/list is
+CacheableResult too).
+**Fix:** Note in the prompt text that approval is enforced by the server, not
+by the agent'"'s good behavior; document the prompts/get message shape; add
+"'`ttlMs`/`cacheScope` note for prompts/list.
+
+### B17. **L** Timeline `hops: 1` fan-out is unbounded in the doc
+**Where:** `docs/mcp-surface.md` §6 `crm_record_timeline`.
+**Scenario:** "hops: 1 also includes linked records (a company'"'s people and
+deals)\" — for a company with 5,000 people, the interleaved timeline is
+dominated by strangers' activities; no per-linked-record cap or
+"'`relation_type` filter exists, and `limit` semantics across hops (total items?
+per record?) is unstated. Agents will call this on big accounts and get noise.
+**Fix:** Document limit semantics under hops=1; consider a `relation_types?:`
+argument; at minimum warn in the description.
+
+### B18. **L** Template/tool drift: `saas`, `agency` are valid enum values but don'"'t exist
+**Where:** "'`docs/spec/contracts.md` `CrmTemplateApply.in.template`
+(`z.enum(['"'standard_crm','saas','agency'])"'`); `docs/spec/templates/` (only
+`standard_crm.json`, `system.json`); schema-engine §9 says "later `saas`,
+`agency`"; `crm://templates` resource lists "available" templates.
+**Scenario:** An agent reads the enum in the tool schema, calls
+`crm_template_apply { template: "saas" }`, and gets… `NOT_FOUND`?
+`VALIDATION_FAILED`? Either way the enum advertised a capability that 404s —
+the exact "agent can'"'t discover what actually works\" failure rule-zero exists
+to prevent. Hard-coding template slugs in the zod enum also means the enum must
+be redeployed to add a template, while "'`crm://templates` implies dynamism.
+**Fix:** Make `template` a plain `Slug` (or `z.string()`) validated against the
+template registry at call time, with `UNKNOWN_TEMPLATE { available: [...] }`
+error; or ship the two missing template files before this enum ships.
+
+### B19. **L** `crm_data_quality` buckets are capped at 100 items with no cursor
+**Where:** `docs/spec/contracts.md` `QualityBucket` (`items: … .max(100)`).
+**Scenario:** A workspace with 5,000 stale records returns `count: 5000` +
+100 items and *no pagination* — the agent can fix 100, re-run, get overlapping
+100, with no cursor or offset. The tool'"'s own description (\"the agent decides
+what to fix\") promises a remediation loop the shape can't support at scale.
+**Fix:** Add "'`cursor?`/`bucket?` pagination or return record-ids-only pages;
+at minimum document the cap in the description.
+
+### B20. **L** `crm_search` returns no cursor and no `total`
+**Where:** `docs/spec/contracts.md` `CrmSearch`.
+**Scenario:** `limit` max 50, no `next_cursor` — "show me more like that" is
+impossible; the agent must re-query with a bigger limit and re-receive
+duplicates. Minor, but it breaks the otherwise uniform pagination convention
+of §0.2, so agents'"' generic \"keep paging\" habit fails silently here.
+**Fix:** Add an optional cursor (or document search as intentionally
+single-page in the description).
+
+---
+
+## Cross-cutting note
+
+The single highest-leverage fix is A1+A2 (MRTR shape + "'`requestState`): the
+confirmation/approval flows are DeepCRM'"'s main human-in-the-loop story, and as
+documented they are not interoperable with any spec-conformant 2026-07-28
+client — the pattern works only if the Nessie client hand-implements DeepCRM's
+bespoke envelope. Second is B1: the template's flagship attributes
+("'`emails`, `domains`) are exactly the ones whose upsert semantics are undefined.
+EOF
+wc -l reviews/3-agent-consumer-mcp.md' in /Volumes/External/Projects/deepcrm.live
+ succeeded in 0ms:
+     507 reviews/3-agent-consumer-mcp.md
+
+codex
+Findings written to [reviews/3-agent-consumer-mcp.md](reviews/3-agent-consumer-mcp.md) (507 lines, 33 findings). I was able to fetch the live 2026-07-28 spec (changelog, `_meta`, MRTR, tools, tasks-extension pages), so conformance items are verified against primary sources, not flagged as guesses. No existing files were modified.
+
+**Headline results:**
+
+Conformance (verified against the fetched spec):
+- **A1/A2 (blocking):** The MRTR shape in §0.4 is not the spec shape. `inputRequests` must be a **map** of standard request objects (`elicitation/create` with `requestedSchema`), not DeepCRM's bespoke array of `{id, kind:"confirmation"|"approval"}` — and there is no `requestState`, so confirmations are unbound/replayable and F5/F6 only work with a hand-rolled client. `inputResponses` placement (params vs tool arguments) is also never pinned down, and `resultType: "complete"` is missing from every success example despite being required.
+- **A5/A6/A7:** Task creation must be `resultType: "task"` gated on the client declaring `io.modelcontextprotocol/tasks` (docs return a plain `{task_id}`); `tasks/update` is unmentioned. Cache hints are in the wrong place — spec puts `ttlMs`/`cacheScope` as top-level result fields with `cacheScope ∈ {public, private}`; `"tenant"` is illegal. `server/discover` is a MUST and is entirely undocumented.
+- Smaller: no `resources/templates/list` for the `{param}` URIs, `structuredContent` text-summary divergence, deterministic `tools/list` order unstated. The 300-char cap is self-imposed (not spec); longest current description is `crm_merge_records` at 254.
+
+Ergonomics:
+- **B1 (worst):** `match_attribute: "emails"`/`"domains"` are multi-value uniques, and the semantics of matching against an array — including two elements colliding with two different records — are undefined everywhere. This is the flagship upsert path.
+- Also: Filter grammar is only discoverable via a doc-file pointer agents can't read; null-vs-`[]` clearing semantics undefined; cursor cross-tool misuse unspecified; no `count`/`get_many` (and `include_total` exists in contracts.ts but not in mcp-surface.md — doc drift); `crm_link`'s silent `*_to_one` replacement reports no `ended_links`; several error codes lack the id/next-step an agent needs to recover; template enum advertises `saas`/`agency` which don't exist; `crm_data_quality` caps at 100 unpaginated items.
+tokens used
+65,742
+Findings written to [reviews/3-agent-consumer-mcp.md](reviews/3-agent-consumer-mcp.md) (507 lines, 33 findings). I was able to fetch the live 2026-07-28 spec (changelog, `_meta`, MRTR, tools, tasks-extension pages), so conformance items are verified against primary sources, not flagged as guesses. No existing files were modified.
+
+**Headline results:**
+
+Conformance (verified against the fetched spec):
+- **A1/A2 (blocking):** The MRTR shape in §0.4 is not the spec shape. `inputRequests` must be a **map** of standard request objects (`elicitation/create` with `requestedSchema`), not DeepCRM's bespoke array of `{id, kind:"confirmation"|"approval"}` — and there is no `requestState`, so confirmations are unbound/replayable and F5/F6 only work with a hand-rolled client. `inputResponses` placement (params vs tool arguments) is also never pinned down, and `resultType: "complete"` is missing from every success example despite being required.
+- **A5/A6/A7:** Task creation must be `resultType: "task"` gated on the client declaring `io.modelcontextprotocol/tasks` (docs return a plain `{task_id}`); `tasks/update` is unmentioned. Cache hints are in the wrong place — spec puts `ttlMs`/`cacheScope` as top-level result fields with `cacheScope ∈ {public, private}`; `"tenant"` is illegal. `server/discover` is a MUST and is entirely undocumented.
+- Smaller: no `resources/templates/list` for the `{param}` URIs, `structuredContent` text-summary divergence, deterministic `tools/list` order unstated. The 300-char cap is self-imposed (not spec); longest current description is `crm_merge_records` at 254.
+
+Ergonomics:
+- **B1 (worst):** `match_attribute: "emails"`/`"domains"` are multi-value uniques, and the semantics of matching against an array — including two elements colliding with two different records — are undefined everywhere. This is the flagship upsert path.
+- Also: Filter grammar is only discoverable via a doc-file pointer agents can't read; null-vs-`[]` clearing semantics undefined; cursor cross-tool misuse unspecified; no `count`/`get_many` (and `include_total` exists in contracts.ts but not in mcp-surface.md — doc drift); `crm_link`'s silent `*_to_one` replacement reports no `ended_links`; several error codes lack the id/next-step an agent needs to recover; template enum advertises `saas`/`agency` which don't exist; `crm_data_quality` caps at 100 unpaginated items.

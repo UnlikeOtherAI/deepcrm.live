@@ -279,7 +279,7 @@ Reuse nessie's engine with CRM vocabulary:
 
 ## 6. The MCP tool surface
 
-> The normative, exhaustive list (47 tools, exact names, inputs, outputs, MRTR and Task behaviour) is [mcp-surface.md](mcp-surface.md); this section is the design overview.
+> The normative, exhaustive list (50 tools, exact names, inputs, outputs, MRTR and Task behaviour) is [mcp-surface.md](mcp-surface.md); this section is the design overview.
 
 Design rules: few, generic, well-described tools over the schema (not one tool per object type — the tool list must stay stable and cacheable as the schema grows); every mutating tool takes `reason?` and `idempotency_key?`; every tool that takes an id ships with the read that finds it (nessie's rule); errors are typed and actionable (`duplicate_found{candidates}`, `version_conflict{current}`, `policy_denied{resource, action}`, `input_required` via MRTR).
 
@@ -321,7 +321,7 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 
 ### 6.5 Change feed
 
-- `crm_changes_since({cursor, object_types?, kinds?, limit})` — the global tenant change feed from `record_changes` (cursor = `(occurred_at, id)`), so an agent on a Nessie schedule can "do something about what changed since last run" cheaply.
+- `crm_changes_since({cursor, object_types?, kinds?, limit})` — the global tenant change feed from `record_changes` (cursor = the per-team, commit-ordered `seq` — see [events.md](spec/events.md) §1–2), so an agent on a Nessie schedule can "do something about what changed since last run" cheaply.
 - `crm_webhook_set({url, events[], secret_ref})` — outbound HMAC-signed, delivery-shaped (coalesced per window, retried by the worker) exactly like DeepSignal's insight webhook into Nessie. The Nessie side already knows how to turn a product webhook into a rolling digest message.
 
 ### 6.6 Prompts and resources
@@ -331,7 +331,7 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 
 ### 6.7 Tool-list size
 
-47 tools (see [mcp-surface.md](mcp-surface.md) §10). Nessie defers MCP schemas behind `mcp_find_tools`/`mcp_load_tools` above 12 inline tools, so DeepCRM groups its tools with consistent prefixes (`crm_schema_*`, `crm_record*`, `crm_link*`, `crm_search`, …) and short descriptions so the find/load step works well, and sets `ttlMs` on `tools/list` so clients do not refetch per call.
+50 tools (see [mcp-surface.md](mcp-surface.md) §10). Nessie defers MCP schemas behind `mcp_find_tools`/`mcp_load_tools` above 12 inline tools, so DeepCRM groups its tools with consistent prefixes (`crm_schema_*`, `crm_record*`, `crm_link*`, `crm_search`, …) and short descriptions so the find/load step works well, and sets `ttlMs` on `tools/list` so clients do not refetch per call.
 
 ---
 
@@ -365,11 +365,13 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 6. **Ingestion.** Emails, calendar, calls: do interactions arrive only via agents calling `crm_activity_log` (v1 proposal), or does DeepCRM get its own inbound connectors/webhooks (nessie's comms-connect already normalises Slack/Gmail into `CommsEvent` — the natural source)?
 7. **Embeddings & semantic dedup.** Through Ledger `/v1/jina` like nessie (proposed), signed with the calling user's delegation. Confirm DeepCRM gets its own product-bound Ledger app key.
 8. **Approvals home.** MRTR-only (agent asks the human in Nessie and re-issues) vs also mirroring into Nessie's `ApprovalRequest` via the integration. The former is simpler; the latter is auditable in one place.
-9. **Per-object-type tool projection.** Keep the generic 47 tools (proposed), or additionally project typed convenience tools (`crm_deal_create` with a real schema) for the template types to make small models more reliable? Costs tool-list size.
+9. **Per-object-type tool projection.** Keep the generic 50 tools (proposed), or additionally project typed convenience tools (`crm_deal_create` with a real schema) for the template types to make small models more reliable? Costs tool-list size.
 10. **Naming.** `deepcrm.live` with `api.deepcrm.live` as the only host. Product name in `tools/list`: "DeepCRM".
-11. **Matrix as the family's event fabric.** Should DeepCRM's change-feed delivery (§6.5) grow a `matrix_room` target, and — the bigger question, owned by Nessie — should Nessie channels ever sit on a Matrix homeserver so products and customers' own agents share rooms? Not needed for v1; the delivery seam keeps the door open (§3.5).
+11. **Single-change revert and schema diff.** `crm_change_revert {change_id}` and `crm_schema_changes_since {version}` were proposed in review (R3 B10); v1 documents the manual recovery recipe instead. Promote them?
+12. **Policy administration.** v1 policies are immutable post-seed (operator migrations only). Ship an owner-only, approval-gated policy tool surface later?
+13. **Matrix as the family's event fabric.** Should DeepCRM's change-feed delivery (§6.5) grow a `matrix_room` target, and — the bigger question, owned by Nessie — should Nessie channels ever sit on a Matrix homeserver so products and customers' own agents share rooms? Not needed for v1; the delivery seam keeps the door open (§3.5).
 
-> Default answers assumed by the docs and plans until you say otherwise: Q1 Prisma (+ `$queryRaw`), Q2 JSONB + change log, Q3 Nessie-only in v1 with the auth seam generalisable, Q4 copy now/extract later, Q5 tenant = org + team, Q6 agents call `crm_activity_log`, Q7 own Ledger key, Q8 MRTR only, Q9 generic tools only, Q10 as stated, Q11 not in v1.
+> Default answers assumed by the docs and plans until you say otherwise: Q1 Prisma (+ `$queryRaw`), Q2 JSONB + change log, Q3 Nessie-only in v1 with the auth seam generalisable, Q4 copy now/extract later, Q5 tenant = org + team, Q6 agents call `crm_activity_log`, Q7 own Ledger key, Q8 MRTR only, Q9 generic tools only, Q10 as stated, Q11/Q12 deferred, Q13 not in v1.
 
 ---
 

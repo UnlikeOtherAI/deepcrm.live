@@ -12,13 +12,18 @@ These plans are written so that an agent with **no memory of this repo and modes
 6. **Commit** with message `<task-id>: <task title>` and push. Merge into `main` (`git switch main && git merge --ff-only task/<task-id> && git push`), remove the worktree, delete the branch.
 7. Mark the task done: change its heading `### T07 — …` to `### T07 ✅ — …` in the plan file (in a follow-up commit on `main`).
 
+## Standing environment
+
+The local Postgres from `docs/testing.md` runs for the whole session, and `DATABASE_URL` is exported in every shell — every acceptance block from T03 onward assumes both, whether or not it repeats them. Acceptance blocks that start a dev server must set a per-worktree port (`DEEPCRM_API_PORT=56xx`) and kill by captured PID, never `pkill -f`.
+
 ## Hard rules
 
 - Do tasks **in order**. Each task lists **Depends on**; never start a task whose dependencies are not ✅.
 - One task per branch. If a task feels too big, still do it — do not split it yourself; that is a plan-authoring decision.
 - Do not add packages, tools, tables, or env vars the docs do not name. If the docs are wrong or missing something, write the gap under `docs/plans/gaps.md` (create it) with the task id and continue with the minimal interpretation consistent with the docs.
 - Versions are pinned in T01. Do not upgrade.
-- Every file ≤ 500 lines. Every TS file strict, no `any`, `max-len` 120.
+- **Vocabulary:** "Create" = file must not exist; "Edit" = it must; "Replace" = Edit where the content is wholly rewritten. A task may introduce a new env var only if the same commit adds it to `docs/architecture.md` §6 and `.env.example`.
+- Every file ≤ 500 lines — **except** files copied verbatim from `docs/` (the Prisma schema, contract files, templates) and MCP tool-registration files, which may split into sibling files named in their task. Every TS file strict, no `any`, `max-len` 120.
 - Never commit secrets. `.env` is git-ignored; `.env.example` is committed.
 - Never run anything against production from a plan task. Phase 6 has the only deploy task and says so.
 

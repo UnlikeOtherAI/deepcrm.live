@@ -20,7 +20,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 **Depends on:** T35. **Spec:** `docs/schema-engine.md` §6; `docs/mcp-surface.md` §7 (`crm_find_duplicates`).
 
 **Files:**
-- Create `worker/src/jobs/dedup-scan.ts` — for the object type: (1) groups from `record_unique_keys` sharing `normalized_value` (pre-rule data), (2) `matching_rules` pairs via `_n` shadow keys and `pg_trgm` similarity, (3) when `include_semantic`: nearest-neighbour pairs with cosine distance < 0.08 on `record_search.embedding`; union-find into groups; evidence per pair; `progress`.
+- Create `worker/src/jobs/dedup-scan.ts` — for the object type: (1) groups from `record_unique_keys`/`record_match_keys` sharing a hash (pre-rule data), (2) fuzzy rules via `pg_trgm` similarity (≥ 0.5), (3) when `include_semantic`: nearest-neighbour pairs with cosine distance < 0.08; union-find into groups; evidence per pair, redacted; `progress`; one dedup scan per team at a time.
 - Tool `crm_find_duplicates` enqueues; result shape per §7.
 - Tests (worker DB): three near-identical people ⇒ one group with two evidence kinds.
 
@@ -43,8 +43,8 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 **Depends on:** T37. **Spec:** `docs/schema-engine.md` §7 steps 1, 4–7; `docs/mcp-surface.md` §7 (`crm_merge_records`).
 
 **Files:**
-- Create `packages/schema-engine/src/merge/execute.ts` — transaction with locks; re-point `record_links` (both columns), collapse duplicates keeping oldest, cardinality fix-ups, `list_entries` re-point, unique keys per plan, losers `merged_into_id`/`deleted_at`, `merge` changes with `snapshot`, reindex enqueue for survivor.
-- Edit `records` read paths (`getRecord`, `recordAt`, links list): a loser id resolves to the survivor with `redirected_from` (one hop; `MERGED` error only when the survivor is itself deleted).
+- Create `packages/schema-engine/src/merge/execute.ts` — transaction with locks; re-point `record_links` (both columns), collapse duplicates keeping oldest, cardinality fix-ups, `list_entries` re-point, keys per plan (**keys follow data**, §7.3), losers `merged_into_id`/`deleted_at` **and chained-pointer re-point** (§7.6), `merge` changes with the **normative snapshot shape of §7.7** (repointedLinks/endedLinks/movedKeys/droppedKeys/movedEntries), reindex enqueue for survivor.
+- Edit `records` read paths (`getRecord`, `recordAt`, links list): replace T13's `MERGED`-throw with the redirect — a loser id resolves to the survivor with `redirected_from` (one hop, kept true by chained re-pointing; `MERGED` only when the survivor is itself deleted). Update the T13 tests this changes.
 - Service with policy `merge.merge` (approval default — MRTR handled in T42; until then admin-only in tests) + tool.
 - Tests (DB): two people merged — links re-pointed and de-duplicated, loser `crm_record_get` returns survivor with `redirected_from`, unique email moved.
 
@@ -56,7 +56,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 **Depends on:** T38. **Spec:** `docs/schema-engine.md` §7 step 8.
 
-**Files:** `packages/schema-engine/src/merge/unmerge.ts` (restore losers from `snapshot`, restore their links that were re-pointed — tracked in the snapshot as `{ linkId, originalFrom, originalTo }`, `unmerge` changes), tool `crm_unmerge`; extend `properties.test.ts` with invariant (d): merge then unmerge ⇒ losers' `data` and active link sets equal their pre-merge state.
+**Files:** `packages/schema-engine/src/merge/unmerge.ts` — consumes exactly the §7.7 snapshot (repointedLinks back, endedLinks un-ended, moved keys/entries resolved; post-merge survivor changes win; collisions returned as `conflicts`), `unmerge` changes; tool `crm_unmerge`; extend `properties.test.ts` with invariant (d): merge then immediate unmerge ⇒ losers' `data` and active link sets equal their pre-merge state and `conflicts` is empty.
 
 **Acceptance:** engine property tests green.
 
@@ -66,7 +66,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 **Depends on:** T39. **Spec:** `docs/mcp-surface.md` §7 (`crm_data_quality`).
 
-**Files:** `packages/schema-engine/src/quality/report.ts` — four SQL queries (`missing_required` via schema + `data ? slug` check, `stale` via `last_activity_at < now - stale_days`, `orphans` = records of any type having a `many_to_one` relation type with zero active links, `collisions` = `_n` shadow duplicates for attributes now unique); service + tool; counts + first 100 rows each. Tests with seeded dirty data.
+**Files:** `packages/schema-engine/src/quality/report.ts` — four SQL queries (`missing_required` via schema + `data ? slug`; `stale` via `last_activity_at`; `orphans` = records on the **many side of a `many_to_one` relation whose `on_delete = restrict`** with zero active links — unemployed people are not orphans, company-less deals are; `collisions` = duplicate normalized hashes for attributes made unique after data existed); service + tool; each bucket returns `count`, ≤ 100 items, and a `query_filter` runnable via `crm_records_query`. Tests with seeded dirty data.
 
 **Acceptance:** api tests green.
 
@@ -78,7 +78,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 **Files:**
 - Create `api/src/services/exports.ts` + `worker/src/jobs/bulk-export.ts` — stream records (query compiler, page 500) into JSONL or CSV (RFC 4180, header from attribute slugs) written to `DEEPCRM_EXPORT_DIR` (new env, default `./.exports`; add to `docs/architecture.md` §6 and `.env.example`), file name `<jobId>.<ext>`.
-- Create `api/src/routes/exports.ts` — `GET /exports/:jobId?sig=…&exp=…` serving the file when the HMAC (keyring) of `jobId:exp` matches and `exp` in the future; this is infrastructure (download), not a data API. Result `{ url, rows, expires_at }`.
+- Create `api/src/routes/exports.ts` — `GET /exports/:jobId?sig=…&exp=…` serving the file when the HMAC (keyring **kid `export`**) of `jobId:exp` matches, `exp` is future, and the URL is unused (single-use marker on the job row); the architecture-§4 blessed exception. Export rows honour the approver's redaction and `DEEPCRM_MAX_EXPORT_ROWS`. Result `{ url, rows, expires_at }`.
 - Retention: `worker/src/jobs/retention.ts` (create) — daily: delete export files older than 1 h, hard-delete records with `deleted_at < now - DEEPCRM_RETENTION_DAYS` (cascade), prune `idempotency_replays` older than 24 h. Register with a self-rescheduling enqueue (`visibleAt = now + 24h`, idempotency `retention:<date>`).
 - Tests: export 12 deals as CSV through harness + embedded worker; download URL returns 200 with 13 lines; expired signature 403.
 
@@ -91,10 +91,10 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 **Depends on:** T41. **Spec:** `docs/auth-and-tenancy.md` §4; `docs/mcp-surface.md` §0.4; flow F6 in `docs/spec/protocol-flows.md`; `docs/spec/policy-defaults.json` (requires_approval rows already seeded in T10 — verify, do not re-seed).
 
 **Files:**
-- Create `api/src/services/approvals.ts` — `requireApproval(ctx, { tool, resourceType, resourceId, args, reason })`: when the matching policy rule has `requiresApproval` and the actor's role is not admin/owner: create `approval_requests` (pending, 24 h, `continuation_token` random 32 bytes, `arguments_hash`), return the token; `consumeApproval(ctx, token, args)`: token exists, pending, not expired, same tenant, `arguments_hash` equal, caller role admin/owner ⇒ mark `consumed` and return. Mismatch ⇒ `APPROVAL_REQUIRED` with detail.
-- Edit tools `crm_merge_records`, `crm_record_delete`, `crm_export`, and schema `define` tools — wrap: if `inputResponses.approval` present ⇒ `consumeApproval`; else `requireApproval` ⇒ `inputRequired([{ id:'approval', kind:'approval', message, approval_token }])` or proceed when not required.
+- Create `api/src/services/approvals.ts` — `requireApproval(ctx, { tool, resourceType, resourceId, args, reason })`: when the matching rule has `requiresApproval` and `ctx.onBehalfOf.role` does not satisfy it: create `approval_requests` (pending, 24 h, token ≥128-bit CSPRNG stored as `continuation_token_hash`, canonical `arguments_hash` via `canonicalJson`, full `argumentsSnapshot`; caps 100/team, 10/requester, dedupe identical pending) and return the elicitation + `requestState` (approvalId inside). `consumeApproval(tx, ctx, state, args)`: verify `requestState`, then the conditional `pending→consumed` UPDATE **inside the mutation's transaction** with tenant + tool + hash + `required_role` exact + approver ≠ requester checks; execution uses the stored snapshot. Zero rows ⇒ `APPROVAL_REQUIRED {next: 'retry_with_approval'}`.
+- Edit tools `crm_merge_records`, `crm_record_delete`, `crm_record_restore`, `crm_export`, `crm_webhook_set`, and the schema `define`/archive tools — wrap with the F6 flow (spec MRTR): approval elicitation + `requestState` out, `consumeApproval` on the retry.
 - Verify the `requires_approval: true` rows from `docs/spec/policy-defaults.json` were seeded in T10 (`seedDefaultPolicies`); do not re-seed. For tenants provisioned before T10 shipped them there is nothing to migrate (no such tenants exist pre-launch).
 - Tests: member principal merging ⇒ `input_required` with token; re-issue as admin principal with the token ⇒ merge succeeds; wrong args hash ⇒ error; expired ⇒ error.
-- Edit `api/test/mcp/surface.test.ts` — `NOT_YET = []`.
+- Edit `api/test/mcp/surface.test.ts` — replace the whole declaration line with exactly `const NOT_YET = []`.
 
-**Acceptance:** `pnpm verify` green; `grep -c "NOT_YET = \[\]" api/test/mcp/surface.test.ts` prints `1`; `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md`.
+**Acceptance:** `pnpm verify` green; `grep -Ec "NOT_YET(: string\[\])? = \[\]" api/test/mcp/surface.test.ts` prints `1`; `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md`.
