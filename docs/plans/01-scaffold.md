@@ -119,7 +119,7 @@ Last command prints `1`.
 
 ---
 
-### T04 — Env, app builder, health route, process modes
+### T04 ✅ — Env, app builder, health route, process modes
 
 **Depends on:** T03. **Spec:** `docs/architecture.md` §1, §6.
 
