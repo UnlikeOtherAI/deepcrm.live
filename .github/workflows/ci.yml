@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.22.0 }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.22.0 }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://deepcrm:deepcrm@localhost:5432/deepcrm
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env: { POSTGRES_USER: deepcrm, POSTGRES_PASSWORD: deepcrm, POSTGRES_DB: deepcrm }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U deepcrm -d deepcrm" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.22.0 }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @deepcrm/db exec prisma migrate deploy
+      - run: pnpm test
+      - run: node scripts/verify-audit-chain.mjs
+  build:
+    if: hashFiles('Dockerfile.app') != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.app .
