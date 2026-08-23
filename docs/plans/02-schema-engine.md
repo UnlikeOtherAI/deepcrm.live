@@ -2,7 +2,7 @@
 
 Outcome: object types, attributes, relation types, templates, records, links, history, unique keys and matching work through `packages/schema-engine` + `api/src/services`, with property tests green. No MCP yet.
 
-### T09 — Attribute type registry
+### T09 ✅ — Attribute type registry
 
 **Depends on:** T08. **Spec:** `docs/schema-engine.md` §3.
 
