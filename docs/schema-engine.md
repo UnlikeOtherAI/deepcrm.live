@@ -51,6 +51,10 @@ model Team {
   // allocate at insert time and a slow transaction would commit a seq the
   // feed cursor has already passed (review C1).
   feedSeq        BigInt       @default(0) @map("feed_seq")
+  // Origin write-guard (defence in depth for taint boundaries like DeepSignal's
+  // per-user connector gate): a write whose declared `origin` is in this list
+  // is refused with ORIGIN_REJECTED. Owner-set via crm_origin_guard_set.
+  rejectedOrigins String[]    @default([]) @map("rejected_origins")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -104,6 +108,26 @@ enum Sensitivity {
   restricted
 }
 
+enum Visibility {
+  team
+  users
+  private
+}
+
+enum SuppressionKind {
+  email
+  phone
+  domain
+  company_number
+}
+
+enum SuppressionReason {
+  objection
+  erasure
+  bounce
+  manual
+}
+
 enum Cardinality {
   one_to_one
   one_to_many
@@ -143,7 +167,6 @@ enum MatchAction {
 }
 
 enum PolicyScope {
-  organization
   team
   object_type
   record
@@ -162,6 +185,7 @@ enum PolicyResourceType {
   export
   webhook
   approval
+  suppression
 }
 
 enum PolicyAction {
@@ -169,6 +193,8 @@ enum PolicyAction {
   create
   edit
   delete
+  restore
+  erase
   link
   merge
   export
@@ -319,6 +345,19 @@ model Record {
   displayName    String     @default("") @map("display_name")
   ownerType      ActorType? @map("owner_type")
   ownerId        String?    @map("owner_id")
+  // Per-record visibility (DATA, not policy — deepsignal policy-asks §1):
+  // team (default) = tenant policy applies; users = only the humans in
+  // record_visibility_grants (plus the creator); private = the creating
+  // on_behalf_of human only. Evaluated BEFORE policy on every read and write;
+  // unlisted principals get NOT_FOUND. Admins are NOT exempt — the one
+  // recovery path is an owner-only, approval-gated visibility change.
+  visibility     Visibility @default(team)
+  createdOnBehalfOf String? @map("created_on_behalf_of")
+  // Declared origin class of the data (set-once, caller-supplied); checked
+  // against Team.rejectedOrigins at write.
+  origin         String?
+  // Set by crm_record_erase: data scrubbed, tombstone retained (§4d).
+  erasedAt       DateTime?  @map("erased_at")
   version        Int        @default(1)
   lastActivityAt DateTime?  @map("last_activity_at")
   // Transitive redirect pointer: merging B into C re-points every row whose
@@ -337,6 +376,7 @@ model Record {
   uniqueKeys     RecordUniqueKey[]
   search         RecordSearch?
   matchKeys      RecordMatchKey[]
+  visibilityGrants RecordVisibilityGrant[]
   listEntries    ListEntry[]
 
   @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
@@ -412,6 +452,45 @@ model RecordMatchKey {
   @@unique([objectTypeId, rulePosition, normalizedHash])
   @@index([recordId])
   @@map("record_match_keys")
+}
+
+/// Explicit principal list for visibility = users. Grants name HUMANS (UOA
+/// user ids); an agent sees the record when its on_behalf_of human is granted.
+model RecordVisibilityGrant {
+  id        String @id @default(uuid()) @db.Uuid
+  recordId  String @map("record_id") @db.Uuid
+  uoaUserId String @map("uoa_user_id")
+  record    Record @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, uoaUserId])
+  @@index([uoaUserId])
+  @@map("record_visibility_grants")
+}
+
+/// Compliance note: suppression_entries INTENTIONALLY has no FK to
+/// organizations/teams/records. A suppression list must outlive the data it
+/// protects: tenant deletion and record erasure must never delete the fact
+/// that a person objected (deepsignal policy-asks §3). Rows hold NO readable
+/// personal data — only sha-256 hashes of normalized structural facts.
+model SuppressionEntry {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  teamId         String            @map("team_id") @db.Uuid
+  kind           SuppressionKind
+  // sha256hex(kind + '\x1f' + normalized value) — same normalisation as the
+  // matching attribute type (lower-cased email, E.164, registrable domain).
+  keyHash        String            @map("key_hash")
+  reason         SuppressionReason
+  note           String?
+  sourceRecordId String?           @map("source_record_id") @db.Uuid
+  createdByType  ActorType         @map("created_by_type")
+  createdById    String            @map("created_by_id")
+  onBehalfOf     String?           @map("on_behalf_of")
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  @@unique([teamId, kind, keyHash])
+  @@index([organizationId, teamId])
+  @@map("suppression_entries")
 }
 
 model RecordChange {
@@ -732,12 +811,12 @@ Reserved attribute slugs on every object type (system, not stored in `data`): `i
 
 ## 4. Write path — `applyWrite(tx, ctx, schema, op)`
 
-Ops: `create`, `update`, `assert`, `delete`, `restore`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` (ReadCommitted) with explicit advisory locks. **Advisory locks use the two-int form** `pg_advisory_xact_lock(namespace, hashtext(tenantId ∥ key))` with a fixed namespace constant per concern (`1` records, `2` unique/match keys, `3` provisioning, `4` webhooks, `5` audit), so concerns and tenants never false-share a 32-bit bucket.
+Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` (ReadCommitted) with explicit advisory locks. **Advisory locks use the two-int form** `pg_advisory_xact_lock(namespace, hashtext(tenantId ∥ key))` with a fixed namespace constant per concern (`1` records, `2` unique/match keys, `3` provisioning, `4` webhooks, `5` audit), so concerns and tenants never false-share a 32-bit bucket.
 
 0. **Idempotency reservation (when `idempotency_key` given).** Take the key advisory lock, then `INSERT INTO idempotency_replays (…, principal_user_id, tool, key, arguments_hash, result NULL)`. Unique violation ⇒ read the row: same `arguments_hash` with a result ⇒ return it; same hash, null result ⇒ the winner is in flight — `IDEMPOTENCY_IN_PROGRESS` (client retries); different hash ⇒ `IDEMPOTENCY_MISMATCH`. The `result` is filled at step 12 **in the same commit** as the mutation, so "applied" and "replayable" are atomic (never stored after commit).
-1. **Policy** — `checkPolicy(ctx, 'record', action, [record?, objectType, team])`; per touched `confidential|restricted` attribute, `checkPolicy(ctx, 'attribute', 'edit', …)`. Deny ⇒ `POLICY_DENIED` (audited with `outcome: denied`); a matching rule with `requiresApproval` for this actor ⇒ the MRTR approval path (mcp-surface §0.4).
+1. **Visibility gate (before policy)** — every record touched or read passes `canSee(ctx, record)`: `team` ⇒ yes; `users` ⇒ `ctx.onBehalfOf.uoaUserId` equals `created_on_behalf_of` or is in `record_visibility_grants`; `private` ⇒ creator only. Fail ⇒ `NOT_FOUND` (no existence oracle; admins are not exempt). Then **policy** — `checkPolicy(ctx, 'record', action, [record?, objectType, team])`; per touched `confidential|restricted` attribute, `checkPolicy(ctx, 'attribute', 'edit', …)`. Deny ⇒ `POLICY_DENIED` (audited with `outcome: denied`); a matching rule with `requiresApproval` for this actor ⇒ the MRTR approval path (mcp-surface §0.4).
 2. **Schema** — `loadSchema(tenant)` cached by `(team_id, schema_version)` (the version is read in the same query that resolves the tenant, so the cache is self-invalidating with no TTL). Unknown slug ⇒ `UNKNOWN_ATTRIBUTE`; archived ⇒ `ATTRIBUTE_ARCHIVED`; system read-only ⇒ `ATTRIBUTE_READ_ONLY`.
-3. **Validate & normalise (pure input checks only)** — per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize`; `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
+3. **Validate & normalise (pure input checks only)** — declared `origin` (set-once) checked against `Team.rejectedOrigins` ⇒ `ORIGIN_REJECTED`; `visibility`/`visible_to` inputs validated (grants are UOA user ids; `visible_to` implies `users`); per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize`; `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
 4. **Lock** — `lockRecords(tx, ids)` for every record touched, sorted ids; for the create/assert branch of a unique or match key, also the key lock on `hashtext(tenant ∥ attributeId ∥ normalizedHash)`.
 5. **Locked-state validation** — record exists, tenant matches, not deleted; a merged id redirects transitively (`MERGED {redirect_to}` only when the final survivor is itself deleted); `record_reference` targets exist and are live; delete discovers dependents and evaluates `restrict` **after** locks (never before).
 6. **Version** — `expected_version` mismatch ⇒ `VERSION_CONFLICT {current}`. Link/unlink bump `records.version` on **both** endpoints.
@@ -758,9 +837,28 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `link`, `unlink`, `merge
 
 Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming the rule). **Multi-value match attributes:** the match key is the **first element** of the submitted array; if any *other* element resolves to a different record, fail with `DUPLICATE_FOUND` listing every candidate — the agent's cue to merge. Lookup by `(attribute_id, normalizedHash)` → update if found (redirecting through `merged_into_id`), else create via the savepoint path of step 7. Returns `{record, created}`.
 
+### 4c′. Visibility interactions (normative)
+
+- Query, search, timeline, links-list, duplicates and the change feed apply the visibility gate per row for the calling principal; a link whose far end is invisible is omitted from listings, and a `DUPLICATE_FOUND` against an invisible record returns the generic form (no `record_id`, no candidates).
+- The search index stores no visibility copy — filtering happens at query time against `visibility`/grants.
+- Changing visibility is `record.edit` on the record — except **widening a record the caller cannot see** (recovering an orphaned private record), which only a team owner may do, approval-gated; existence is disclosed to the owner, data is not until the change lands.
+- Merge requires the actor to see **all** records in the merge set; the survivor keeps the most restrictive visibility and the union of grants.
+
 ### 4c. `delete` / `restore`
 
 Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unlink` end; `cascade` soft-deletes `*_to_one` dependents, every cascaded delete change sharing a `group_id`; `restrict` ⇒ `DELETE_RESTRICTED {link_id}`), **releases unique and match keys** (recorded in the delete change's `snapshot`), and writes the `delete` change. `restore` reverses within the retention window, restoring the cascade set by `group_id` and re-claiming keys — a key taken meanwhile ⇒ `RESTORE_CONFLICT {attribute, held_by}` with an MRTR confirmation offering restore-without-the-conflicting-value.
+
+### 4d. `erase` — the right-to-erasure operation (deepsignal policy-asks §3)
+
+`crm_record_erase {id, reason, suppress?: boolean = true}` — owner-only by default (policy `record.erase`), audited, and the **one documented exception to change-log immutability**:
+
+1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`), write a `suppression_entries` row (`reason: erasure`) from the normalized hash **before** anything is scrubbed.
+2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/match keys deleted, search row deleted, visibility grants deleted, active links ended.
+3. History scrub: every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
+4. The record row remains as a tombstone: `ERASED` on direct reads, never restorable, never hard-deleted by retention — the tombstone is what proves erasure happened.
+5. One `record.erase` audit row; the change feed emits `record.deleted`.
+
+**Suppression store** (§2 `SuppressionEntry`): `crm_suppression_add {kind, value, reason, note?}` (value normalized + hashed in memory, never stored raw), `crm_suppression_check {entries: [{kind, value}]}` → per-entry `{suppressed, reason?}` — **the send-time gate any outbound product must call**, `crm_suppression_list` (hashes + metadata only), `crm_suppression_remove` (owner + approval — un-suppressing an objector is a real decision). Suppression rows survive tenant deletion and erasure by construction (no FKs).
 
 ## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
 
@@ -821,4 +919,4 @@ System object types created on provision:
 
 ## 10. Error codes (`@deepcrm/schemas/errors.ts`)
 
-`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `IDEMPOTENCY_IN_PROGRESS`, `RESTORE_CONFLICT {attribute, held_by}`, `UNKNOWN_TEMPLATE {available}`, `TENANT_MISMATCH`, `LIMIT_EXCEEDED {limit}`, `INTERNAL {correlation_id}`. Error messages are templates and never echo submitted values; `VALIDATION_FAILED.issues[].path` is an RFC 6901 JSON Pointer, and op/type-mismatch issues name the ops valid for the attribute's type.
+`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `IDEMPOTENCY_IN_PROGRESS`, `RESTORE_CONFLICT {attribute, held_by}`, `UNKNOWN_TEMPLATE {available}`, `TENANT_MISMATCH`, `ORIGIN_REJECTED {origin}`, `ERASED`, `LIMIT_EXCEEDED {limit}`, `INTERNAL {correlation_id}`. Error messages are templates and never echo submitted values; `VALIDATION_FAILED.issues[].path` is an RFC 6901 JSON Pointer, and op/type-mismatch issues name the ops valid for the attribute's type.

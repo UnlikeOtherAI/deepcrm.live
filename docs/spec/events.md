@@ -21,7 +21,9 @@ An **event** is a `Change` (see `contracts.md` → `records.ts`) plus a derived 
 
 `seq` is **per-team and commit-ordered** — allocated from `teams.feed_seq` as the last statement before commit (schema-engine §4 step 13), so a consumer's cursor can never pass an in-flight transaction's lower seq (review C1). Link/unlink events appear once per endpoint (paired rows share `group_id`); consumers dedupe on `group_id` when they only care about the edge.
 
-Redaction: every event passes the same `redactForActor` pass as a record read, by the **current** sensitivity, retroactively; `snapshot` payloads never appear in any event (reviews S5.3/S5.4). Webhook payloads get the same redaction — the receiving endpoint is not a principal and no admin shortcut applies (review S6.2).
+Redaction: every event passes the same `redactForActor` pass as a record read, by the **current** sensitivity, retroactively; `snapshot` payloads never appear in any event (reviews S5.3/S5.4).
+
+**Webhooks carry a subscribing principal and are value-free for sensitive data** (deepsignal policy-asks §2): each webhook stores the human who registered it (`subscribing_uoa_user_id`); events are visibility-filtered as that principal (a `users`/`private` record's events are omitted unless the subscriber is granted), and `confidential`/`restricted` attribute values are **always omitted from push payloads** — the event names the attribute slug, never the value. A webhook is a nudge; consumers that need values pull them through `crm_changes_since`/`crm_record_get` under a real principal with real redaction. There is no admin shortcut of any kind.
 
 ## 2. Pull — `crm_changes_since`
 

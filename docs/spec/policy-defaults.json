@@ -418,7 +418,107 @@
           "owner"
         ]
       ]
+    },
+    {
+      "resource_type": "record",
+      "action": "erase",
+      "effect": "deny",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "erase",
+      "effect": "allow",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "admin",
+      "effect": "deny",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "requires_approval": true,
+      "bindings": [
+        [
+          "role",
+          "owner"
+        ]
+      ]
     }
   ],
-  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<app>:<agentId> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them."
+  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<app>:<agentId> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them.",
+  "notes_compliance": "record.erase: owner-only and still approval-gated (a second person confirms; single-owner teams fall back to the same owner confirming through the elicitation — the audit trail is the control). suppression.create is member-open on purpose: recording an objection must never be blocked. suppression.admin (= remove) is owner + approval."
 }

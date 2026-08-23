@@ -44,5 +44,6 @@ The local Postgres from `docs/testing.md` runs for the whole session, and `DATAB
 | 4 | [04-crm-completeness.md](04-crm-completeness.md) | activities, timeline, tasks, pipeline, lists/views, worker, change feed, webhooks |
 | 5 | [05-quality.md](05-quality.md) | search, duplicates, merge/unmerge, data quality, export, approvals |
 | 6 | [06-deploy-and-integrate.md](06-deploy-and-integrate.md) | Docker/Caddy deploy, Nessie integration, prompts |
+| 7 | [07-visibility-and-compliance.md](07-visibility-and-compliance.md) | per-record visibility, suppression/erasure, origin guard, per-app provenance (the DeepSignal asks) |
 
 When all tasks in a phase are ✅, move the phase file to `docs/done/`.

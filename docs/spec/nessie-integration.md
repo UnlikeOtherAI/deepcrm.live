@@ -6,9 +6,9 @@ How a Nessie deployment connects its agents to DeepCRM. Written from DeepCRM's s
 
 | Proof | Issued by | Carried as | DeepCRM checks |
 |---|---|---|---|
-| Product app key `dck_…` | DeepCRM operator (`scripts/generate-app-key.mjs nessie`) | `Authorization: Bearer` | SHA-256 in `DEEPCRM_APP_KEYS`; names the calling product |
+| Product app key `dck_…` | DeepCRM operator (`scripts/generate-app-key.mjs nessie`) | `Authorization: Bearer` | SHA-256 in the `DEEPCRM_APPS` registry; names the calling product |
 | UOA delegation | UOA token exchange, requested by Nessie for the linked user + active team, `aud = https://api.deepcrm.live`, scope `ai.invoke` | `X-UOA-Delegation` | signature, `iss`, `aud`, `exp`, `sub`, `org`, `team`, `tv` |
-| Nessie context | Nessie's RS256 signer (same key set it uses for DeepWater/DeepSignal) | `X-Nessie-Context` | signature via `NESSIE_CONTEXT_JWKS_URL`, ttl ≤ 300 s, `sub` equals delegation `sub` |
+| App context | Nessie's RS256 signer, **registered per app** in DeepCRM's `DEEPCRM_APPS` registry (`X-Nessie-Context` is the accepted alias of `X-App-Context` for the `nessie` app) | `X-Nessie-Context` | signature via the app's registered JWKS + issuer, `aud` = DeepCRM, ttl ≤ 300 s, `sub` equals delegation `sub`. Chained callers (a product calling through another) are preserved via the delegation's `act` chain — every hop stays attributable (auth-and-tenancy §1). |
 
 Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per user), pinned to the canonical catalog entry whose URL is exactly `https://api.deepcrm.live/mcp`. DeepCRM never receives Nessie's UOA refresh credentials; the delegation token is short-lived and resource-bound.
 
@@ -23,18 +23,18 @@ Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per use
 
 | Tools | Default for team agents | Rationale |
 |---|---|---|
-| all read tools, `crm_record_create/update/assert`, `crm_link*`, `crm_activity_log`, `crm_note_add`, `crm_task_*`, `crm_list_*`, `crm_view_*`, `crm_search`, `crm_changes_since`, `crm_pipeline_summary`, `crm_data_quality`, `crm_find_duplicates` | **ON** | cheap, unmetered, reversible, policy-checked server-side |
-| `crm_merge_records`, `crm_unmerge`, `crm_record_delete`, `crm_export`, all schema `define`/archive tools, `crm_matching_rule_set`, `crm_template_apply`, `crm_webhook_*` | `requiresExplicitGrant` — OFF until an owner grants per agent | destructive or structural; DeepCRM additionally enforces policy/approval, so the grant is defence in depth, not the only gate |
+| all read tools, `crm_record_create/update/assert`, `crm_link*`, `crm_activity_log`, `crm_note_add`, `crm_task_*`, `crm_list_*`, `crm_view_*`, `crm_search`, `crm_changes_since`, `crm_pipeline_summary`, `crm_data_quality`, `crm_find_duplicates`, `crm_suppression_add/check/list` | **ON** | cheap, unmetered, reversible, policy-checked server-side |
+| `crm_merge_records`, `crm_unmerge`, `crm_record_delete`, `crm_record_erase`, `crm_suppression_remove`, `crm_origin_guard_set`, `crm_export`, all schema `define`/archive tools, `crm_matching_rule_set`, `crm_template_apply`, `crm_webhook_*` | `requiresExplicitGrant` — OFF until an owner grants per agent | destructive or structural; DeepCRM additionally enforces policy/approval, so the grant is defence in depth, not the only gate |
 
 Nessie's "tool that takes an id ships with the read that resolves it" rule holds: every granted mutator has its read in the default-ON set.
 
 ## 4. Approvals (MRTR ↔ Nessie)
 
-When DeepCRM returns `resultType: "input_required"` with `kind: "approval"`:
-1. The Nessie worker surfaces it to the model as the tool result (it is a normal result, not an error).
-2. The agent asks in-channel; Nessie's existing `ApprovalRequest` may mirror it (`action = "deepcrm:<tool>"`, `context = { approval_token, expires_at }`) so the admin can click Approve.
-3. On approval, Nessie re-issues the **same** `tools/call` with `inputResponses.approval = { approval_token, approved: true }` under a delegation for the **approving admin** (not the original requester) — DeepCRM checks the approver's role from the delegation's team role claim.
-4. Expired tokens (24 h) require a fresh call; DeepCRM keeps the `approval_requests` row for audit.
+When DeepCRM returns `resultType: "input_required"` with an approval elicitation + `requestState` (spec MRTR — mcp-surface §0.4, flow F6):
+1. The Nessie worker surfaces the elicitation to the model as the tool result (a normal result, not an error) and preserves `requestState` in run state.
+2. The agent asks in-channel; Nessie's existing `ApprovalRequest` may mirror it (`action = "deepcrm:<tool>"`) so the admin can click Approve.
+3. On approval, Nessie re-issues the **same** `tools/call` with `inputResponses` (the `ElicitResult` with `{ approved: true }`) and the **echoed `requestState`**, under a delegation for the **approving admin** (a different human than the requester) — DeepCRM verifies the state, checks the approver's `role` claim exactly, and executes from the stored arguments snapshot.
+4. Expired approvals (24 h) require a fresh call; DeepCRM keeps the `approval_requests` row for audit.
 
 ## 5. Events into Nessie
 

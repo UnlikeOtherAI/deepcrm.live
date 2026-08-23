@@ -6,11 +6,12 @@ Every `/mcp` request is authenticated independently (the protocol is stateless; 
 
 | Header | Proves | Verification |
 |---|---|---|
-| `Authorization: Bearer <app key>` | the calling **product** (Nessie deployment) | SHA-256 of the key compared (timing-safe) against `DEEPCRM_APP_KEYS` (`name:sha256hex,…`). The name becomes `principal.app`. |
+| `Authorization: Bearer <app key>` | the calling **product** (Nessie, DeepSignal, …) | SHA-256 of the key compared (timing-safe) against the app registry `DEEPCRM_APPS` (JSON: `{ "<name>": { "keyHashes": [sha256hex…], "contextJwksUrl": …, "contextIssuer": … } }`; `DEEPCRM_APP_KEYS` remains as the legacy single-JWKS form). The name becomes `principal.app`. |
 | `X-UOA-Delegation: <JWT>` | the **human** and **workspace** the call acts for | RS256 via `UOA_JWKS_URL`; `iss = UOA_ISSUER`, `aud = UOA_AUDIENCE` (= `DEEPCRM_API_PUBLIC_URL`), `exp` **and** `iat` with `exp − iat ≤ 15 min` (the delegation is the revocation bound; `tv` is recorded for audit but not introspected online in v1); claims `sub` (UOA user id), `org` (UOA organisation id), `team` (UOA team id), `role` (`owner\|admin\|member` — the caller's role in that team; absent ⇒ `member`), `tv` (credential epoch), `scope` contains `ai.invoke`. |
-| `X-Nessie-Context: <JWT>` | **agent/run provenance** | RS256 via `NESSIE_CONTEXT_JWKS_URL`; **`aud = DEEPCRM_API_PUBLIC_URL` and a fixed `iss` required** (the signer serves several products; an un-audienced token from a sibling product must not verify here — review S2.1); max TTL 300 s, 30 s skew; claims `agentId`, `runId`, `toolCallId`, `requestId`, `sub` = same UOA user as the delegation (strict string equality; mismatch ⇒ 401). |
+| `X-App-Context: <JWT>` (alias `X-Nessie-Context`, accepted for the `nessie` app) | **agent/run provenance of the immediate caller** | RS256 via the **calling app's own** `contextJwksUrl`/`contextIssuer` from the registry (per-app, not one global signer — deepsignal policy-asks §6); **`aud = DEEPCRM_API_PUBLIC_URL` required**; max TTL 300 s, 30 s skew; claims `agentId`, `runId`, `toolCallId`, `requestId`, `sub` = same UOA user as the delegation (strict string equality; mismatch ⇒ 401). |
 
 Rules:
+- **Chained calls stay attributable at every hop.** The delegation's `act` chain (UOA RFC 8693 token exchange) is recorded verbatim into provenance and audit; `principal.app` is always the **immediate** caller (the app whose key + context token authenticated this request), so a Nessie → DeepSignal → DeepCRM call reads `app = deepsignal`, `act = [nessie]` — never flattened to the outermost or innermost hop. Agent policy bindings key on the immediate app: `agent:<app>:<agentId>`.
 - Every token's claims are schema-validated (zod): required, non-empty, correct types; garbage claims are a 401, never a coerced value.
 - **Destructive calls are replay-bounded:** `crm_merge_records`, `crm_record_delete`, `crm_export`, `crm_webhook_*`, `crm_unmerge` and approval consumption record the context token's `requestId` in a 300 s seen-set and reject replays. Other calls accept the residual 5-minute provenance-replay risk, documented (review S2.2).
 - All three required when `REQUIRE_AUTH=true`. Missing/invalid ⇒ HTTP 401 with `WWW-Authenticate: Bearer resource_metadata="<DEEPCRM_API_PUBLIC_URL>/.well-known/oauth-protected-resource"` (RFC 9728).
@@ -103,6 +104,12 @@ Defaults seeded per team on first resolve, from `docs/spec/policy-defaults.json`
 - Caps: ≤ 100 pending per team, ≤ 10 per requester; identical `(action, argumentsHash)` pending rows dedupe. Tokens are ≥ 128-bit CSPRNG, returned once inside `requestState`, stored only hashed.
 - The `schema.define` member default is deny-with-approval, matching `policy-defaults.json` (the table below is aligned with that file; the JSON is normative).
 
+## 4a. Record visibility — data, not policy
+
+Per-record `visibility` (`team` default | `users` | `private`) with `record_visibility_grants` naming humans, evaluated **before** policy on every read and write; unlisted principals — including admins and owners — get `NOT_FOUND` (schema-engine §4 step 1, §4c′). It is record **data**, settable through `crm_record_create`/`crm_record_update`, which is exactly what keeps it compatible with the "policies are immutable post-seed" rule: no runtime policy mutation is ever needed to make a record private (deepsignal policy-asks §1). Grants name humans; an agent sees a granted record only when acting for a granted human. The recovery path for orphaned private records (creator left) is an owner-only, approval-gated visibility widening.
+
+Org-wide visibility does **not** exist in v1: the tenant is one team (brief §9 Q5, decided), so a record cannot be shared across teams. Products whose share model includes an `org` scope (DeepSignal) must hold such records on their own side until cross-team sharing is designed — deferring this is deliberate and recorded, because retrofitting it after products bind is a migration (policy-asks §4).
+
 ## 5. Attribute sensitivity
 
 `attributes.sensitivity ∈ public | internal | confidential | restricted`.
@@ -115,6 +122,7 @@ Defaults seeded per team on first resolve, from `docs/spec/policy-defaults.json`
 - `snapshot` payloads (merge/delete pre-images) never leave the service in any shape (review S5.3).
 - Search documents exclude `confidential` and `restricted` values; webhook payloads are redacted as above — the push consumer is a network endpoint, not a principal, so no admin shortcut applies.
 - Idempotency replays are principal-bound (schema §2), so a cached result never crosses redaction contexts.
+- **Erasure beats history**: `crm_record_erase` nulls historical values in place (schema-engine §4d); suppression entries hold only hashes, so nothing readable survives the scrub except the tombstone and audit metadata.
 
 ## 6. Audit
 

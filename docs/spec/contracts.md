@@ -161,6 +161,7 @@ export const RecordSummary = z.object({
 })
 export const RecordOut = RecordSummary.extend({
   version: z.number().int(), data: RecordData,
+  visibility: Visibility, origin: z.string().nullable(),
   owner: Actor.nullable(),
   created_at: IsoDateTime, updated_at: IsoDateTime, last_activity_at: IsoDateTime.nullable(),
   redacted_attributes: z.array(Slug).describe('attributes hidden by policy'),
@@ -291,11 +292,20 @@ export const CrmTemplateApply = { in: z.object({ template: Slug.describe('a slug
 
 // ── records ──────────────────────────────────────────────────────────────────
 const WriteCommon = { reason: Reason, idempotency_key: IdempotencyKey }
+export const Visibility = z.enum(['team','users','private'])
+  .describe('who can see the record: team (default), an explicit user list, or the creator only — admins are NOT exempt')
+const VisibilityArgs = {
+  visibility: Visibility.optional(),
+  visible_to: z.array(z.string().min(1)).max(100).optional()
+    .describe('UOA user ids granted access (implies visibility: users); agents see it when acting for a granted human'),
+  origin: z.string().max(64).optional()
+    .describe('declared source class of this data (set-once); refused when in the team\'s rejected origins'),
+}
 export const CrmRecordCreate = { in: z.object({ object_type: Slug, data: RecordData,
-  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...VisibilityArgs, ...WriteCommon }),
   out: z.object({ record: RecordOut, duplicates: z.array(Candidate).optional() }) }
 export const CrmRecordUpdate = { in: z.object({ id: Uuid, data: RecordData.describe('null clears a value'),
-  owner: Actor.nullable().optional(), expected_version: ExpectedVersion, ...WriteCommon }),
+  owner: Actor.nullable().optional(), ...VisibilityArgs, expected_version: ExpectedVersion, ...WriteCommon }),
   out: z.object({ record: RecordOut }) }
 export const CrmRecordAssert = { in: z.object({ object_type: Slug,
   match_attribute: Slug.describe('a unique attribute present in data'), data: RecordData,
@@ -426,6 +436,27 @@ const QualityBucket = z.object({ count: z.number().int(),
 export const CrmDataQuality = { in: z.object({ object_type: Slug.optional(),
   stale_days: z.number().int().min(1).max(3650).default(90) }),
   out: z.object({ missing_required: QualityBucket, stale: QualityBucket, orphans: QualityBucket, collisions: QualityBucket }) }
+
+// ── compliance: erasure, suppression, origin guard ───────────────────────────
+export const SuppressionKind = z.enum(['email','phone','domain','company_number'])
+export const SuppressionReason = z.enum(['objection','erasure','bounce','manual'])
+export const CrmRecordErase = { in: z.object({ id: Uuid, reason: z.string().min(1).max(500),
+  suppress: z.boolean().default(true).describe('write hashed suppression entries for contact values before scrubbing') }),
+  out: z.object({ erased: z.literal(true), suppressed: z.array(z.object({ kind: SuppressionKind, count: z.number().int() })) }) }
+export const CrmSuppressionAdd = { in: z.object({ kind: SuppressionKind, value: z.string().min(1).max(320),
+  reason: SuppressionReason, note: z.string().max(500).optional() }), out: z.object({ added: z.literal(true) }) }
+export const CrmSuppressionCheck = { in: z.object({ entries: z.array(z.object({ kind: SuppressionKind,
+  value: z.string().min(1).max(320) })).min(1).max(100) }),
+  out: z.object({ results: z.array(z.object({ kind: SuppressionKind, suppressed: z.boolean(),
+    reason: SuppressionReason.optional() })) }) }
+export const CrmSuppressionList = { in: z.object({ kind: SuppressionKind.optional(), cursor: Cursor, limit: Limit }),
+  out: z.object({ entries: z.array(z.object({ kind: SuppressionKind, key_hash: z.string(),
+    reason: SuppressionReason, note: z.string().nullable(), created_at: IsoDateTime })),
+    next_cursor: z.string().nullable() }) }
+export const CrmSuppressionRemove = { in: z.object({ kind: SuppressionKind, value: z.string().min(1).max(320),
+  reason: z.string().min(1).max(500) }), out: z.object({ removed: z.boolean() }) }
+export const CrmOriginGuardSet = { in: z.object({ rejected: z.array(z.string().min(1).max(64)).max(50) }),
+  out: z.object({ rejected: z.array(z.string()) }) }
 
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),

@@ -140,6 +140,19 @@ All 16 blockers verified real and fixed; the majors and minors accepted except w
 
 **Rejected (R4):** B20's soft time-gate for the property tests (kept as a local guideline, CI asserts success only — folded into the task wording); B26 stub-deps concern demoted to a comment requirement, as the reviewer itself concluded.
 
+## DeepSignal policy asks (2026-08-23)
+
+DeepSignal filed six pre-binding asks against this design ([deepsignal.live/docs/plans/deepcrm-policy-asks.md](../../deepsignal.live/docs/plans/deepcrm-policy-asks.md)). Triage — all six accepted, one already fixed:
+
+| Ask | Verdict | Where it landed |
+|---|---|---|
+| §1 Per-record visibility (private/users records inexpressible in policy) | **Accepted as designed by the ask** — visibility is record *data* (`team\|users\|private` + human grants), evaluated before policy, admins not exempt; compatible with policy immutability by construction. | schema-engine §2/§4/§4c′, auth §4a, contracts, plan T48–T49 |
+| §2 Webhooks evaluate as admin | **Partly stale** (the admin shortcut was already removed in the review pass), the real gap accepted: webhooks now carry a subscribing principal, are visibility-filtered as that principal, and push payloads are value-free for confidential/restricted — a webhook is a nudge, values come via pull. | events §1/§3, plan T53 |
+| §3 No suppression/consent/erasure | **Accepted — the most substantial addition.** Hash-keyed `suppression_entries` with no FKs (survive tenant deletion and erasure, the audit-log precedent); `crm_suppression_add/check/list/remove`; `crm_record_erase` that suppresses first, scrubs data + historical values in place, and leaves a permanent tombstone. Six new tools (surface now 56). | schema-engine §2/§4d, mcp-surface §7a, policy-defaults, plan T50–T52 |
+| §4 Org scope deferred vs DeepSignal's `org` ShareScope | **Q5 decided rather than left open:** tenant stays org+team for v1; org-wide records explicitly do not exist and `org`-scoped shares stay on the product's side. Recorded before any binding, which was the ask's actual point. New open question (Q13) on org-wide suppression. | brief §9 Q5/Q13, auth §4a |
+| §5 Origin class as policy condition | **Confirmed by design** (conditions stay closed; the gateway keeps enforcement) and the suggested defence-in-depth accepted: `Team.rejectedOrigins` + set-once `Record.origin` + `crm_origin_guard_set`, refusing tainted writes with `ORIGIN_REJECTED`. | schema-engine §2/§4 step 3, plan T50 |
+| §6 Provenance hardcoded to Nessie | **Accepted:** `DEEPCRM_APPS` per-app registry (key hashes + context JWKS/issuer), `X-App-Context` with the Nessie alias, delegation `act` chain recorded so multi-hop calls stay attributable per hop; `agent:<app>:<agentId>` keys on the immediate caller. | auth §1, nessie-integration §1, plan T53 |
+
 ## Process note
 
 Every accepted decision is applied to the affected doc in the same commit series as this file; the plans were updated where a decision changes an implementation task. Rejected findings are recorded above so they are not re-litigated at implementation time.

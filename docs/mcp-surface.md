@@ -97,7 +97,7 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_record_create` | Create a record (one-off inserts; syncing or importing? use `crm_record_assert`; many rows? `crm_records_bulk_assert`). Inline `links` are atomic with the create. Returns `duplicates` on `warn` matches; fails `DUPLICATE_FOUND` on unique/`block` collisions — then assert or merge. | `{ object_type, data: {slug: value}, links?: [{ relation_type, to_record_id, data? }], owner?: Actor, reason?, idempotency_key? }` | `{ record, duplicates?: Candidate[] }` |
+| `crm_record_create` | Create a record (one-off inserts; syncing or importing? use `crm_record_assert`; many rows? `crm_records_bulk_assert`). Inline `links` are atomic with the create. `visibility`/`visible_to` restrict who can see it (data-level, admins not exempt); `origin` declares the data's source class. Returns `duplicates` on `warn` matches; fails `DUPLICATE_FOUND` on unique/`block` collisions. | `{ object_type, data: {slug: value}, links?: [{ relation_type, to_record_id, data? }], owner?: Actor, reason?, idempotency_key? }` | `{ record, duplicates?: Candidate[] }` |
 | `crm_record_update` | Patch attributes on a record. Keys set to `null` are cleared. Pass `expected_version` to avoid overwriting concurrent edits. | `{ id, data, owner?, expected_version?, reason?, idempotency_key? }` | `{ record }` |
 | `crm_record_assert` | Create-or-update by a unique attribute (upsert) — the safe default for any sync or import. Multi-value match attribute: the first element is the key; other elements resolving to different records ⇒ `DUPLICATE_FOUND` with all candidates (merge cue). | `{ object_type, match_attribute: slug, data, links?, owner?, reason?, idempotency_key? }` | `{ record, created: boolean }` |
 | `crm_record_get` | Fetch one record by id, or by a unique attribute value. Optionally include active links (grouped by relation) and the recent timeline. | `{ id? , object_type?, match_attribute?, value?, include_links?: boolean, include_timeline?: number }` | `{ record, links?, timeline? }` |
@@ -152,6 +152,19 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_unmerge` | Undo a merge from its snapshot. | `{ merge_change_id, reason }` | `{ restored: [id] }` |
 | `crm_data_quality` | Report: required attributes missing, stale records (no activity in N days), orphans (many-side of a `restrict` relation with no active link), unique collisions predating a rule. Each bucket carries a `query_filter` to paginate the full set via `crm_records_query`. | `{ object_type?, stale_days?: number }` | `{ missing_required, stale, orphans, collisions }` each `{ count, items: [{record, detail}] (≤100), query_filter }` |
 
+### 7a. Compliance: erasure, suppression, origin guard
+
+| Tool | Description | Input | Output |
+|---|---|---|---|
+| `crm_record_erase` | Right-to-erasure: scrub a record's data and its historical values in place, leave a permanent tombstone, and (by default) write hashed suppression entries for its contact values so the person is never contacted again. Owner-only, approval-gated, irreversible. | `{ id, reason, suppress?: true }` | `{ erased: true, suppressed: [{kind, count}] }` |
+| `crm_suppression_add` | Record a do-not-contact objection for an email/phone/domain. The value is normalized and hashed in memory — never stored readable. | `{ kind, value, reason, note? }` | `{ added: true }` |
+| `crm_suppression_check` | **Call before any outbound send.** Checks values against the suppression store; suppressed entries must not be contacted. | `{ entries: [{kind, value}] (≤100) }` | `{ results: [{kind, suppressed, reason?}] }` |
+| `crm_suppression_list` | List suppression entries (hashes and metadata only — the store holds no readable values). | `{ kind?, cursor?, limit? }` | `{ entries, next_cursor }` |
+| `crm_suppression_remove` | Remove a suppression entry (un-suppressing an objector — owner + approval). | `{ kind, value, reason }` | `{ removed: boolean }` |
+| `crm_origin_guard_set` | Set the team's rejected origin classes: writes declaring one of these `origin` values are refused (`ORIGIN_REJECTED`). Defence in depth for taint boundaries. Owner-only. | `{ rejected: [string] }` | `{ rejected }` |
+
+Suppression entries survive tenant deletion and record erasure by construction (no foreign keys — schema-engine §2); erasure semantics: schema-engine §4d.
+
 ## 8. IO, change feed, webhooks
 
 | Tool | Description | Input | Output |
@@ -176,4 +189,4 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 
 ## 10. Tool count and grouping
 
-50 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (12), `crm_link*` (3), `crm_list_*`/`crm_view_*` (7), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters (enforced at registration) so a client's find/load meta-tools work; longer guidance lives in the `crm://help/*` resources.
+56 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (12), `crm_link*` (3), `crm_list_*`/`crm_view_*` (7), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_record_erase`/`crm_suppression_*`/`crm_origin_guard_set` (6), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters (enforced at registration) so a client's find/load meta-tools work; longer guidance lives in the `crm://help/*` resources.

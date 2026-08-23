@@ -42,6 +42,8 @@ Researched across Attio, HubSpot, Salesforce and Twenty (sources in §10). The m
 | **Lists / saved views / segments** | "Enterprise deals closing this quarter" is a reusable query, and a *list* can carry its own attributes per entry (Attio lists/entries). | Saved queries as metadata (`views`) and **lists** with per-entry attributes (§5.6). |
 | **Import / export / bulk** | Nobody starts empty. | Bulk assert + export tools run as MCP **Tasks** (long-running, pollable) (§6.4). |
 | **Change feed / automation hooks** | Agents must be able to react ("a deal moved to *Negotiation* → draft the contract") without polling everything. | `crm_changes_since(cursor)` plus an outbound signed webhook into Nessie, the same delivery-shaped pattern DeepSignal uses (§6.5). |
+| **Suppression, consent & erasure** | Any CRM that feeds outbound contact needs a do-not-contact authority and a right-to-erasure that does not resurrect the objection. Raised as a blocking ask by DeepSignal ([policy asks](../../deepsignal.live/docs/plans/deepcrm-policy-asks.md) §3). | Hash-keyed `suppression_entries` that survive tenant deletion and erasure (no FKs — the `audit_logs` precedent); `crm_suppression_*` tools with a send-time check; `crm_record_erase` scrubs data and history in place, leaves a tombstone, writes suppression first (schema-engine §4d). |
+| **Per-record visibility** | Not every record is team-visible: a private lead, an explicit share list. DeepSignal's `ShareScope` needs a 1:1 target (policy asks §1). | First-class `visibility` (`team` \| `users` \| `private`) as record **data**, evaluated before policy, admins not exempt; grants name humans (§5.9 / auth §4a). |
 | **Data quality signals** | Stale records, missing required fields, orphan deals. | Deterministic `crm_data_quality` report tool; the *judgement* of what to do is the calling agent's. |
 
 What we deliberately leave out of v1 (CRM features that are really UI features or separate products): email sending/sequencing, calendar sync, dashboards/reports rendering, marketing automation, quotes/CPQ, territory management. Interactions still *land* in the CRM — ingestion is an open question (§9).
@@ -279,7 +281,7 @@ Reuse nessie's engine with CRM vocabulary:
 
 ## 6. The MCP tool surface
 
-> The normative, exhaustive list (50 tools, exact names, inputs, outputs, MRTR and Task behaviour) is [mcp-surface.md](mcp-surface.md); this section is the design overview.
+> The normative, exhaustive list (56 tools, exact names, inputs, outputs, MRTR and Task behaviour) is [mcp-surface.md](mcp-surface.md); this section is the design overview.
 
 Design rules: few, generic, well-described tools over the schema (not one tool per object type — the tool list must stay stable and cacheable as the schema grows); every mutating tool takes `reason?` and `idempotency_key?`; every tool that takes an id ships with the read that finds it (nessie's rule); errors are typed and actionable (`duplicate_found{candidates}`, `version_conflict{current}`, `policy_denied{resource, action}`, `input_required` via MRTR).
 
@@ -331,7 +333,7 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 
 ### 6.7 Tool-list size
 
-50 tools (see [mcp-surface.md](mcp-surface.md) §10). Nessie defers MCP schemas behind `mcp_find_tools`/`mcp_load_tools` above 12 inline tools, so DeepCRM groups its tools with consistent prefixes (`crm_schema_*`, `crm_record*`, `crm_link*`, `crm_search`, …) and short descriptions so the find/load step works well, and sets `ttlMs` on `tools/list` so clients do not refetch per call.
+56 tools (see [mcp-surface.md](mcp-surface.md) §10). Nessie defers MCP schemas behind `mcp_find_tools`/`mcp_load_tools` above 12 inline tools, so DeepCRM groups its tools with consistent prefixes (`crm_schema_*`, `crm_record*`, `crm_link*`, `crm_search`, …) and short descriptions so the find/load step works well, and sets `ttlMs` on `tools/list` so clients do not refetch per call.
 
 ---
 
@@ -361,17 +363,18 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 2. **Runtime-schema strategy.** JSONB-current-state + change log (proposed) vs Attio-style per-value validity rows. The proposal is simpler and faster to read; it makes "value at time T" a replay rather than an index hit. Acceptable?
 3. **Who else may call it?** v1 assumes Nessie is the only MCP client (app key + UOA delegation + signed provenance). Should a non-Nessie agent (Claude Code, a customer's own agent) be able to connect with a UOA OAuth token alone, using CIMD per the new spec? That decides whether `packages/mcp-inbound` must be generalised now.
 4. **Shared inbound-auth package.** DeepSignal and DeepCRM would have byte-similar `mcp-inbound` code. Extract a shared `@deep/mcp-inbound` (lives where — `deep.agent`?) before DeepCRM copies it?
-5. **Tenant = team, or org-wide CRM?** Following deepsignal/nessie, the tenant is org+team, so two Nessie workspaces in one org have two CRMs. Is that right for a CRM, where sales and success usually want *one* customer record across the company? Option: tenant = org, with team-scoped *policy* instead.
+5. **Tenant = team, or org-wide CRM?** **Decided for v1 (2026-08-23): tenant stays org+team** — matching the UOA doctrine and the deepsignal/nessie tenant model. Consequence, recorded deliberately before any product binds: there is no org-wide record and no `org` visibility; DeepSignal's `org` ShareScope has no DeepCRM target and such records stay on DeepSignal's side (its [policy asks](../../deepsignal.live/docs/plans/deepcrm-policy-asks.md) §4). Cross-team sharing, if ever, is a designed migration — not a flag.
 6. **Ingestion.** Emails, calendar, calls: do interactions arrive only via agents calling `crm_activity_log` (v1 proposal), or does DeepCRM get its own inbound connectors/webhooks (nessie's comms-connect already normalises Slack/Gmail into `CommsEvent` — the natural source)?
 7. **Embeddings & semantic dedup.** Through Ledger `/v1/jina` like nessie (proposed), signed with the calling user's delegation. Confirm DeepCRM gets its own product-bound Ledger app key.
 8. **Approvals home.** MRTR-only (agent asks the human in Nessie and re-issues) vs also mirroring into Nessie's `ApprovalRequest` via the integration. The former is simpler; the latter is auditable in one place.
-9. **Per-object-type tool projection.** Keep the generic 50 tools (proposed), or additionally project typed convenience tools (`crm_deal_create` with a real schema) for the template types to make small models more reliable? Costs tool-list size.
+9. **Per-object-type tool projection.** Keep the generic 56 tools (proposed), or additionally project typed convenience tools (`crm_deal_create` with a real schema) for the template types to make small models more reliable? Costs tool-list size.
 10. **Naming.** `deepcrm.live` with `api.deepcrm.live` as the only host. Product name in `tools/list`: "DeepCRM".
 11. **Single-change revert and schema diff.** `crm_change_revert {change_id}` and `crm_schema_changes_since {version}` were proposed in review (R3 B10); v1 documents the manual recovery recipe instead. Promote them?
 12. **Policy administration.** v1 policies are immutable post-seed (operator migrations only). Ship an owner-only, approval-gated policy tool surface later?
-13. **Matrix as the family's event fabric.** Should DeepCRM's change-feed delivery (§6.5) grow a `matrix_room` target, and — the bigger question, owned by Nessie — should Nessie channels ever sit on a Matrix homeserver so products and customers' own agents share rooms? Not needed for v1; the delivery seam keeps the door open (§3.5).
+13. **Suppression scope.** Suppression entries are per-team today (the tenant). Should an organisation-wide — or even instance-wide — suppression check exist, so an objection recorded by one team suppresses sends from every team? Legally attractive, tenancy-crossing by definition; needs its own design.
+14. **Matrix as the family's event fabric.** Should DeepCRM's change-feed delivery (§6.5) grow a `matrix_room` target, and — the bigger question, owned by Nessie — should Nessie channels ever sit on a Matrix homeserver so products and customers' own agents share rooms? Not needed for v1; the delivery seam keeps the door open (§3.5).
 
-> Default answers assumed by the docs and plans until you say otherwise: Q1 Prisma (+ `$queryRaw`), Q2 JSONB + change log, Q3 Nessie-only in v1 with the auth seam generalisable, Q4 copy now/extract later, Q5 tenant = org + team, Q6 agents call `crm_activity_log`, Q7 own Ledger key, Q8 MRTR only, Q9 generic tools only, Q10 as stated, Q11/Q12 deferred, Q13 not in v1.
+> Default answers assumed by the docs and plans until you say otherwise: Q1 Prisma (+ `$queryRaw`), Q2 JSONB + change log, Q3 Nessie-only in v1 with the auth seam generalisable, Q4 copy now/extract later, Q5 tenant = org + team, Q6 agents call `crm_activity_log`, Q7 own Ledger key, Q8 MRTR only, Q9 generic tools only, Q5 decided (org+team), Q10 as stated, Q11/Q12 deferred, Q13 per-team for now, Q14 not in v1.
 
 ---
 
