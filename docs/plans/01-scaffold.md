@@ -170,7 +170,7 @@ curl prints `{"ok":true,…}`.
 
 ---
 
-### T07 — Worker loop
+### T07 ✅ — Worker loop
 
 **Depends on:** T06. **Spec:** `docs/architecture.md` §1.
 
