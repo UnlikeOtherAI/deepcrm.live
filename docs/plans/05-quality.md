@@ -1,0 +1,100 @@
+# Phase 5 — Quality: search, duplicates, merge, data quality, export, approvals
+
+Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface test is empty.
+
+### T35 — Search tool
+
+**Depends on:** T34. **Spec:** `docs/schema-engine.md` §8; `docs/mcp-surface.md` §7 (`crm_search`).
+
+**Files:**
+- Create `packages/schema-engine/src/search/query.ts` — `keywordSearch` (`ts_rank(tsv, plainto_tsquery('simple', $))`), `semanticSearch` (`embedding <=> $::vector`, needs `Embedder`), `hybridSearch` (RRF k=60 over top 50 each). Tenant + object-type filters; excludes deleted/merged.
+- `api/src/services/search.ts` + tool in `api/src/mcp/tools/search.ts`; results redacted; `match` field.
+- Tests (DB with FakeEmbedder): keyword finds by company domain token; hybrid returns union.
+
+**Acceptance:** api tests green.
+
+---
+
+### T36 — Find duplicates Task
+
+**Depends on:** T35. **Spec:** `docs/schema-engine.md` §6; `docs/mcp-surface.md` §7 (`crm_find_duplicates`).
+
+**Files:**
+- Create `worker/src/jobs/dedup-scan.ts` — for the object type: (1) groups from `record_unique_keys` sharing `normalized_value` (pre-rule data), (2) `matching_rules` pairs via `_n` shadow keys and `pg_trgm` similarity, (3) when `include_semantic`: nearest-neighbour pairs with cosine distance < 0.08 on `record_search.embedding`; union-find into groups; evidence per pair; `progress`.
+- Tool `crm_find_duplicates` enqueues; result shape per §7.
+- Tests (worker DB): three near-identical people ⇒ one group with two evidence kinds.
+
+**Acceptance:** worker tests green.
+
+---
+
+### T37 — Merge planner (pure)
+
+**Depends on:** T36. **Spec:** `docs/schema-engine.md` §7 steps 2–3.
+
+**Files:** create `packages/schema-engine/src/merge/plan.ts` — `planMerge(schema, objectType, survivor, losers, lastSetAt, fieldChoices)` → `{ data, uniqueKeyMoves, fieldSources }`; unit tests: survivor non-null wins, newest among losers otherwise, multi union de-duplicated, `field_choices` override, invalid choice ⇒ `VALIDATION_FAILED`.
+
+**Acceptance:** engine tests green.
+
+---
+
+### T38 — Merge execution and redirects
+
+**Depends on:** T37. **Spec:** `docs/schema-engine.md` §7 steps 1, 4–7; `docs/mcp-surface.md` §7 (`crm_merge_records`).
+
+**Files:**
+- Create `packages/schema-engine/src/merge/execute.ts` — transaction with locks; re-point `record_links` (both columns), collapse duplicates keeping oldest, cardinality fix-ups, `list_entries` re-point, unique keys per plan, losers `merged_into_id`/`deleted_at`, `merge` changes with `snapshot`, reindex enqueue for survivor.
+- Edit `records` read paths (`getRecord`, `recordAt`, links list): a loser id resolves to the survivor with `redirected_from` (one hop; `MERGED` error only when the survivor is itself deleted).
+- Service with policy `merge.merge` (approval default — MRTR handled in T42; until then admin-only in tests) + tool.
+- Tests (DB): two people merged — links re-pointed and de-duplicated, loser `crm_record_get` returns survivor with `redirected_from`, unique email moved.
+
+**Acceptance:** api + engine tests green.
+
+---
+
+### T39 — Unmerge and property invariant (d)
+
+**Depends on:** T38. **Spec:** `docs/schema-engine.md` §7 step 8.
+
+**Files:** `packages/schema-engine/src/merge/unmerge.ts` (restore losers from `snapshot`, restore their links that were re-pointed — tracked in the snapshot as `{ linkId, originalFrom, originalTo }`, `unmerge` changes), tool `crm_unmerge`; extend `properties.test.ts` with invariant (d): merge then unmerge ⇒ losers' `data` and active link sets equal their pre-merge state.
+
+**Acceptance:** engine property tests green.
+
+---
+
+### T40 — Data quality report
+
+**Depends on:** T39. **Spec:** `docs/mcp-surface.md` §7 (`crm_data_quality`).
+
+**Files:** `packages/schema-engine/src/quality/report.ts` — four SQL queries (`missing_required` via schema + `data ? slug` check, `stale` via `last_activity_at < now - stale_days`, `orphans` = records of any type having a `many_to_one` relation type with zero active links, `collisions` = `_n` shadow duplicates for attributes now unique); service + tool; counts + first 100 rows each. Tests with seeded dirty data.
+
+**Acceptance:** api tests green.
+
+---
+
+### T41 — Export Task
+
+**Depends on:** T40. **Spec:** `docs/mcp-surface.md` §8 (`crm_export`).
+
+**Files:**
+- Create `api/src/services/exports.ts` + `worker/src/jobs/bulk-export.ts` — stream records (query compiler, page 500) into JSONL or CSV (RFC 4180, header from attribute slugs) written to `DEEPCRM_EXPORT_DIR` (new env, default `./.exports`; add to `docs/architecture.md` §6 and `.env.example`), file name `<jobId>.<ext>`.
+- Create `api/src/routes/exports.ts` — `GET /exports/:jobId?sig=…&exp=…` serving the file when the HMAC (keyring) of `jobId:exp` matches and `exp` in the future; this is infrastructure (download), not a data API. Result `{ url, rows, expires_at }`.
+- Retention: `worker/src/jobs/retention.ts` (create) — daily: delete export files older than 1 h, hard-delete records with `deleted_at < now - DEEPCRM_RETENTION_DAYS` (cascade), prune `idempotency_replays` older than 24 h. Register with a self-rescheduling enqueue (`visibleAt = now + 24h`, idempotency `retention:<date>`).
+- Tests: export 12 deals as CSV through harness + embedded worker; download URL returns 200 with 13 lines; expired signature 403.
+
+**Acceptance:** api + worker tests green. **Docs:** `docs/architecture.md` §6.
+
+---
+
+### T42 — Approvals via MRTR
+
+**Depends on:** T41. **Spec:** `docs/auth-and-tenancy.md` §4; `docs/mcp-surface.md` §0.4.
+
+**Files:**
+- Create `api/src/services/approvals.ts` — `requireApproval(ctx, { tool, resourceType, resourceId, args, reason })`: when the matching policy rule has `requiresApproval` and the actor's role is not admin/owner: create `approval_requests` (pending, 24 h, `continuation_token` random 32 bytes, `arguments_hash`), return the token; `consumeApproval(ctx, token, args)`: token exists, pending, not expired, same tenant, `arguments_hash` equal, caller role admin/owner ⇒ mark `consumed` and return. Mismatch ⇒ `APPROVAL_REQUIRED` with detail.
+- Edit tools `crm_merge_records`, `crm_record_delete`, `crm_export`, and schema `define` tools — wrap: if `inputResponses.approval` present ⇒ `consumeApproval`; else `requireApproval` ⇒ `inputRequired([{ id:'approval', kind:'approval', message, approval_token }])` or proceed when not required.
+- Seed `requiresApproval = true` on the default member deny rows for `merge.merge`, `record.delete`, `export.export`, `schema.define` (edit `seedDefaultPolicies`; add a migration-free data change — defaults are rows, created per tenant).
+- Tests: member principal merging ⇒ `input_required` with token; re-issue as admin principal with the token ⇒ merge succeeds; wrong args hash ⇒ error; expired ⇒ error.
+- Edit `api/test/mcp/surface.test.ts` — `NOT_YET = []`.
+
+**Acceptance:** `pnpm verify` green; `grep -c "NOT_YET = \[\]" api/test/mcp/surface.test.ts` prints `1`; `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md`.
