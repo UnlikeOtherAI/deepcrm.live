@@ -2,6 +2,7 @@ import { buildApp } from './app.js'
 import { createAppDeps, type AppDeps } from './deps.js'
 import { env } from './env.js'
 import type { JobHandler, WorkerDeps } from '@deepcrm/worker'
+import { handlers } from '@deepcrm/worker/dist/jobs/registry.js'
 
 // Fail-closed boot check (docs/auth-and-tenancy.md §1, review S2.3): with
 // auth off, only localhost origins are ever safe, and never in production.
@@ -25,7 +26,7 @@ function assertAuthOffIsSafe(publicUrl: string): void {
 const WORKER_MODULE = '@deepcrm/worker'
 
 type WorkerModule = {
-  startWorker: (deps: WorkerDeps, handlers: Record<string, JobHandler>) => Promise<void>
+  startWorker: (deps: WorkerDeps, handlers: Record<string, JobHandler>, signal?: AbortSignal) => Promise<void>
 }
 
 function isWorkerModule(loaded: unknown): loaded is WorkerModule {
@@ -33,7 +34,7 @@ function isWorkerModule(loaded: unknown): loaded is WorkerModule {
   return 'startWorker' in loaded && typeof loaded.startWorker === 'function'
 }
 
-async function startWorkerIfNeeded(deps: AppDeps): Promise<void> {
+async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<void> {
   if (env.DEEPCRM_PROCESS_MODE === 'api') return
   const loaded: unknown = await import(WORKER_MODULE)
   if (!isWorkerModule(loaded)) {
@@ -42,7 +43,7 @@ async function startWorkerIfNeeded(deps: AppDeps): Promise<void> {
     )
   }
   // T07 fills the handler registry at this call site (T04 passes {}).
-  await loaded.startWorker(deps, {})
+  await loaded.startWorker(deps, handlers, signal)
 }
 
 async function main(): Promise<void> {
@@ -51,15 +52,16 @@ async function main(): Promise<void> {
   }
 
   const deps = createAppDeps(env)
+  const workerAbort = new AbortController()
 
   if (env.DEEPCRM_PROCESS_MODE === 'worker') {
-    await startWorkerIfNeeded(deps)
+    await startWorkerIfNeeded(deps, workerAbort.signal)
     return
   }
 
   // Start the worker first: an unbootable worker mode must never leave a
   // listening-but-half-started API behind.
-  await startWorkerIfNeeded(deps)
+  const worker = startWorkerIfNeeded(deps, workerAbort.signal)
 
   const app = buildApp(deps, env)
   await app.listen({ port: env.DEEPCRM_API_PORT, host: '0.0.0.0' })
@@ -68,8 +70,9 @@ async function main(): Promise<void> {
   const shutdown = (): void => {
     if (shuttingDown) return
     shuttingDown = true
+    workerAbort.abort()
     app.log.info({ signal: 'SIGTERM' }, 'shutting down')
-    void app.close().then(() => process.exit(0))
+    void Promise.all([worker, app.close()]).then(() => process.exit(0))
   }
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
