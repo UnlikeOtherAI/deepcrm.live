@@ -183,7 +183,7 @@ curl prints `{"ok":true,…}`.
 
 ---
 
-### T08 — CI workflow
+### T08 ✅ — CI workflow
 
 **Depends on:** T07. **Spec:** `docs/testing.md` "CI".
 
