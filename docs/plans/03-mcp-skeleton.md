@@ -36,7 +36,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ### T21 — Tool error mapping and result helpers
 
-**Depends on:** T20. **Spec:** `docs/mcp-surface.md` §0.2–§0.4; `docs/schema-engine.md` §10.
+**Depends on:** T20. **Spec:** `docs/mcp-surface.md` §0.2–§0.4; `docs/spec/contracts.md` (`errors.ts`, `mrtr.ts` — copy verbatim).
 
 **Files:**
 - Create `api/src/mcp/tools/result.ts` — `ok(structured, summary: string)` → `{ content: [{ type:'text', text: summary }], structuredContent }`; `toolError(err)` → `{ isError: true, content: [{type:'text', text: code+': '+message}], structuredContent: { code, message, ...details } }` mapping `ServiceError`; unknown errors ⇒ `INTERNAL` (logged with requestId, message not leaked).
@@ -51,7 +51,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ### T22 — Schema tools
 
-**Depends on:** T21. **Spec:** `docs/mcp-surface.md` §1, §2.
+**Depends on:** T21. **Spec:** `docs/mcp-surface.md` §1, §2; `docs/spec/contracts.md` (`tools.ts` schema section — copy the Crm* pairs into `packages/schemas/src/tools.ts` as they land).
 
 **Files:**
 - Create `api/src/mcp/tools/schema.ts` — register the 11 schema tools with the exact names/descriptions/inputs from §2, calling `services/schema.ts` and `templates/apply.ts`. Archive tools: when values/records exist, return `inputRequired([{ id:'confirm', kind:'confirmation', message, schema }])` unless `inputResponses.confirm.confirmed === true`.
@@ -64,7 +64,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ### T23 — Record tools
 
-**Depends on:** T22. **Spec:** `docs/mcp-surface.md` §3 (all 10 tools except `crm_records_bulk_assert`, which is T30).
+**Depends on:** T22. **Spec:** `docs/mcp-surface.md` §3; `docs/spec/contracts.md` (`records.ts`, `tools.ts` record section); flows F3/F4 in `docs/spec/protocol-flows.md` are the acceptance narrative.
 
 **Files:**
 - Create `api/src/mcp/tools/records.ts` — register `crm_record_create/update/assert/get/delete/restore/at/history`, `crm_records_query`. `crm_record_get` by `(object_type, match_attribute, value)` uses unique keys. `include_links` groups active links by relation slug with `RecordSummary`s.

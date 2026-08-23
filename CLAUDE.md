@@ -14,6 +14,7 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 - [docs/mcp-surface.md](docs/mcp-surface.md) — every tool, resource and prompt (the spec for the product surface).
 - [docs/auth-and-tenancy.md](docs/auth-and-tenancy.md) — inbound MCP auth, tenant resolution, policy.
 - [docs/deployment.md](docs/deployment.md), [docs/testing.md](docs/testing.md).
+- [docs/spec/](docs/spec/) — wire-level design: contracts (zod for every tool), templates, policy defaults, events protocol, protocol flows, Nessie integration. Plans copy from these files verbatim.
 - [docs/plans/00-execution-guide.md](docs/plans/00-execution-guide.md) — how the work is broken into tasks an agent executes one at a time.
 
 ## Architecture

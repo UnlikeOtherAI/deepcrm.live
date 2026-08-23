@@ -1,0 +1,71 @@
+{
+  "slug": "system",
+  "description": "System object types every tenant has: activity, note, task, and their 'about' relations. Applied automatically on tenant provisioning.",
+  "object_types": [
+    {
+      "slug": "activity",
+      "kind": "system",
+      "singular_name": "Activity",
+      "plural_name": "Activities",
+      "description": "An interaction that happened: an email, call, meeting, message or custom event, linked to the records it was about.",
+      "icon": "activity",
+      "primary_attribute": "subject",
+      "attributes": [
+        { "slug": "kind", "name": "Kind", "description": "What sort of interaction this was.", "type": "select", "is_required": true, "is_system": true,
+          "config": { "type": "select", "options": [
+            { "id": "email", "label": "Email" }, { "id": "call", "label": "Call" }, { "id": "meeting", "label": "Meeting" },
+            { "id": "note", "label": "Note" }, { "id": "message", "label": "Message" }, { "id": "task_event", "label": "Task event" },
+            { "id": "custom", "label": "Custom" } ] } },
+        { "slug": "occurred_at", "name": "Occurred at", "description": "When the interaction happened.", "type": "datetime", "is_required": true, "is_indexed": true, "is_system": true },
+        { "slug": "direction", "name": "Direction", "description": "Inbound (they contacted us), outbound (we contacted them) or internal.", "type": "select",
+          "config": { "type": "select", "options": [ { "id": "inbound", "label": "Inbound" }, { "id": "outbound", "label": "Outbound" }, { "id": "internal", "label": "Internal" } ] } },
+        { "slug": "subject", "name": "Subject", "description": "One-line summary.", "type": "text", "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Body", "description": "Full content or notes of the interaction (markdown).", "type": "rich_text" },
+        { "slug": "participants", "name": "Participants", "description": "Humans and agents who took part.", "type": "actor_reference", "is_multi": true },
+        { "slug": "external_ref", "name": "External reference", "description": "Id in the source system (email message id, calendar event id). Re-logging the same ref updates the activity.", "type": "text", "is_unique": true, "config": { "type": "text", "maxLength": 300 } }
+      ]
+    },
+    {
+      "slug": "note",
+      "kind": "system",
+      "singular_name": "Note",
+      "plural_name": "Notes",
+      "description": "A free-form note attached to one or more records.",
+      "icon": "note",
+      "primary_attribute": "title",
+      "attributes": [
+        { "slug": "title", "name": "Title", "description": "Short title; derived from the first line of the body when absent.", "type": "text", "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Body", "description": "The note (markdown).", "type": "rich_text", "is_required": true }
+      ]
+    },
+    {
+      "slug": "task",
+      "kind": "system",
+      "singular_name": "Task",
+      "plural_name": "Tasks",
+      "description": "A to-do assigned to a human or an agent, optionally about records.",
+      "icon": "task",
+      "primary_attribute": "title",
+      "attributes": [
+        { "slug": "title", "name": "Title", "description": "What needs doing.", "type": "text", "is_required": true, "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "body", "name": "Details", "description": "Further detail (markdown).", "type": "rich_text" },
+        { "slug": "status", "name": "Status", "description": "Task state.", "type": "status", "is_required": true, "is_indexed": true, "default_value": "open",
+          "config": { "type": "status", "options": [
+            { "id": "open", "label": "Open", "category": "open", "position": 0 },
+            { "id": "in_progress", "label": "In progress", "category": "open", "position": 1 },
+            { "id": "done", "label": "Done", "category": "won", "position": 2 },
+            { "id": "cancelled", "label": "Cancelled", "category": "lost", "position": 3 } ] } },
+        { "slug": "due_at", "name": "Due", "description": "Deadline.", "type": "datetime", "is_indexed": true },
+        { "slug": "assignee", "name": "Assignee", "description": "Who owns the task (human or agent).", "type": "actor_reference", "is_indexed": true },
+        { "slug": "priority", "name": "Priority", "description": "Urgency.", "type": "select", "default_value": "normal",
+          "config": { "type": "select", "options": [ { "id": "low", "label": "Low" }, { "id": "normal", "label": "Normal" }, { "id": "high", "label": "High" }, { "id": "urgent", "label": "Urgent" } ] } }
+      ]
+    }
+  ],
+  "relation_types": [
+    { "slug": "activity_about", "from_object_type": "activity", "to_object_type": null, "forward_name": "about", "inverse_name": "activities", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this activity concerns." },
+    { "slug": "note_about", "from_object_type": "note", "to_object_type": null, "forward_name": "about", "inverse_name": "notes", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this note concerns." },
+    { "slug": "task_about", "from_object_type": "task", "to_object_type": null, "forward_name": "about", "inverse_name": "tasks", "cardinality": "many_to_many", "on_delete": "unlink", "is_system": true, "description": "Records this task concerns." }
+  ],
+  "matching_rules": {}
+}

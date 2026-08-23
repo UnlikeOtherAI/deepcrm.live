@@ -68,7 +68,7 @@ Both exit 0.
 
 ### T02 — Shared contracts: errors, actors, tenant, embedding width
 
-**Depends on:** T01. **Spec:** `docs/schema-engine.md` §10, `docs/auth-and-tenancy.md` §2.
+**Depends on:** T01. **Spec:** `docs/schema-engine.md` §10, `docs/auth-and-tenancy.md` §2, `docs/spec/contracts.md` (`primitives.ts`, `errors.ts` — copy verbatim).
 
 **Files (create) in `packages/schemas/src/`:**
 - `errors.ts` — `export const ErrorCode = { POLICY_DENIED: 'POLICY_DENIED', … } as const` with every code in schema-engine §10; `export class ServiceError extends Error { constructor(public code: ErrorCodeValue, message: string, public details: Record<string, unknown> = {}) }`; `export function isServiceError(e: unknown): e is ServiceError`.

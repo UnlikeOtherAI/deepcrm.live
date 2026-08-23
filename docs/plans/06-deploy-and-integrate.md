@@ -41,7 +41,7 @@ Steps: DNS record; rsync; `/srv/deepcrm/.env` (generate `DEEPCRM_APP_KEYS` for `
 
 ### T46 — Nessie integration spec (written in the nessie repo)
 
-**Depends on:** T44. **Spec:** nessie `CLAUDE.md` → "DeepWater as an agent tool" and "External-agent products"; `docs/brief.md` §8 item 4.
+**Depends on:** T44. **Spec:** `docs/spec/nessie-integration.md` (the protocol, from DeepCRM's side); nessie `CLAUDE.md` → "DeepWater as an agent tool" and "External-agent products".
 
 **Deliverable:** `nessie/docs/plans/<date>-deepcrm-integration.md` describing, in nessie's own vocabulary: an `IntegratedProduct` row `deepcrm` (category tool, auth mode `uoa_sso`), team enablement that provisions a **team-scoped, tool-projecting** `McpServerInstance` from a `deep-crm` catalog entry pointing at `https://api.deepcrm.live/mcp` with bearer `DEEPCRM_MCP_APP_KEY` (deployment env, like `DEEPSIGNAL_MCP_APP_KEY`), every call carrying `X-UOA-Delegation` + `X-Nessie-Context`; tools projected as `mcp_crm_*`, **default ON for team agents** (unlike DeepWater — CRM reads are cheap and unmetered) except `crm_merge_records`, `crm_record_delete`, `crm_export`, and schema `define` tools flagged `requiresExplicitGrant`; approvals: the agent surfaces MRTR `input_required` to the channel and re-issues on a human "yes" from an admin; DeepCRM webhook target = a new `POST /api/integrations/deepcrm/events` producing a rolling digest like DeepSignal's. No code in this task — the spec is reviewed by the owner first.
 

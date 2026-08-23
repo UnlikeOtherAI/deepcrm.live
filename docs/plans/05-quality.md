@@ -88,12 +88,12 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ### T42 — Approvals via MRTR
 
-**Depends on:** T41. **Spec:** `docs/auth-and-tenancy.md` §4; `docs/mcp-surface.md` §0.4.
+**Depends on:** T41. **Spec:** `docs/auth-and-tenancy.md` §4; `docs/mcp-surface.md` §0.4; flow F6 in `docs/spec/protocol-flows.md`; `docs/spec/policy-defaults.json` (requires_approval rows already seeded in T10 — verify, do not re-seed).
 
 **Files:**
 - Create `api/src/services/approvals.ts` — `requireApproval(ctx, { tool, resourceType, resourceId, args, reason })`: when the matching policy rule has `requiresApproval` and the actor's role is not admin/owner: create `approval_requests` (pending, 24 h, `continuation_token` random 32 bytes, `arguments_hash`), return the token; `consumeApproval(ctx, token, args)`: token exists, pending, not expired, same tenant, `arguments_hash` equal, caller role admin/owner ⇒ mark `consumed` and return. Mismatch ⇒ `APPROVAL_REQUIRED` with detail.
 - Edit tools `crm_merge_records`, `crm_record_delete`, `crm_export`, and schema `define` tools — wrap: if `inputResponses.approval` present ⇒ `consumeApproval`; else `requireApproval` ⇒ `inputRequired([{ id:'approval', kind:'approval', message, approval_token }])` or proceed when not required.
-- Seed `requiresApproval = true` on the default member deny rows for `merge.merge`, `record.delete`, `export.export`, `schema.define` (edit `seedDefaultPolicies`; add a migration-free data change — defaults are rows, created per tenant).
+- Verify the `requires_approval: true` rows from `docs/spec/policy-defaults.json` were seeded in T10 (`seedDefaultPolicies`); do not re-seed. For tenants provisioned before T10 shipped them there is nothing to migrate (no such tenants exist pre-launch).
 - Tests: member principal merging ⇒ `input_required` with token; re-issue as admin principal with the token ⇒ merge succeeds; wrong args hash ⇒ error; expired ⇒ error.
 - Edit `api/test/mcp/surface.test.ts` — `NOT_YET = []`.
 

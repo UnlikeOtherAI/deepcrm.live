@@ -12,6 +12,7 @@ By **UnlikeOtherAI Ltd**. Sibling of [nessie](../nessie) (where the agents live)
 | [`docs/mcp-surface.md`](docs/mcp-surface.md) | Every tool, resource, prompt. |
 | [`docs/auth-and-tenancy.md`](docs/auth-and-tenancy.md) | Inbound auth, tenant, policy. |
 | [`docs/deployment.md`](docs/deployment.md) · [`docs/testing.md`](docs/testing.md) | Ops and test rules. |
+| [`docs/spec/`](docs/spec/) | Wire-level design: [contracts.md](docs/spec/contracts.md) (every shared type + every tool's zod I/O), [templates/](docs/spec/templates/) (system + standard_crm JSON), [policy-defaults.json](docs/spec/policy-defaults.json), [events.md](docs/spec/events.md) (change feed + webhook protocol), [protocol-flows.md](docs/spec/protocol-flows.md) (11 wire sequences), [nessie-integration.md](docs/spec/nessie-integration.md). |
 | [`docs/plans/`](docs/plans/) | Executable task plans, phase by phase. |
 
 Status: **documentation complete, no code yet** (2026-08-23). Implementation follows `docs/plans/00-execution-guide.md`.

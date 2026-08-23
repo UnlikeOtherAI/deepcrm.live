@@ -80,7 +80,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ### T33 — Change feed tool
 
-**Depends on:** T32. **Spec:** `docs/mcp-surface.md` §8 (`crm_changes_since`).
+**Depends on:** T32. **Spec:** `docs/spec/events.md` §1–§2; `docs/spec/contracts.md` (`Change`).
 
 **Files:** `api/src/services/io.ts` (`changesSince(ctx, { cursor, object_types, kinds, limit })` keyset on `seq`, redaction of restricted values), tool in `api/src/mcp/tools/io.ts`. Cursor = string of the last `seq`. Tests: cursor walk over 120 changes yields each exactly once; `has_more` false at end.
 
@@ -90,7 +90,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ### T34 — Webhooks and delivery job
 
-**Depends on:** T33. **Spec:** `docs/mcp-surface.md` §8 (webhook tools + payload); `docs/architecture.md` §4 (`safeFetch`).
+**Depends on:** T33. **Spec:** `docs/spec/events.md` §3–§4 (envelope, signature, retry table, DeliveryTarget seam — implement the seam, ship only the webhook target); `docs/architecture.md` §4 (`safeFetch`).
 
 **Files:**
 - Create `packages/schemas/src/net/safe-fetch.ts` — port of nessie's guard: resolve host, reject private/loopback/link-local ranges, pin via undici `Agent` `connect.lookup`, re-validate on each redirect (max 3). Unit tests with fake resolver.

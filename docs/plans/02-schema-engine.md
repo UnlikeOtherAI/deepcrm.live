@@ -19,14 +19,14 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ### T10 — Schema metadata service
 
-**Depends on:** T09. **Spec:** `docs/schema-engine.md` §2, §9; `docs/mcp-surface.md` §2 (input shapes).
+**Depends on:** T09. **Spec:** `docs/schema-engine.md` §2, §9; `docs/spec/contracts.md` (`schema-specs.ts` — copy verbatim).
 
 **Files:**
-- Create `packages/schemas/src/schema-specs.ts` — zod: `AttributeSpecSchema`, `ObjectTypeDefineSchema`, `RelationTypeDefineSchema`, `MatchingRuleSchema`, and output types `ObjectTypeDetail`, `AttributeDetail`, `RelationTypeDetail`, `SchemaSnapshot`.
+- Create `packages/schemas/src/schema-specs.ts`, `attribute-values.ts`, `attribute-config.ts` — copied from `docs/spec/contracts.md`.
 - Create `packages/schema-engine/src/schema/load.ts` — `loadSchema(db, tenant): Promise<LoadedSchema>` (object types with attributes, relation types, matching rules; maps by slug and id); in-process cache keyed `teamId:schemaVersion` (read `teams.schema_version` first).
 - Create `packages/schema-engine/src/schema/mutate.ts` — inside one transaction each: `defineObjectType`, `updateObjectType`, `archiveObjectType`, `defineAttribute`, `updateAttribute`, `archiveAttribute`, `defineRelationType`, `archiveRelationType`, `setMatchingRules`. Rules: slug unique per tenant (`SCHEMA_CONFLICT`); `record_reference` attribute ⇒ also create/lookup its backing `RelationType` (`slug = <objectType>_<attr>`, `projectionAttributeSlug = attr`, cardinality `many_to_one` or `many_to_many` when `isMulti`); `status` never `isMulti`; `isUnique` only when `supportsUnique`; every mutation ends with `UPDATE teams SET schema_version = schema_version + 1` and `writeAudit`.
 - Create `api/src/services/schema.ts` — policy-checked wrappers (`checkPolicy(ctx,'schema','define',…)`), calling the engine; `getSchema(ctx, objectType?)`.
-- Create `api/src/services/policy.ts` — `checkPolicy` per auth-and-tenancy §4 and `seedDefaultPolicies(tx, tenant)` inserting the default table rows (called from `resolveTenant` on first creation). Unit test for deny-overrides and priority.
+- Create `api/src/services/policy.ts` — `checkPolicy` per auth-and-tenancy §4 and `seedDefaultPolicies(tx, tenant)` inserting the rows from `docs/spec/policy-defaults.json` (copy the file to `packages/schema-engine/src/policy-defaults.json`; called from `resolveTenant` on first creation). Unit test for deny-overrides and priority.
 - Tests (DB): define type + attributes + relation; duplicate slug conflict; `schema_version` increments; archive hides from `loadSchema` but row remains.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/schema-engine --filter=@deepcrm/api` green; `node scripts/lint-tenant-where.mjs` exits 0.
@@ -35,10 +35,10 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ### T11 — Templates and tenant provisioning
 
-**Depends on:** T10. **Spec:** `docs/schema-engine.md` §9; `docs/brief.md` §5.6.
+**Depends on:** T10. **Spec:** `docs/schema-engine.md` §9; `docs/spec/templates/system.json` and `standard_crm.json` (copy verbatim).
 
 **Files:**
-- Create `packages/schema-engine/src/templates/system.json` and `standard_crm.json` — JSON matching `TemplateSchema` (`{ slug, description, object_types: [ObjectTypeDefine…], relation_types: […], matching_rules: […] }`) with exactly the attributes/relations/rules in the spec.
+- Copy `docs/spec/templates/system.json` and `standard_crm.json` into `packages/schema-engine/src/templates/` unchanged; define `TemplateSchema` (zod) that both files parse against.
 - Create `packages/schema-engine/src/templates/apply.ts` — `applyTemplate(tx, tenant, actor, slug)`: idempotent (skip existing slugs), returns `{ added }`; `listTemplates()`.
 - Edit `api/src/services/tenancy.ts` — on first creation of a team: `seedDefaultPolicies` + `applyTemplate(system)`.
 - Tests (DB): applying `standard_crm` twice adds nothing the second time; provisioning creates `activity`, `note`, `task`, `activity_about`.
@@ -96,7 +96,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T14. **Spec:** `docs/schema-engine.md` §5.
 
 **Files:**
-- Create `packages/schemas/src/filter.ts` — recursive zod `FilterSchema`, `SortSchema`, `CursorSchema`.
+- Create `packages/schemas/src/filter.ts` — copy from `docs/spec/contracts.md` (`filter.ts`).
 - Create `packages/schema-engine/src/query/compile.ts` — `compileQuery(schema, objectType, { filter, sort, cursor, limit })` → `{ sql: Prisma.Sql, countSql }` using `Prisma.sql` fragments: `data->>'slug'` with casts (`::numeric`, `::timestamptz`, `::date`, `::boolean`), `?` / `@>` for multi, `EXISTS (SELECT 1 FROM record_links …)` for `linked_to`, `tsv @@ plainto_tsquery('simple', $)` join for `text`; always `organization_id = $ AND team_id = $ AND object_type_id = $ AND deleted_at IS NULL AND merged_into_id IS NULL`; keyset pagination on `(sortValue, id)`; unsupported op for type ⇒ `VALIDATION_FAILED`.
 - Create `packages/schema-engine/src/query/run.ts` — `queryRecords(tx, tenant, schema, objectType, q)` → `{ records, next_cursor, total? }` (total only when `include_total`).
 - Edit `api/src/services/records.ts` — add `queryRecords` with policy view check + attribute redaction (`redactForActor` in `api/src/services/redact.ts`, create).
