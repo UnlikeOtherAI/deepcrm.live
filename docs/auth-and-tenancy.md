@@ -31,6 +31,8 @@ type Principal = {
   uoaOrgId: string
   uoaTeamId: string
   role: 'owner' | 'admin' | 'member' | null   // resolved per uoa-integration §3.2; unknown role ⇒ null, never member
+  // No credentialEpoch / revocation epoch field: revocation is the 300 s TTL
+  // plus the destructive-call seen-set (§1), not a versioned credential check.
   sourceDomain: string           // delegation source_domain (immediate caller)
   product: string                // delegation product ('direct' for public-profile clients)
   actChain: Array<{ sub: string; product: string }>   // upstream hops, verbatim

@@ -45,9 +45,11 @@ model Team {
   schemaVersion  Int          @default(0) @map("schema_version")
   policyVersion  Int          @default(0) @map("policy_version")
   // Commit-ordered change-feed sequence. Allocated via
-  // `UPDATE teams SET feed_seq = feed_seq + 1 ... RETURNING` as the LAST
-  // statement before commit in applyWrite, so the row lock makes seq order
-  // equal commit order per tenant. Never a Postgres sequence: sequences
+  // `UPDATE teams SET feed_seq = feed_seq + n ... RETURNING` in applyWrite
+  // AFTER all data/links writes and change-intent formation but BEFORE the
+  // change-row inserts, the enqueues, the idempotency result and the audit
+  // insert (§4 step 12), so the row lock makes seq order equal commit order
+  // per tenant. Never a Postgres sequence: sequences
   // allocate at insert time and a slow transaction would commit a seq the
   // feed cursor has already passed (review C1).
   feedSeq        BigInt       @default(0) @map("feed_seq")
@@ -412,6 +414,11 @@ model RecordLink {
   toRecordId     String       @map("to_record_id") @db.Uuid
   label          String?
   data           Json         @default("{}")
+  // Non-null only on links backing a multi record_reference attribute:
+  // the target's slot in the projected array — contiguous, 0-based, one
+  // active link per position (unique partial index below). Direct links
+  // (crm_link, scalar references) always carry null.
+  position       Int?
   activeFrom     DateTime     @default(now()) @map("active_from")
   activeUntil    DateTime?    @map("active_until")
   createdByType  ActorType    @map("created_by_type")
@@ -428,6 +435,9 @@ model RecordLink {
 }
 // Raw SQL: CREATE UNIQUE INDEX record_links_active_unique
 //   ON record_links (relation_type_id, from_record_id, to_record_id) WHERE active_until IS NULL;
+// Raw SQL: CREATE UNIQUE INDEX record_links_active_position_unique
+//   ON record_links (organization_id, team_id, from_record_id, relation_type_id, position)
+//   WHERE active_until IS NULL AND position IS NOT NULL;
 
 model RecordUniqueKey {
   id              String    @id @default(uuid()) @db.Uuid
@@ -543,7 +553,17 @@ model RecordChange {
   toolCallId     String?    @map("tool_call_id")
   requestId      String     @map("request_id")
   reason         String?
-  // Allocated from teams.feed_seq (commit-ordered, per tenant) — see Team.
+  // The record's version immediately after this change applied — the field
+  // crm_record_at derives `version_at` from. Non-null on EVERY row: record
+  // rows carry the record's post-write version (paired link/unlink rows each
+  // carry their own endpoint's post-write version); kind = schema_change rows
+  // carry the tenant's current schema version (teams.schema_version) — never
+  // a null or sentinel. Set at change-intent formation, before seq
+  // allocation (§4 step 12).
+  resultingVersion Int      @map("resulting_version")
+  // Allocated from teams.feed_seq (commit-ordered, per tenant) as a block
+  // BEFORE these rows are inserted, so change rows are written with a final
+  // non-null seq in one insert — never allocated at insert time (see Team).
   seq            BigInt
   occurredAt     DateTime   @default(now()) @map("occurred_at")
   // Cascade means retention hard-delete of a record removes its change rows;
@@ -577,7 +597,8 @@ model RecordSearch {
 //   ALTER TABLE record_search ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
 //   CREATE INDEX record_search_tsv ON record_search USING gin (tsv);
 //   CREATE INDEX record_search_embedding ON record_search USING hnsw (embedding vector_cosine_ops);
-//   CREATE INDEX record_search_model ON record_search (embedding_model);  -- R13: semantic queries filter to the current model
+//   (record_search_model on embedding_model is NOT created here — it lands
+//    with the R13 model-migration machinery in T48's migration.)
 
 // ───────────────────────── lists & views ─────────────────────────
 
@@ -874,18 +895,18 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink
 0. **Idempotency reservation (when `idempotency_key` given).** Take the key advisory lock, then `INSERT INTO idempotency_replays (…, principal_user_id, tool, key, arguments_hash, result NULL)`. Unique violation ⇒ read the row: same `arguments_hash` with a result ⇒ return it; same hash, null result ⇒ the winner is in flight — `IDEMPOTENCY_IN_PROGRESS` (client retries); different hash ⇒ `IDEMPOTENCY_MISMATCH`. The `result` is filled at step 12 **in the same commit** as the mutation, so "applied" and "replayable" are atomic (never stored after commit).
 1. **Visibility gate (before policy)** — every record touched or read passes `canSee(ctx, record)`: `team` ⇒ yes; `users` ⇒ `ctx.onBehalfOf.uoaUserId` equals `created_on_behalf_of` or is in `record_visibility_grants`; `private` ⇒ creator only. Fail ⇒ `NOT_FOUND` (no existence oracle; admins are not exempt). Then **policy** — `checkPolicy(ctx, 'record', action, [record?, objectType, team])`; per touched `confidential|restricted` attribute, `checkPolicy(ctx, 'attribute', 'edit', …)`. Deny ⇒ `POLICY_DENIED` (audited with `outcome: denied`); a matching rule with `requiresApproval` for this actor ⇒ the MRTR approval path (mcp-surface §0.4).
 2. **Schema** — `loadSchema(tenant)` cached by `(team_id, schema_version)` (the version is read in the same query that resolves the tenant, so the cache is self-invalidating with no TTL). Unknown slug ⇒ `UNKNOWN_ATTRIBUTE`; archived ⇒ `ATTRIBUTE_ARCHIVED`; system read-only ⇒ `ATTRIBUTE_READ_ONLY`.
-3. **Validate & normalise (pure input checks only)** — the write guard: declared `origin` (set-once) checked against `Team.rejectedOrigins` ⇒ `ORIGIN_REJECTED`, absent origin with `Team.requireOrigin` ⇒ `ORIGIN_REJECTED {origin: null}`, and `visibility ≠ team` (or any `visible_to`) under an app key listed in `Team.teamVisibilityOnlyApps` ⇒ `VISIBILITY_REJECTED` (R1); `visibility`/`visible_to` inputs validated (grants are UOA user ids; `visible_to` implies `users`); per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize` — **multi values preserve submitted order, de-duplication keeps the first occurrence, and serialization returns stored order** (a ranked list is data; R2); `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
+3. **Validate & normalise (pure input checks only)** — the write guard: declared `origin` (set-once) checked against `Team.rejectedOrigins` ⇒ `ORIGIN_REJECTED`, absent origin with `Team.requireOrigin` ⇒ `ORIGIN_REJECTED {origin: null}`, and `visibility ≠ team` (or any `visible_to`) under an app key listed in `Team.teamVisibilityOnlyApps` ⇒ `VISIBILITY_REJECTED` (R1); `visibility`/`visible_to` inputs validated (grants are UOA user ids; `visible_to` implies `users`); per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize` — **multi values preserve submitted order, de-duplication keeps the first occurrence, and serialization returns stored order** (a ranked list is data; R2); `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Extraction semantics: an **omitted** reference key carries no intent and leaves existing links untouched; a scalar UUID makes exactly one target; a scalar **`null`** clears the reference (ends all of the attribute's active backing links); a scalar **empty array** is a validation error (`VALIDATION_FAILED`). For a multi reference, the submitted array is de-duplicated **stably** in submitted order (first occurrence wins, same rule as every multi attribute; a repeated id yields one link), and a multi **`null`** or **empty array `[]`** clears the reference. Otherwise the resulting ids replace the active set exactly (a diff ends missing links and inserts new ones). The canonical intent shape is `LinkIntent` (§4e). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
 4. **Lock** — `lockRecords(tx, ids)` for every record touched, sorted ids; for the create/assert branch of a unique or match key, also the key lock on `hashtext(tenant ∥ attributeId ∥ normalizedHash)`.
 5. **Locked-state validation** — record exists, tenant matches, not deleted; a merged id redirects transitively (`MERGED {redirect_to}` only when the final survivor is itself deleted); `record_reference` targets exist and are live; delete discovers dependents and evaluates `restrict` **after** locks (never before).
 6. **Version** — `expected_version` mismatch ⇒ `VERSION_CONFLICT {current}`. Link/unlink bump `records.version` on **both** endpoints.
 7. **Unique & match keys** — diff and write `record_unique_keys` (hash-indexed) and, for `block` rules, `record_match_keys`. Unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (conflicting id read back in-tx; only if the caller may view it, else the generic form). For `assert`: create runs under a savepoint — on unique violation, roll back to the savepoint and re-run as an update of the conflicting record (bounded to one retry). Match-key violation ⇒ `DUPLICATE_FOUND {candidates}`.
 8. **Matching rules** (create/assert) — `warn` rules evaluated by read (§6), result attached as `duplicates`; `block` rules are enforced by step 7's constraint, not by a read.
 9. **Data** — merge patch into `records.data`; recompute `display_name` from the primary attribute (whose sensitivity may not exceed `internal` — enforced at schema define/update); a no-op patch (normalised diff empty) writes nothing and does not bump `version`.
-10. **Links** — apply extracted link ops and explicit `link`/`unlink`: cardinality enforced by ending conflicting active links (`active_until = now`), which the result reports (`ended_links`).
-11. **Changes** — one row per attribute set/unset; **two rows per link/unlink (one per endpoint, shared `group_id`)**; delete/restore/merge rows carry `snapshot` (§7). `snapshot` is engine-internal: it is **never** serialized into any tool result, feed event or webhook.
-12. **Audit + idempotency result** — take the audit advisory lock (namespace 5, per organization) and insert the hash-chained `audit_logs` row; **no further locks may be taken after the audit lock**. Fill the reserved idempotency row's `result`.
-13. **Feed sequence** — allocate `seq` for every change row written: `UPDATE teams SET feed_seq = feed_seq + n WHERE id = $1 RETURNING feed_seq` as the **last** statement before commit (commit-ordered by the row lock; see the Team model comment).
-14. **Enqueue (same tx, after allocation)** — `record.reindex {recordId}` (idempotency `reindex:<recordId>:<lastSeq>`) for every touched record, and `change.deliver {teamId}` (idempotency `deliver:<teamId>:<floor(now/30s)>`, `visibleAt = now + 30 s`) when the team has active webhooks.
+10. **Links** — apply extracted link ops and explicit `link`/`unlink`: cardinality enforced by ending conflicting active links (`active_until = now`), which the result reports (`ended_links`). Cardinality caps: `many_to_one` ⇒ at most one active outgoing link per `(from, relation)`; `one_to_many` ⇒ at most one active incoming link per `(to, relation)`; `one_to_one` ⇒ both; `many_to_many` ⇒ neither. Links backing a **multi** `record_reference` get `position` = the target's index in the submitted array (contiguous, 0-based, per §2 `RecordLink.position`); when an update diff ends an interior link, the surviving links are renumbered to close the gap so positions stay contiguous. Direct links (`crm_link`) and links backing scalar references always have `position = null`. Links created for a reference **replace** projection carry empty edge data (`data = {}`) — a re-point must not silently overwrite operator-set edge attributes — and links that survive the diff **retain** their existing edge data.
+11. **Change intents** — form the change rows (insert deferred to step 13, after seq allocation): one `set`/`unset` row per attribute, in deterministic ascending-slug order; on create, the `create` marker row first, then the per-attribute `set` rows for every stored attribute of the initial state (defaults included) — **every** row of the create, marker included, carries `resulting_version = 1`; **two rows per link/unlink (one per endpoint, shared `group_id`)**, each carrying its own endpoint's post-write version as `resulting_version`; delete/restore/merge rows carry `snapshot` (§7). `snapshot` is engine-internal: it is **never** serialized into any tool result, feed event or webhook.
+12. **Feed sequence block** — `UPDATE teams SET feed_seq = feed_seq + n WHERE id = $1 RETURNING feed_seq` where `n` is the number of change intents; commit-ordered by the row lock (see the Team model comment). Every change row then carries the full `{ …, resultingVersion, seq }` shape and is inserted with a final, non-null seq.
+13. **Changes, enqueue, idempotency result** — insert the change rows; `record.reindex {recordId}` (idempotency `reindex:<recordId>:<lastSeq>`) for every touched record, and `change.deliver {teamId}` (idempotency `deliver:<teamId>:<floor(now/30s)>`, `visibleAt = now + 30 s`) when the team has active webhooks; fill the reserved idempotency row's `result` (step 0) **in this same commit**, so "applied" and "replayable" are atomic (never stored after commit).
+14. **Audit LAST** — take the audit advisory lock (namespace 5, per organization) and insert the hash-chained `audit_logs` row. `writeAudit` is the **last database operation of the transaction**: no DB operation follows it except the commit itself, and no further locks may be taken after the audit lock (auth-and-tenancy §6).
 
 ### 4a. `record_reference` projections are computed, never stored
 
@@ -921,6 +942,26 @@ Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unli
 **Suppression store** (§2 `SuppressionEntry`): `crm_suppression_add {kind, value, channel?, reason, sub_reason?, expires_at?, note?}` (value normalized + hashed in memory, never stored raw; `expires_at` refused on `objection`/`erasure`), `crm_suppression_check {entries: [{kind, value, channel?}]}` → per-entry `{suppressed, reason?, sub_reason?}` (an `all` entry suppresses every channel; expired entries answer false) — **the send-time gate any outbound product must call**, `crm_suppression_list` (hashes + metadata only), `crm_suppression_remove` (owner + approval — un-suppressing an objector is a real decision). Suppression rows survive tenant deletion and erasure by construction (no FKs).
 
 **Normalisations are pinned byte-exactly** (clients pre-filtering against listed hashes must reproduce them; R7): `email` — trim, lower-case, strip display name; `phone` — **input must already be E.164** (must start `+`; anything else is `VALIDATION_FAILED` — no region guessing at this seam); `domain` — registrable domain via `tldts`, lower-case; `company_number` — uppercase, strip spaces/hyphens/dots, strip leading zeros (Companies House `01234567` ≡ `1234567`), the same normalizer as the `registry_id` attribute type; `postal` — **the caller pre-normalizes** to `ISO2 country + '|' + uppercase postcode + '|' + first address line`, DeepCRM only trims, uppercases and collapses whitespace before hashing (address canonicalisation is the sender's problem, stated rather than pretended). Hash = `sha256hex(kind + '\x1f' + normalized)`.
+
+### 4e. `LinkIntent` — the typed shape of a reference write
+
+Validation (step 3) turns every submitted `record_reference` value into one typed intent per attribute:
+
+```ts
+type LinkIntent = {
+  kind: 'record_reference'
+  attributeSlug: string
+  relationTypeId: string                       // the resolved backing relation
+  cardinality: 'many_to_one' | 'many_to_many'  // scalar / multi
+  targetIds: string[]                          // submitted order; stably de-duplicated
+}
+```
+
+Intent semantics per §4 step 3: an omitted key produces **no intent** (existing links are left untouched); a scalar UUID yields `targetIds = [id]` (one target); a scalar `null` yields a clear intent (`targetIds = []`, replace-with-empty); a scalar empty array never reaches this point — it is a validation error in step 3; a multi array is stably de-duplicated in submitted order into `targetIds`; a multi `null` or empty array yields a clear intent (`targetIds = []`, replace-with-empty). Stored-data exclusion per §4a: intents drive link rows only and nothing is ever written into `records.data` for a reference attribute.
+
+### 4f. `record_reference` owns one backing relation
+
+Every `record_reference` attribute owns exactly one backing `RelationType` (never shares one). Scalar references back a `many_to_one` relation; multi (`is_multi: true`) references back a `many_to_many` relation. `config.objectTypes` with exactly one slug sets the relation's `to_object_type_id` to that type; multiple slugs (open target) store `to_object_type_id = null`, and validation of the submitted target ids against `config.objectTypes` is config enforcement in the write path (§4 steps 3/5), not a schema constraint. When `config.relationTypeSlug` is supplied it must name an existing relation whose `cardinality`, `from_object_type_id` (this object type), `to_object_type_id` and `projection_attribute_slug` (this attribute's slug, or unset) are all compatible with the attribute — any mismatch is `SCHEMA_CONFLICT`. When absent, the relation is created with slug `<objectType>_<attr>` (T10).
 
 ## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
 

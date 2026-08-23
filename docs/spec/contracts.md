@@ -92,7 +92,7 @@ export const AttributeConfig = z.discriminatedUnion('type', [
              allow: z.array(z.enum(['human','agent'])).default(['human','agent']) }),
   z.object({ type: z.literal('record_reference'),
              objectTypes: z.array(Slug).min(1).describe('allowed target object types'),
-             relationTypeSlug: Slug.optional().describe('backing relation; generated when absent') }),
+             relationTypeSlug: Slug.optional().describe('backing relation (one per attribute, never shared — schema-engine §4f); generated as <objectType>_<attr> when absent') }),
   z.object({ type: z.literal('timestamp_system'),
              source: z.enum(['created_at','updated_at','last_activity_at']) }),
   z.object({ type: z.literal('json'), schema: z.record(z.unknown()).optional()
@@ -135,7 +135,7 @@ export const ObjectTypeDetail = z.object({
 export const RelationTypeDetail = z.object({
   id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(),
   forward_name: z.string(), inverse_name: z.string(), description: z.string(),
-  cardinality: Cardinality, on_delete: OnDelete, edge_attributes: z.array(AttributeDetail),
+  cardinality: Cardinality, on_delete: OnDelete, edge_attributes: z.array(AttributeSpec),
   is_system: z.boolean(), archived_at: IsoDateTime.nullable(),
 })
 export const MatchingRule = z.object({
@@ -189,6 +189,7 @@ export const Candidate = z.object({
 })
 export const Change = z.object({
   id: Uuid, seq: z.string().describe('per-team, commit-ordered decimal cursor value'),
+  resulting_version: z.number().int().describe('version after this change applied: the record\'s version on record rows, the current schema version on kind "schema" rows — never null'),
   record: RecordSummary.nullable().describe('null for kind "schema"'),
   group_id: Uuid.nullable().describe('shared by the paired rows of a link/unlink and by cascade groups'),
   kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge','schema']),
@@ -341,7 +342,9 @@ export const CrmRecordDelete = { in: z.object({ id: Uuid, expected_version: Expe
   out: z.object({ deleted: z.literal(true) }) }
 export const CrmRecordRestore = { in: z.object({ id: Uuid }), out: z.object({ record: RecordOut }) }
 export const CrmRecordAt = { in: z.object({ id: Uuid, at: IsoDateTime }),
-  out: z.object({ record_at: z.object({ data: RecordData, version_at: z.number().int(), as_of: IsoDateTime }) }) }
+  out: z.object({ record_at: z.object({ data: RecordData, links: z.record(Slug, z.array(LinkOut))
+    .describe('reference/link state as of `at`; multi ordered by position'),
+    version_at: z.number().int(), as_of: IsoDateTime }) }) }
 export const CrmRecordHistory = { in: z.object({ id: Uuid, attributes: z.array(Slug).optional(),
   cursor: Cursor, limit: Limit }), out: z.object({ changes: z.array(Change), next_cursor: z.string().nullable() }) }
 

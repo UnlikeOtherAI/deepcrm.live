@@ -20,7 +20,7 @@ An **event** is a `Change` (see `contracts.md` → `records.ts`) plus a derived 
 | `unlink` | `link.ended` |
 | schema mutation (no record) | `schema.changed` — emitted from a synthetic change row with `record = null`, `attribute` = affected slug, `new_value = { object_type, schema_version }` |
 
-`seq` is **per-team and commit-ordered** — allocated from `teams.feed_seq` as the last statement before commit (schema-engine §4 step 13), so a consumer's cursor can never pass an in-flight transaction's lower seq (review C1). Link/unlink events appear once per endpoint (paired rows share `group_id`); consumers dedupe on `group_id` when they only care about the edge.
+`seq` is **per-team and commit-ordered** — allocated from `teams.feed_seq` as a block (§4 step 12) before the change rows are inserted with their final non-null seq, and only the audit insert follows in the transaction (step 14, audit-last), so a consumer's cursor can never pass an in-flight transaction's lower seq (review C1). Link/unlink events appear once per endpoint (paired rows share `group_id`); consumers dedupe on `group_id` when they only care about the edge.
 
 Redaction: every event passes the same `redactForActor` pass as a record read, by the **current** sensitivity, retroactively; `snapshot` payloads never appear in any event (reviews S5.3/S5.4).
 
