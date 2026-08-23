@@ -29,7 +29,7 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 - Node 24, pnpm 10.22, TypeScript 5.9 strict (`tsconfig.base.json` copied from nessie), ESLint flat config with `max-len` 120 and `no-explicit-any`.
 - Fastify 5, Prisma 6 + PostgreSQL 16 + pgvector, `@modelcontextprotocol/sdk` ≥ 1.30, zod 3.25, jose.
 - Tenancy: one UOA organisation = one `Organization` (`externalOrgId` unique); one UOA team = one `Team` (`externalTeamId` unique). **The tenant is the compound (organization_id, team_id)** on every CRM table; resolved from the authenticated principal, never from arguments.
-- Identity: UOA is the sole authority. **No local user table.** Actors are `(actorType ∈ human|agent|system, actorId)`.
+- Identity: UOA (`authentication.unlikeotherai.com` — its `/llm` guide is the contract source) is the sole authority. **No local user table.** Inbound calls carry a UOA token-exchange delegation (`sub` + `org` + `active` + `act`, verified via `/oauth/jwks.json`) so users never re-login; direct clients use UOA's public MCP OAuth profile. See [docs/spec/uoa-integration.md](docs/spec/uoa-integration.md). Actors are `(actorType ∈ human|agent|system, actorId)`.
 - Inbound MCP auth: bearer = product app key; `X-UOA-Delegation` = user/workspace resource token; `X-Nessie-Context` = RS256 provenance `{agentId, runId, toolCallId, requestId}`. Local dev with `REQUIRE_AUTH=false` serves a dev principal.
 - Embeddings: `EMBEDDING_DIMENSIONS = 1024` in `packages/schemas/src/embedding.ts` is the only place the width appears.
 

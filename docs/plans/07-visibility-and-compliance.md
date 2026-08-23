@@ -77,8 +77,8 @@ Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surf
 **Files:**
 - Edit `packages/db/prisma/schema.prisma` — `Webhook.subscribingUoaUserId` (migration `webhook_principal`).
 - Edit `worker/src/jobs/change-deliver.ts` — events visibility-filtered as the subscribing principal; `confidential`/`restricted` values always omitted from push payloads (slug named, value absent).
-- Edit `packages/mcp-inbound` — `DEEPCRM_APPS` JSON registry (`env.ts` + `authenticate.ts`): per-app key hashes + context JWKS/issuer; `X-App-Context` with `X-Nessie-Context` alias; delegation `act` chain parsed into provenance and audit metadata; `agent:<app>:<agentId>` uses the immediate app.
-- Tests: webhook to a member-subscribed endpoint omits a private record's events and all restricted values; a second registered app authenticates with its own JWKS and its context token is rejected under the first app's name; `act` chain lands in the audit row.
+- Edit `packages/mcp-inbound` — `X-App-Context` with `X-Nessie-Context` alias over the (already-present) `DEEPCRM_APPS` registry; the `DEEPCRM_DIRECT_CLIENTS` strategy: UOA public-profile tokens (`/oauth/*`, same JWKS, `principal.app = 'direct'`, no app key/context) per `docs/spec/uoa-integration.md` §5.2.
+- Tests: webhook to a member-subscribed endpoint omits a private record's events and all restricted values; a second registered app authenticates with its own JWKS and its context token is rejected under the first app's name; `act` chain lands in the audit row; a direct public-profile token authenticates when `DEEPCRM_DIRECT_CLIENTS=true` and is refused otherwise.
 - Edit `api/test/mcp/surface.test.ts` — `NOT_YET = []` again.
 
 **Acceptance:** `pnpm verify` green; `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md`. **Docs:** architecture §6 (`DEEPCRM_APPS`).

@@ -9,10 +9,10 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 **Files (create) in `packages/mcp-inbound/src/`:**
 - `headers.ts` — `readInboundHeaders(headers: Record<string, unknown>): InboundHeaders` (case-insensitive; bearer extraction).
 - `app-key.ts` — `parseAppKeys(env: string): Map<sha256hex, name>`; `verifyAppKey(keys, bearer)` timing-safe on sha256 of the bearer.
-- `uoa-delegation.ts` — `verifyUoaDelegation(jwt, { jwks, issuer, audience, now })` via `jose.jwtVerify` → `{ sub, org, team, role, tv, scope }` (claims zod-validated; `role` defaults `member`); requires `scope` ∋ `ai.invoke`, `iat` present, `exp − iat ≤ 900 s`.
+- `uoa-delegation.ts` — `verifyUoaDelegation(jwt, { jwksUrl: `${UOA_BASE_URL}/oauth/jwks.json`, issuer, audience, now })` via `jose.jwtVerify` → `{ sub, org: { org_id, org_role, team_roles }, active: { orgId, teamId }, source_domain, azp, product, act, scope }` (claims zod-validated; `org` and `active` required, `active.orgId === org.org_id`); requires `scope` ∋ `ai.invoke`, `exp − iat ≤ 300 s`. `resolveRole(org, active)` per `docs/spec/uoa-integration.md` §3.2 (owner structural; exact admin/member; anything else ⇒ `null`, never member-floored).
 - `nessie-context.ts` — `verifyNessieContext(jwt, { jwks, audience, issuer, now })` → provenance; enforces `aud`/`iss`, `exp - iat ≤ 300`, clock tolerance 30 s. `seen-set.ts` — in-process 300 s `requestId` single-use set consulted by destructive tools (auth §1).
-- `authenticate.ts` — `authenticate(headers, opts): Promise<{ ok: true; principal } | { ok: false; reason }>`; `sub` mismatch between delegation and context ⇒ fail; `REQUIRE_AUTH=false` ⇒ `devPrincipal()` regardless of headers.
-- Tests with a generated RSA key pair and a local JWKS resolver: happy path (role claim through); expired; wrong audience on either token; over-long delegation lifetime; sub mismatch; type-confused claims rejected; missing bearer; dev mode.
+- `authenticate.ts` — `authenticate(headers, opts)`; cross-checks: context `sub` = delegation `sub`, delegation `source_domain`/`product` = the app key's `DEEPCRM_APPS` entry; `act` chain copied into the principal; `REQUIRE_AUTH=false` ⇒ `devPrincipal()`. (The `DEEPCRM_DIRECT_CLIENTS` strategy — public-profile token, no app key — is a stub returning `unsupported` until Phase 7's T53.)
+- Tests with a generated RSA key pair and a local JWKS resolver: happy path (org/active/roles resolved; act chain through); expired; wrong audience on either token; identity-only delegation (no `active`) rejected; `active.orgId` ≠ `org.org_id` rejected; product/app-key mismatch rejected; unknown role ⇒ `role: null`; sub mismatch; missing bearer; dev mode.
 
 **Acceptance:** `pnpm exec turbo run test --filter=@deepcrm/mcp-inbound` green.
 

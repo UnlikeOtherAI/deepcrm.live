@@ -7,10 +7,10 @@ How a Nessie deployment connects its agents to DeepCRM. Written from DeepCRM's s
 | Proof | Issued by | Carried as | DeepCRM checks |
 |---|---|---|---|
 | Product app key `dck_…` | DeepCRM operator (`scripts/generate-app-key.mjs nessie`) | `Authorization: Bearer` | SHA-256 in the `DEEPCRM_APPS` registry; names the calling product |
-| UOA delegation | UOA token exchange, requested by Nessie for the linked user + active team, `aud = https://api.deepcrm.live`, scope `ai.invoke` | `X-UOA-Delegation` | signature, `iss`, `aud`, `exp`, `sub`, `org`, `team`, `tv` |
+| UOA delegation | UOA **confidential assertion exchange** (guide §4.6a): Nessie signs a ≤60 s subject assertion with its config key (`sub` = the user, `active` = the workspace) and exchanges it under its own domain-hash credential and the superuser-created `(api.nessie.works, nessie)` → `https://api.deepcrm.live` mapping | `X-UOA-Delegation` | RS256 via UOA `/oauth/jwks.json`; `iss`, exact `aud`, `exp ≤ 300 s`, `sub`, `org`, `active`, `source_domain`/`product` = nessie, `scope ∋ ai.invoke`. Contract: [uoa-integration.md](uoa-integration.md) §3 |
 | App context | Nessie's RS256 signer, **registered per app** in DeepCRM's `DEEPCRM_APPS` registry (`X-Nessie-Context` is the accepted alias of `X-App-Context` for the `nessie` app) | `X-Nessie-Context` | signature via the app's registered JWKS + issuer, `aud` = DeepCRM, ttl ≤ 300 s, `sub` equals delegation `sub`. Chained callers (a product calling through another) are preserved via the delegation's `act` chain — every hop stays attributable (auth-and-tenancy §1). |
 
-Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per user), pinned to the canonical catalog entry whose URL is exactly `https://api.deepcrm.live/mcp`. DeepCRM never receives Nessie's UOA refresh credentials; the delegation token is short-lived and resource-bound.
+Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per user), pinned to the canonical catalog entry whose URL is exactly `https://api.deepcrm.live/mcp`. DeepCRM never receives Nessie's UOA refresh credentials; the delegation token is short-lived (300 s) and resource-bound, and UOA re-reads live membership at every exchange — a removed member stops minting immediately. Users never log into DeepCRM; the ids arrive in the token.
 
 ## 2. Enablement
 

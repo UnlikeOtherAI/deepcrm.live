@@ -7,11 +7,11 @@ Every `/mcp` request is authenticated independently (the protocol is stateless; 
 | Header | Proves | Verification |
 |---|---|---|
 | `Authorization: Bearer <app key>` | the calling **product** (Nessie, DeepSignal, …) | SHA-256 of the key compared (timing-safe) against the app registry `DEEPCRM_APPS` (JSON: `{ "<name>": { "keyHashes": [sha256hex…], "contextJwksUrl": …, "contextIssuer": … } }`; `DEEPCRM_APP_KEYS` remains as the legacy single-JWKS form). The name becomes `principal.app`. |
-| `X-UOA-Delegation: <JWT>` | the **human** and **workspace** the call acts for | RS256 via `UOA_JWKS_URL`; `iss = UOA_ISSUER`, `aud = UOA_AUDIENCE` (= `DEEPCRM_API_PUBLIC_URL`), `exp` **and** `iat` with `exp − iat ≤ 15 min` (the delegation is the revocation bound; `tv` is recorded for audit but not introspected online in v1); claims `sub` (UOA user id), `org` (UOA organisation id), `team` (UOA team id), `role` (`owner\|admin\|member` — the caller's role in that team; absent ⇒ `member`), `tv` (credential epoch), `scope` contains `ai.invoke`. |
+| `X-UOA-Delegation: <JWT>` | the **human** and **workspace** the call acts for — a UOA token-exchange resource token (confidential assertion exchange, UOA guide §4.6a) | RS256 via **`${UOA_BASE_URL}/oauth/jwks.json`**; `iss` = the UOA host; **`aud` = exactly `https://api.deepcrm.live`**; `exp − iat ≤ 300 s`; `scope ∋ ai.invoke`; claims `sub` (stable UOA user id), `org` (`{ org_id, org_role, team_roles, … }` — required), `active` (`{ orgId, teamId }` — required; identity-only tokens rejected), `source_domain`/`azp`/`product` (the immediate caller — must match the app key's registry entry), `act` (upstream product chain, recorded verbatim). Full contract + role resolution: [uoa-integration.md](spec/uoa-integration.md) §3. Revocation bound = the 300 s token life plus UOA's live membership re-read at every exchange. |
 | `X-App-Context: <JWT>` (alias `X-Nessie-Context`, accepted for the `nessie` app) | **agent/run provenance of the immediate caller** | RS256 via the **calling app's own** `contextJwksUrl`/`contextIssuer` from the registry (per-app, not one global signer — deepsignal policy-asks §6); **`aud = DEEPCRM_API_PUBLIC_URL` required**; max TTL 300 s, 30 s skew; claims `agentId`, `runId`, `toolCallId`, `requestId`, `sub` = same UOA user as the delegation (strict string equality; mismatch ⇒ 401). |
 
 Rules:
-- **Chained calls stay attributable at every hop.** The delegation's `act` chain (UOA RFC 8693 token exchange) is recorded verbatim into provenance and audit; `principal.app` is always the **immediate** caller (the app whose key + context token authenticated this request), so a Nessie → DeepSignal → DeepCRM call reads `app = deepsignal`, `act = [nessie]` — never flattened to the outermost or innermost hop. Agent policy bindings key on the immediate app: `agent:<app>:<agentId>`.
+- **Chained calls stay attributable at every hop.** The delegation's `act` chain (UOA RFC 8693 token exchange) is recorded verbatim into provenance and audit; `principal.app` is always the **immediate** caller — the delegation's `source_domain`/`product` must agree with the app key's registry entry, so a Nessie → DeepSignal → DeepCRM call reads `app = deepsignal`, `act = [nessie]` — never flattened. Agent policy bindings key on the immediate app: `agent:<app>:<agentId>`.
 - Every token's claims are schema-validated (zod): required, non-empty, correct types; garbage claims are a 401, never a coerced value.
 - **Destructive calls are replay-bounded:** `crm_merge_records`, `crm_record_delete`, `crm_export`, `crm_webhook_*`, `crm_unmerge` and approval consumption record the context token's `requestId` in a 300 s seen-set and reject replays. Other calls accept the residual 5-minute provenance-replay risk, documented (review S2.2).
 - All three required when `REQUIRE_AUTH=true`. Missing/invalid ⇒ HTTP 401 with `WWW-Authenticate: Bearer resource_metadata="<DEEPCRM_API_PUBLIC_URL>/.well-known/oauth-protected-resource"` (RFC 9728).
@@ -19,7 +19,7 @@ Rules:
 - Headers are read case-insensitively; a request carrying *both* a valid delegation and a different `sub` in the context is rejected.
 - The principal is bound into the per-request `McpServer`; tool handlers receive `ctx` and **never** accept `organizationId`/`teamId`/`userId` arguments.
 
-Future (brief §9 Q3): a non-Nessie client presenting only a UOA OAuth token (CIMD per MCP 2026-07-28). The seam is `packages/mcp-inbound/src/authenticate.ts` returning `Principal`; adding a second strategy does not touch tools.
+Direct clients (brief §9 Q3, **decided**): with `DEEPCRM_DIRECT_CLIENTS=true`, a token from UOA's public-client / MCP OAuth profile (`/oauth/*`, OAuth 2.1 + PKCE, `resource = https://api.deepcrm.live`) is accepted with **no app key and no context header** — same JWKS, same iss/aud checks; `principal.app = "direct"`, actor = the human. See [uoa-integration.md](spec/uoa-integration.md) §5. The seam is `packages/mcp-inbound/src/authenticate.ts`.
 
 ## 2. Principal and ActorContext
 
@@ -29,16 +29,18 @@ type Principal = {
   uoaUserId: string
   uoaOrgId: string
   uoaTeamId: string
-  role: 'owner' | 'admin' | 'member'   // from the delegation's role claim; absent ⇒ member
-  credentialEpoch: number        // tv (recorded, not introspected in v1)
-  agentId: string | null         // null when a human calls directly (future)
+  role: 'owner' | 'admin' | 'member' | null   // resolved per uoa-integration §3.2; unknown role ⇒ null, never member
+  sourceDomain: string           // delegation source_domain (immediate caller)
+  product: string                // delegation product ('direct' for public-profile clients)
+  actChain: Array<{ sub: string; product: string }>   // upstream hops, verbatim
+  agentId: string | null         // null for direct human clients
   provenance: { runId: string; toolCallId: string; requestId: string } | null
 }
 
 type ActorContext = {
   tenant: { organizationId: string; teamId: string }   // local ids, resolved 1:1 from UOA ids
   actor: { type: 'human' | 'agent' | 'system'; id: string }  // agent when agentId present, else human
-  onBehalfOf: { uoaUserId: string; role: 'owner' | 'admin' | 'member' }  // always the human, with their team role
+  onBehalfOf: { uoaUserId: string; role: 'owner' | 'admin' | 'member' | null }  // the human + resolved role (null = no role, no gated access)
   provenance: Principal['provenance']
   requestId: string
   now: Date
@@ -49,7 +51,7 @@ type ActorContext = {
 
 ## 3. Tenancy
 
-- `organizations.external_org_id` ⇔ UOA organisation id (unique). `teams.external_team_id` ⇔ UOA team id (unique), `teams.organization_id` FK.
+- `organizations.external_org_id` ⇔ UOA `org.org_id` (`org_…`, unique). `teams.external_team_id` ⇔ UOA `active.teamId` (`tm_…`, unique), `teams.organization_id` FK. `active.orgId` must equal `org.org_id` or the request is rejected before resolution.
 - `resolveTenant(principal)` upserts both rows (name placeholders `Organisation <id8>`, `Team <id8>`; names are non-authoritative mirrors — DeepCRM stores no other UOA data) and returns local ids **plus the current `schema_version` and `policy_version` in the same query** (the cache keys, §4 of schema-engine). Runs once per request; the in-process 60 s cache holds **id resolution only**, never schema or policy state.
 - **Pairing check:** if the team row exists, its `organization_id` must equal the resolved organisation's id — else 401 `TENANT_MISMATCH`. Re-parenting a team is an operator migration, never implicit (review S1.2).
 - **First-contact provisioning** (flow F10) is serialised by an advisory lock on the external team id, seeds idempotently (`ON CONFLICT DO NOTHING`), is rate-limited per app key, and honours an optional `DEEPCRM_ORG_ALLOWLIST` env (comma-separated UOA org ids) for closed deployments.

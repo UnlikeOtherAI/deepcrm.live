@@ -124,9 +124,10 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 | `DATABASE_URL` | — | Postgres |
 | `DEEPCRM_PROCESS_MODE` | `all` | `api` / `worker` / `all` |
 | `REQUIRE_AUTH` | `true` (prod) / `false` (dev) | off ⇒ dev principal |
-| `DEEPCRM_APP_KEYS` | — | comma-separated `name:sha256hex` of accepted bearer app keys |
-| `UOA_ISSUER`, `UOA_JWKS_URL`, `UOA_AUDIENCE` | — | verify `X-UOA-Delegation` |
-| `NESSIE_CONTEXT_JWKS_URL` | — | verify `X-Nessie-Context` |
+| `DEEPCRM_APPS` | — | per-app registry JSON: key hashes + context JWKS/issuer + sourceDomain/product ([uoa-integration.md](spec/uoa-integration.md)) |
+| `UOA_BASE_URL` | `https://authentication.unlikeotherai.com` | delegation issuer; JWKS at `${UOA_BASE_URL}/oauth/jwks.json` |
+| `DEEPCRM_DIRECT_CLIENTS` | `false` | accept UOA public-profile OAuth tokens (no app key) |
+| `DEEPCRM_UOA_CONFIG_PRIVATE_KEY_B64`, `DEEPCRM_UOA_CLIENT_SECRET` | — | DeepCRM's own UOA registration, outbound-only (chained Ledger attribution) |
 | `DEEPCRM_SECRET_KEYRING_B64` | — | AES-256-GCM keyring for webhook secrets |
 | `LEDGER_PUBLIC_URL`, `LEDGER_PROXY_TOKEN` | — | embeddings via Ledger `/v1/jina` |
 | `DEEPCRM_EMBEDDING_MODEL` | `jina-embeddings-v3` | |
