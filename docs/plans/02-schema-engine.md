@@ -17,7 +17,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ---
 
-### T10 — Schema metadata service
+### T10 ✅ — Schema metadata service
 
 **Depends on:** T09. **Spec:** `docs/schema-engine.md` §2, §9; `docs/spec/contracts.md` (`schema-specs.ts` — copy verbatim).
 
