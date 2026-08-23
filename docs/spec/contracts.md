@@ -63,7 +63,7 @@ export const StatusOption = SelectOption.extend({
 ```ts
 export const AttributeType = z.enum([
   'text','rich_text','number','currency','percent','boolean','date','datetime','select','status',
-  'rating','email','phone','url','domain','location','personal_name','actor_reference',
+  'rating','email','phone','url','domain','registry_id','location','personal_name','actor_reference',
   'record_reference','timestamp_system','json',
 ])
 export const AttributeConfig = z.discriminatedUnion('type', [
@@ -71,7 +71,9 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rich_text') }),
   z.object({ type: z.literal('number'), precision: z.number().int().min(0).max(10).optional(),
              min: z.number().optional(), max: z.number().optional() }),
-  z.object({ type: z.literal('currency'), defaultCurrency: z.string().length(3).default('USD') }),
+  z.object({ type: z.literal('currency'), defaultCurrency: z.string().length(3).default('USD'),
+             fixedCurrency: z.string().length(3).optional()
+               .describe('pin every value to one currency so range filters are comparable') }),
   z.object({ type: z.literal('percent') }),
   z.object({ type: z.literal('boolean') }),
   z.object({ type: z.literal('date') }),
@@ -83,6 +85,7 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('phone'), defaultRegion: z.string().length(2).default('GB') }),
   z.object({ type: z.literal('url') }),
   z.object({ type: z.literal('domain') }),
+  z.object({ type: z.literal('registry_id'), jurisdiction: z.string().length(2).optional() }),
   z.object({ type: z.literal('location') }),
   z.object({ type: z.literal('personal_name') }),
   z.object({ type: z.literal('actor_reference'),
@@ -414,8 +417,11 @@ export const CrmPipelineSummary = { in: z.object({ object_type: Slug,
     conversions: z.array(z.object({ from: Slug, to: Slug, count: z.number().int() })) }) }
 
 // ── search, quality, merge ───────────────────────────────────────────────────
-export const CrmSearch = { in: z.object({ query: z.string().min(1).max(500), object_types: z.array(Slug).optional(),
-  mode: z.enum(['keyword','semantic','hybrid']).default('hybrid'), limit: z.number().int().min(1).max(50).default(10) }),
+export const CrmSearch = { in: z.object({ query: z.string().min(1).max(500).optional(),
+  similar_to: Uuid.optional().describe('nearest neighbours of this record\'s stored embedding'),
+  object_types: z.array(Slug).optional(),
+  mode: z.enum(['keyword','semantic','hybrid']).default('hybrid'), limit: z.number().int().min(1).max(50).default(10) })
+  .refine(a => !!a.query !== !!a.similar_to, 'exactly one of query or similar_to'),
   out: z.object({ hits: z.array(z.object({ record: RecordSummary, score: z.number(),
     match: z.enum(['keyword','semantic','both']) })) }) }
 export const CrmFindDuplicates = { in: z.object({ object_type: Slug, filter: Filter.optional(),
@@ -438,25 +444,40 @@ export const CrmDataQuality = { in: z.object({ object_type: Slug.optional(),
   out: z.object({ missing_required: QualityBucket, stale: QualityBucket, orphans: QualityBucket, collisions: QualityBucket }) }
 
 // ── compliance: erasure, suppression, origin guard ───────────────────────────
-export const SuppressionKind = z.enum(['email','phone','domain','company_number'])
+export const SuppressionKind = z.enum(['email','phone','domain','company_number','postal'])
+export const SuppressionChannel = z.enum(['all','email','phone_call','sms','post'])
 export const SuppressionReason = z.enum(['objection','erasure','bounce','manual'])
-export const CrmRecordErase = { in: z.object({ id: Uuid, reason: z.string().min(1).max(500),
+export const EraseReason = z.enum(['gdpr_request','retention_policy','legal_order','other'])
+export const CrmRecordErase = { in: z.object({ id: Uuid, reason: EraseReason,
   suppress: z.boolean().default(true).describe('write hashed suppression entries for contact values before scrubbing') }),
   out: z.object({ erased: z.literal(true), suppressed: z.array(z.object({ kind: SuppressionKind, count: z.number().int() })) }) }
-export const CrmSuppressionAdd = { in: z.object({ kind: SuppressionKind, value: z.string().min(1).max(320),
-  reason: SuppressionReason, note: z.string().max(500).optional() }), out: z.object({ added: z.literal(true) }) }
+export const CrmSuppressionAdd = { in: z.object({ kind: SuppressionKind, value: z.string().min(1).max(320)
+    .describe('phone must be E.164; postal must be caller-pre-normalized (schema-engine §4d)'),
+  channel: SuppressionChannel.default('all'), reason: SuppressionReason,
+  sub_reason: Slug.optional().describe('queryable refinement, e.g. not_interested, opt_out, complaint'),
+  expires_at: IsoDateTime.optional().describe('time-boxed suppression; refused on objection/erasure'),
+  note: z.string().max(500).optional() }), out: z.object({ added: z.literal(true) }) }
 export const CrmSuppressionCheck = { in: z.object({ entries: z.array(z.object({ kind: SuppressionKind,
-  value: z.string().min(1).max(320) })).min(1).max(100) }),
+  value: z.string().min(1).max(320), channel: SuppressionChannel.default('all') })).min(1).max(100) }),
   out: z.object({ results: z.array(z.object({ kind: SuppressionKind, suppressed: z.boolean(),
-    reason: SuppressionReason.optional() })) }) }
-export const CrmSuppressionList = { in: z.object({ kind: SuppressionKind.optional(), cursor: Cursor, limit: Limit }),
-  out: z.object({ entries: z.array(z.object({ kind: SuppressionKind, key_hash: z.string(),
-    reason: SuppressionReason, note: z.string().nullable(), created_at: IsoDateTime })),
+    reason: SuppressionReason.optional(), sub_reason: Slug.optional() })) }) }
+export const CrmSuppressionList = { in: z.object({ kind: SuppressionKind.optional(),
+  channel: SuppressionChannel.optional(), reason: SuppressionReason.optional(), sub_reason: Slug.optional(),
+  cursor: Cursor, limit: Limit }),
+  out: z.object({ entries: z.array(z.object({ kind: SuppressionKind, channel: SuppressionChannel,
+    key_hash: z.string(), reason: SuppressionReason, sub_reason: Slug.nullable(),
+    expires_at: IsoDateTime.nullable(), note: z.string().nullable(), created_at: IsoDateTime })),
     next_cursor: z.string().nullable() }) }
 export const CrmSuppressionRemove = { in: z.object({ kind: SuppressionKind, value: z.string().min(1).max(320),
-  reason: z.string().min(1).max(500) }), out: z.object({ removed: z.boolean() }) }
-export const CrmOriginGuardSet = { in: z.object({ rejected: z.array(z.string().min(1).max(64)).max(50) }),
-  out: z.object({ rejected: z.array(z.string()) }) }
+  channel: SuppressionChannel.default('all'), reason: z.string().min(1).max(500) }),
+  out: z.object({ removed: z.boolean() }) }
+export const CrmWriteGuardSet = { in: z.object({
+  rejected_origins: z.array(z.string().min(1).max(64)).max(50).optional(),
+  require_origin: z.boolean().optional().describe('refuse writes that declare no origin'),
+  team_visibility_only_apps: z.array(z.string().min(1).max(64)).max(20).optional()
+    .describe('app keys whose writes must be visibility: team (VISIBILITY_REJECTED otherwise)') }),
+  out: z.object({ rejected_origins: z.array(z.string()), require_origin: z.boolean(),
+    team_visibility_only_apps: z.array(z.string()) }) }
 
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),
@@ -492,8 +513,12 @@ export const ErrorCode = {
   RESTORE_CONFLICT: 'RESTORE_CONFLICT', SCHEMA_CONFLICT: 'SCHEMA_CONFLICT',
   IDEMPOTENCY_MISMATCH: 'IDEMPOTENCY_MISMATCH', IDEMPOTENCY_IN_PROGRESS: 'IDEMPOTENCY_IN_PROGRESS',
   UNKNOWN_TEMPLATE: 'UNKNOWN_TEMPLATE', TENANT_MISMATCH: 'TENANT_MISMATCH',
+  TENANT_REPARENTING: 'TENANT_REPARENTING', ORIGIN_REJECTED: 'ORIGIN_REJECTED',
+  VISIBILITY_REJECTED: 'VISIBILITY_REJECTED', ERASED: 'ERASED',
   LIMIT_EXCEEDED: 'LIMIT_EXCEEDED', INTERNAL: 'INTERNAL',
 } as const
+// APPEND-ONLY: codes are never renamed or removed (R8). Consumers may treat
+// unknown codes as fatal-and-surface.
 export type ErrorCodeValue = typeof ErrorCode[keyof typeof ErrorCode]
 export const ErrorCodeSchema = z.enum(Object.values(ErrorCode) as [ErrorCodeValue, ...ErrorCodeValue[]])
 
@@ -517,6 +542,7 @@ export const ErrorPayload = z.object({
   held_by: Uuid.optional(),                                                          // RESTORE_CONFLICT
   limit: z.number().int().optional(),                                                // LIMIT_EXCEEDED
   available: z.array(Slug).optional(),                                               // UNKNOWN_TEMPLATE
+  origin: z.string().nullable().optional(),                                          // ORIGIN_REJECTED
   correlation_id: z.string().optional(),                                             // INTERNAL
   detail: z.string().optional(),
 })

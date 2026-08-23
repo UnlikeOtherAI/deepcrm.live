@@ -84,7 +84,7 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type, singular_name?, plural_name?, description?, icon?, primary_attribute? }` | `ObjectTypeDetail` |
 | `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type, reason? }` | `{ archived: true, records: n }` |
 | `crm_attribute_define` | Add an attribute (field) to an object type. Use `record_reference` to relate to other object types. Unique attributes enable `crm_record_assert`. | `{ object_type, ...AttributeSpec }` | `AttributeDetail` |
-| `crm_attribute_update` | Change an attribute's name, description, options, required/indexed/sensitivity flags. Type and slug are immutable. Tightening (required, unique) reports violations via MRTR before applying. | `{ object_type, attribute, name?, description?, config?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }` | `AttributeDetail` |
+| `crm_attribute_update` | Change an attribute's name, description, options, required/indexed/sensitivity flags. Type, slug **and `is_multi`** are immutable. Tightening reports violations via MRTR; normalize-affecting config changes require a key-recompute backfill; sensitivity raises trigger a reindex Task (schema-engine §3a). | `{ object_type, attribute, name?, description?, config?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }` | `AttributeDetail` |
 | `crm_attribute_archive` | Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value. | `{ object_type, attribute, reason? }` | `{ archived: true, records_with_values: n }` |
 | `crm_relation_type_define` | Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. | `{ slug, from_object_type: slug \| null, to_object_type: slug \| null, forward_name, inverse_name, description?, cardinality, on_delete?, edge_attributes?: AttributeSpec[] }` | `RelationTypeDetail` |
 | `crm_relation_type_archive` | Archive a relation type; links are kept but inactive. | `{ relation_type, reason? }` | `{ archived: true, links: n }` |
@@ -146,22 +146,22 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_search` | Free-text search across records: `keyword` (exact words), `semantic` (meaning), or `hybrid` (default). Single-page, ranked (no cursor — narrow the query rather than paging); recently changed linked records may lag the index briefly. For exact attribute lookups use `crm_records_query`. | `{ query, object_types?, mode?, limit? }` | `{ hits: [{ record: RecordSummary, score, match: keyword\|semantic\|both }] }` |
+| `crm_search` | Free-text or by-example search: `query` text (keyword/semantic/hybrid) **or** `similar_to` (nearest neighbours of an existing record's embedding — "companies like this one"). Single-page, ranked; recently changed linked records may lag the index briefly. Exact lookups: `crm_records_query`. | `{ query?, similar_to?: record_id, object_types?, mode?, limit? }` | `{ hits: [{ record: RecordSummary, score, match }] }` |
 | `crm_find_duplicates` | Scan an object type for likely duplicates using matching rules and semantic similarity. Background Task; returns candidate groups with evidence. Never merges. | `{ object_type, filter?, include_semantic?: boolean }` | `{ task_id }` → `{ groups: [{ records: [RecordSummary], evidence }] }` |
 | `crm_merge_records` | Merge duplicates into a survivor: per-attribute survivor values (override with `field_choices`), union of multi-values, links and list entries re-pointed, losers become redirects. Reversible with `crm_unmerge` within retention. Approval-gated by default. | `{ survivor_id, merged_ids: [id], field_choices?: { slug: record_id }, reason }` | `{ record, merge_change_id, repointed_links: n }` |
 | `crm_unmerge` | Undo a merge from its snapshot. | `{ merge_change_id, reason }` | `{ restored: [id] }` |
 | `crm_data_quality` | Report: required attributes missing, stale records (no activity in N days), orphans (many-side of a `restrict` relation with no active link), unique collisions predating a rule. Each bucket carries a `query_filter` to paginate the full set via `crm_records_query`. | `{ object_type?, stale_days?: number }` | `{ missing_required, stale, orphans, collisions }` each `{ count, items: [{record, detail}] (≤100), query_filter }` |
 
-### 7a. Compliance: erasure, suppression, origin guard
+### 7a. Compliance: erasure, suppression, write guard
 
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_record_erase` | Right-to-erasure: scrub a record's data and its historical values in place, leave a permanent tombstone, and (by default) write hashed suppression entries for its contact values so the person is never contacted again. Owner-only, approval-gated, irreversible. | `{ id, reason, suppress?: true }` | `{ erased: true, suppressed: [{kind, count}] }` |
-| `crm_suppression_add` | Record a do-not-contact objection for an email/phone/domain. The value is normalized and hashed in memory — never stored readable. | `{ kind, value, reason, note? }` | `{ added: true }` |
-| `crm_suppression_check` | **Call before any outbound send.** Checks values against the suppression store; suppressed entries must not be contacted. | `{ entries: [{kind, value}] (≤100) }` | `{ results: [{kind, suppressed, reason?}] }` |
+| `crm_record_erase` | Right-to-erasure: suppress first, scrub data + edge/entry data + historical values in place, reindex neighbours, leave a permanent tombstone, emit `record.erased` (consumers must erase their copies). Owner-only, approval-gated, irreversible. | `{ id, reason: gdpr_request\|retention_policy\|legal_order\|other, suppress?: true }` | `{ erased: true, suppressed: [{kind, count}] }` |
+| `crm_suppression_add` | Record a do-not-contact entry (email/phone/domain/company number/postal), optionally per channel and time-boxed (`expires_at` refused on objection/erasure). Value normalized (pinned rules, schema-engine §4d) and hashed in memory — never stored readable. | `{ kind, value, channel?, reason, sub_reason?, expires_at?, note? }` | `{ added: true }` |
+| `crm_suppression_check` | **Call before any outbound send**, with the channel you are about to use; `all` entries and unexpired time-boxed entries suppress. | `{ entries: [{kind, value, channel?}] (≤100) }` | `{ results: [{kind, suppressed, reason?, sub_reason?}] }` |
 | `crm_suppression_list` | List suppression entries (hashes and metadata only — the store holds no readable values). | `{ kind?, cursor?, limit? }` | `{ entries, next_cursor }` |
 | `crm_suppression_remove` | Remove a suppression entry (un-suppressing an objector — owner + approval). | `{ kind, value, reason }` | `{ removed: boolean }` |
-| `crm_origin_guard_set` | Set the team's rejected origin classes: writes declaring one of these `origin` values are refused (`ORIGIN_REJECTED`). Defence in depth for taint boundaries. Owner-only. | `{ rejected: [string] }` | `{ rejected }` |
+| `crm_write_guard_set` | Set the team's write guard: rejected origin classes (`ORIGIN_REJECTED`), `require_origin` (refuse origin-less writes), and `team_visibility_only_apps` (app keys whose writes must be team-visible — `VISIBILITY_REJECTED`; server-enforces "we write no private data"). Owner-only. | `{ rejected_origins?, require_origin?, team_visibility_only_apps? }` | the guard |
 
 Suppression entries survive tenant deletion and record erasure by construction (no foreign keys — schema-engine §2); erasure semantics: schema-engine §4d.
 
@@ -175,7 +175,7 @@ Suppression entries survive tenant deletion and record erasure by construction (
 | `crm_webhook_list` | List webhooks (secrets never returned). | `{}` | `{ webhooks }` |
 | `crm_webhook_delete` | Delete a webhook. | `{ id }` | `{ deleted: true }` |
 
-Webhook payload: `POST url` with `X-DeepCRM-Signature: sha256=<hmac>` over the body, `X-DeepCRM-Delivery: <id>`, body `{ team: uoaTeamId, since_seq, until_seq, changes: Change[] }`, coalesced per 30 s window, retried with backoff (1 m, 5 m, 30 m, 2 h, 12 h) then parked with `last_error`.
+Webhook wire contract (envelope, signature, retry, catch-up): **normative in [events.md](spec/events.md) §3** — this section only names the tools.
 
 ## 9. Prompts
 
@@ -189,4 +189,4 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 
 ## 10. Tool count and grouping
 
-56 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (12), `crm_link*` (3), `crm_list_*`/`crm_view_*` (7), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_record_erase`/`crm_suppression_*`/`crm_origin_guard_set` (6), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters (enforced at registration) so a client's find/load meta-tools work; longer guidance lives in the `crm://help/*` resources.
+56 tools. Prefix groups: `crm_schema_*`/`crm_object_type_*`/`crm_attribute_*`/`crm_relation_type_*`/`crm_matching_rule_*`/`crm_template_*` (11), `crm_record*`/`crm_records_*` (12), `crm_link*` (3), `crm_list_*`/`crm_view_*` (7), `crm_activity_*`/`crm_note_*`/`crm_task*`/`crm_pipeline_*` (7), `crm_search`/`crm_find_duplicates`/`crm_merge_records`/`crm_unmerge`/`crm_data_quality` (5), `crm_record_erase`/`crm_suppression_*`/`crm_write_guard_set` (6), `crm_export`/`crm_changes_since`/`crm_webhook_*` (5). Descriptions stay under 300 characters (enforced at registration) so a client's find/load meta-tools work; longer guidance lives in the `crm://help/*` resources.

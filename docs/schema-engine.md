@@ -55,6 +55,11 @@ model Team {
   // per-user connector gate): a write whose declared `origin` is in this list
   // is refused with ORIGIN_REJECTED. Owner-set via crm_origin_guard_set.
   rejectedOrigins String[]    @default([]) @map("rejected_origins")
+  // Write-guard extensions (R1/R16): refuse origin-less writes; refuse
+  // non-team visibility from listed app keys (server-enforces a product's
+  // "everything we write is team-visible" invariant).
+  requireOrigin  Boolean      @default(false) @map("require_origin")
+  teamVisibilityOnlyApps String[] @default([]) @map("team_visibility_only_apps")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -93,6 +98,7 @@ enum AttributeType {
   phone
   url
   domain
+  registry_id
   location
   personal_name
   actor_reference
@@ -119,6 +125,15 @@ enum SuppressionKind {
   phone
   domain
   company_number
+  postal
+}
+
+enum SuppressionChannel {
+  all
+  email
+  phone_call
+  sms
+  post
 }
 
 enum SuppressionReason {
@@ -477,10 +492,21 @@ model SuppressionEntry {
   organizationId String            @map("organization_id") @db.Uuid
   teamId         String            @map("team_id") @db.Uuid
   kind           SuppressionKind
-  // sha256hex(kind + '\x1f' + normalized value) — same normalisation as the
-  // matching attribute type (lower-cased email, E.164, registrable domain).
+  // PECR routing is per channel: an address lawful for post may be suppressed
+  // for email. 'all' suppresses every channel (R7).
+  channel        SuppressionChannel @default(all)
+  // sha256hex(kind + '\x1f' + normalized value). Normalisations are pinned
+  // byte-exactly in §4d — clients pre-filtering against crm_suppression_list
+  // hashes must reproduce them.
   keyHash        String            @map("key_hash")
   reason         SuppressionReason
+  // Queryable refinement (opt_out, not_interested, complaint, existing_client…);
+  // `note` is prose and not queryable.
+  subReason      String?           @map("sub_reason")
+  // Time-boxed suppression ("not interested" ⇒ 12 months). NEVER allowed on
+  // reason objection|erasure — those are permanent. Expired entries answer
+  // suppressed:false and are pruned by retention.
+  expiresAt      DateTime?         @map("expires_at")
   note           String?
   sourceRecordId String?           @map("source_record_id") @db.Uuid
   createdByType  ActorType         @map("created_by_type")
@@ -488,7 +514,7 @@ model SuppressionEntry {
   onBehalfOf     String?           @map("on_behalf_of")
   createdAt      DateTime          @default(now()) @map("created_at")
 
-  @@unique([teamId, kind, keyHash])
+  @@unique([teamId, kind, keyHash, channel])
   @@index([organizationId, teamId])
   @@map("suppression_entries")
 }
@@ -551,6 +577,7 @@ model RecordSearch {
 //   ALTER TABLE record_search ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
 //   CREATE INDEX record_search_tsv ON record_search USING gin (tsv);
 //   CREATE INDEX record_search_embedding ON record_search USING hnsw (embedding vector_cosine_ops);
+//   CREATE INDEX record_search_model ON record_search (embedding_model);  -- R13: semantic queries filter to the current model
 
 // ───────────────────────── lists & views ─────────────────────────
 
@@ -732,6 +759,11 @@ model Webhook {
   id             String    @id @default(uuid()) @db.Uuid
   organizationId String    @map("organization_id") @db.Uuid
   teamId         String    @map("team_id") @db.Uuid
+  // The human who registered it: events are visibility-filtered as this
+  // principal (events.md §1). Deliveries pause when this principal has not
+  // been seen (principal_last_seen) within DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS
+  // and resume on their next authenticated call (R11).
+  subscribingUoaUserId String @map("subscribing_uoa_user_id")
   url            String
   events         String[]
   secretCiphertext String  @map("secret_ciphertext")
@@ -743,6 +775,22 @@ model Webhook {
 
   @@unique([organizationId, teamId, url])
   @@map("webhooks")
+}
+
+/// Operational liveness evidence, NOT an identity store: one row per human
+/// seen in a team through a verified delegation, upserted on every request.
+/// Backs webhook-subscriber staleness (R11), actor-reference validation (R25 —
+/// owner/grant/subowner ids must have been seen in this team, or be the
+/// caller), and the data-quality stale_actors bucket. Also the PG-backed
+/// single-use requestId seen-set lives here-adjacent (unlogged table
+/// seen_request_ids, raw SQL) so replay bounds hold across API replicas.
+model PrincipalLastSeen {
+  teamId     String   @map("team_id") @db.Uuid
+  uoaUserId  String   @map("uoa_user_id")
+  lastSeenAt DateTime @map("last_seen_at")
+
+  @@id([teamId, uoaUserId])
+  @@map("principal_last_seen")
 }
 
 model IdempotencyReplay {
@@ -788,7 +836,7 @@ type AttributeTypeDef = {
 | `text` | string ≤ `maxLength` (default 4000) | `{maxLength?}` | trim, lower, collapse whitespace | |
 | `rich_text` | markdown string ≤ 100k | — | — | not unique/indexed |
 | `number` | number | `{precision?, min?, max?}` | canonical decimal string | |
-| `currency` | `{amount: string (decimal), currency: ISO4217}` | `{defaultCurrency}` | — | amount stored as string to avoid float drift |
+| `currency` | `{amount: string (decimal), currency: ISO4217}` | `{defaultCurrency, fixedCurrency?}` | — | amount as string; range filters compare `amount` **ignoring currency** — set `fixedCurrency` on columns meant to be comparable (R19) |
 | `percent` | number 0–100 | — | — | |
 | `boolean` | boolean | — | `"true"/"false"` | |
 | `date` | `YYYY-MM-DD` | — | same | |
@@ -800,14 +848,24 @@ type AttributeTypeDef = {
 | `phone` | E.164 string | `{defaultRegion}` | E.164 via `libphonenumber-js` | unique-capable |
 | `url` | absolute http(s) URL | — | lower host, strip trailing slash | |
 | `domain` | hostname | — | registrable domain (`tldts`), lower | unique-capable |
+| `registry_id` | company/registry number string | `{jurisdiction?}` | uppercase; strip spaces, hyphens, dots; strip leading zeros | unique-capable; the one normalizer for Companies-House-style ids (R19) |
 | `location` | `{line1?, city?, region?, country? (ISO2), postal?, lat?, lng?}` | — | — | |
 | `personal_name` | `{first?, last?, full}` | — | lower(full) collapse | `full` derived when absent |
 | `actor_reference` | `{type: human\|agent, id}` | `{allow: [human, agent]}` | `type:id` | |
 | `record_reference` | record id (string) or array when `isMulti` | `{objectTypes: [slug…], relationTypeSlug}` | record id | backed by a `RelationType`; see §4.4 |
 | `timestamp_system` | ISO datetime | `{source: created_at\|updated_at\|last_activity_at}` | — | read-only, computed |
-| `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique |
+| `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique, **opaque to the filter grammar** — promote queryable keys to real attributes (R19) |
+
+Registry notes: `currency`, `percent`, `rating` and `location` have no `normalize` and therefore cannot back a unique key or a matching rule — stated here so nobody designs a match rule on money (R19). `isMulti` is **immutable after define**, like `type` and `slug` (R19). Each type's `toSearchText` follows its `normalize` where present; `rich_text` **is** included in search content as stripped markdown truncated to 2 KiB per value (R14); composite quantity values (number + unit + tolerance) are an open question (brief §9).
 
 Reserved attribute slugs on every object type (system, not stored in `data`): `id`, `created_at`, `updated_at`, `last_activity_at`, `display_name`, `owner`.
+
+## 3a. Schema evolution over live data (R9)
+
+- **Config changes that alter `normalize`** (`phone.defaultRegion`, text normalisation, select option ids) are refused with `SCHEMA_CONFLICT` unless run with a **key-recompute backfill Task** (MRTR states the affected row count) that rewrites `record_unique_keys`/`record_match_keys` hashes — a silent config change would strand every stored hash and make asserts mint duplicates.
+- **Select/status options are archivable, never deletable while referenced.** An archived option remains a valid *stored* value (reads, filters, history) and an invalid value for *new writes*; `crm_attribute_update` reports the live-value count via MRTR before archiving an option.
+- **Tightening bounds** (`maxLength`, `min`/`max`, `rating.max`) over existing values: MRTR reports violations; stored values are **grandfathered** — they stay valid until the next write touches that attribute on that record.
+- **Raising `sensitivity` past `internal`, or archiving an attribute with values, enqueues a bulk `record.reindex` Task for the object type in the same commit** (MRTR states the record count; the tool result names the Task) — stored search content and embeddings must stop carrying the now-sensitive value (R5a). The same trigger applies to config changes that alter `toSearchText`.
 
 ## 4. Write path — `applyWrite(tx, ctx, schema, op)`
 
@@ -816,7 +874,7 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink
 0. **Idempotency reservation (when `idempotency_key` given).** Take the key advisory lock, then `INSERT INTO idempotency_replays (…, principal_user_id, tool, key, arguments_hash, result NULL)`. Unique violation ⇒ read the row: same `arguments_hash` with a result ⇒ return it; same hash, null result ⇒ the winner is in flight — `IDEMPOTENCY_IN_PROGRESS` (client retries); different hash ⇒ `IDEMPOTENCY_MISMATCH`. The `result` is filled at step 12 **in the same commit** as the mutation, so "applied" and "replayable" are atomic (never stored after commit).
 1. **Visibility gate (before policy)** — every record touched or read passes `canSee(ctx, record)`: `team` ⇒ yes; `users` ⇒ `ctx.onBehalfOf.uoaUserId` equals `created_on_behalf_of` or is in `record_visibility_grants`; `private` ⇒ creator only. Fail ⇒ `NOT_FOUND` (no existence oracle; admins are not exempt). Then **policy** — `checkPolicy(ctx, 'record', action, [record?, objectType, team])`; per touched `confidential|restricted` attribute, `checkPolicy(ctx, 'attribute', 'edit', …)`. Deny ⇒ `POLICY_DENIED` (audited with `outcome: denied`); a matching rule with `requiresApproval` for this actor ⇒ the MRTR approval path (mcp-surface §0.4).
 2. **Schema** — `loadSchema(tenant)` cached by `(team_id, schema_version)` (the version is read in the same query that resolves the tenant, so the cache is self-invalidating with no TTL). Unknown slug ⇒ `UNKNOWN_ATTRIBUTE`; archived ⇒ `ATTRIBUTE_ARCHIVED`; system read-only ⇒ `ATTRIBUTE_READ_ONLY`.
-3. **Validate & normalise (pure input checks only)** — declared `origin` (set-once) checked against `Team.rejectedOrigins` ⇒ `ORIGIN_REJECTED`; `visibility`/`visible_to` inputs validated (grants are UOA user ids; `visible_to` implies `users`); per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize`; `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
+3. **Validate & normalise (pure input checks only)** — the write guard: declared `origin` (set-once) checked against `Team.rejectedOrigins` ⇒ `ORIGIN_REJECTED`, absent origin with `Team.requireOrigin` ⇒ `ORIGIN_REJECTED {origin: null}`, and `visibility ≠ team` (or any `visible_to`) under an app key listed in `Team.teamVisibilityOnlyApps` ⇒ `VISIBILITY_REJECTED` (R1); `visibility`/`visible_to` inputs validated (grants are UOA user ids; `visible_to` implies `users`); per-attribute `valueSchema`; `isMulti` ⇒ array de-duplicated by `normalize` — **multi values preserve submitted order, de-duplication keeps the first occurrence, and serialization returns stored order** (a ranked list is data; R2); `null` unsets (rejected on `isRequired`), `[]` is an empty list, distinct from unset; per-record `data` ≤ 256 KiB serialized. Values for `record_reference` attributes are *extracted as link operations* here — they are never written into `data` (§4a). Checks that depend on other rows (target existence, restrict blockers) move to step 5.
 4. **Lock** — `lockRecords(tx, ids)` for every record touched, sorted ids; for the create/assert branch of a unique or match key, also the key lock on `hashtext(tenant ∥ attributeId ∥ normalizedHash)`.
 5. **Locked-state validation** — record exists, tenant matches, not deleted; a merged id redirects transitively (`MERGED {redirect_to}` only when the final survivor is itself deleted); `record_reference` targets exist and are live; delete discovers dependents and evaluates `restrict` **after** locks (never before).
 6. **Version** — `expected_version` mismatch ⇒ `VERSION_CONFLICT {current}`. Link/unlink bump `records.version` on **both** endpoints.
@@ -839,7 +897,7 @@ Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming t
 
 ### 4c′. Visibility interactions (normative)
 
-- Query, search, timeline, links-list, duplicates and the change feed apply the visibility gate per row for the calling principal; a link whose far end is invisible is omitted from listings, and a `DUPLICATE_FOUND` against an invisible record returns the generic form (no `record_id`, no candidates).
+- **Every row, count, sum and derived aggregate is computed over the caller's visibility-filtered row set** — `crm_records_count`, `include_total`, `crm_pipeline_summary`, `crm_data_quality` buckets, `crm_export` rows and `crm_list_entries` included; for the semantic path the visibility predicate is part of the same SQL predicate the HNSW iterative scan filters on — pre-filter, never post-filter of a top-k (R15). Query, search, timeline, links-list, duplicates and the change feed apply the gate per row; a link whose far end is invisible is omitted from listings, and a `DUPLICATE_FOUND` against an invisible record returns the generic form (no `record_id`, no candidates).
 - The search index stores no visibility copy — filtering happens at query time against `visibility`/grants.
 - Changing visibility is `record.edit` on the record — except **widening a record the caller cannot see** (recovering an orphaned private record), which only a team owner may do, approval-gated; existence is disclosed to the owner, data is not until the change lands.
 - Merge requires the actor to see **all** records in the merge set; the survivor keeps the most restrictive visibility and the union of grants.
@@ -850,15 +908,19 @@ Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unli
 
 ### 4d. `erase` — the right-to-erasure operation (deepsignal policy-asks §3)
 
-`crm_record_erase {id, reason, suppress?: boolean = true}` — owner-only by default (policy `record.erase`), audited, and the **one documented exception to change-log immutability**:
+`crm_record_erase {id, reason, suppress?: boolean = true}` — owner-only by default (policy `record.erase`), audited, and the **one documented exception to change-log immutability**. `reason` is a **closed enum** (`gdpr_request | retention_policy | legal_order | other`) so nothing personal can ride into the audit trail through it; audit `metadata` for erase carries ids and counts only (R26).
 
-1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`), write a `suppression_entries` row (`reason: erasure`) from the normalized hash **before** anything is scrubbed.
-2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/match keys deleted, search row deleted, visibility grants deleted, active links ended.
+1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`, `registry_id`), write a `suppression_entries` row (`reason: erasure`, channel `all`) from the normalized hash **before** anything is scrubbed.
+2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/match keys deleted, search row deleted, visibility grants deleted, active links ended — **and, in the same transaction, `record_links.data` on every link (active or ended) touching the record, and `list_entries.data` on every entry pointing at it, are cleared** (R12). Enqueue `record.reindex_neighbours` so linked records' search content and embeddings stop carrying the erased `display_name` (R5b).
 3. History scrub: every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
 4. The record row remains as a tombstone: `ERASED` on direct reads, never restorable, never hard-deleted by retention — the tombstone is what proves erasure happened.
-5. One `record.erase` audit row; the change feed emits `record.deleted`.
+5. One `record.erase` audit row; the change feed emits a **typed `record.erased` event** (not a generic delete) — consumers holding copies (webhook receivers, feed pullers, export takers) are contractually obliged to erase their copies on it (events.md §1; R26).
 
-**Suppression store** (§2 `SuppressionEntry`): `crm_suppression_add {kind, value, reason, note?}` (value normalized + hashed in memory, never stored raw), `crm_suppression_check {entries: [{kind, value}]}` → per-entry `{suppressed, reason?}` — **the send-time gate any outbound product must call**, `crm_suppression_list` (hashes + metadata only), `crm_suppression_remove` (owner + approval — un-suppressing an objector is a real decision). Suppression rows survive tenant deletion and erasure by construction (no FKs).
+**Bounded residuals, stated honestly (R12/R26):** already-taken copies (export files, delivered webhook bodies, pulled feed pages) are unreachable by construction — the `record.erased` event is the recall signal, not a guarantee; free-text mentions of a person inside *other* records' activity/note bodies are outside erasure's mechanical reach; replay results (24 h), completed queue jobs (purged after 7 days), approval snapshots (purged 30 days after expiry) and export files (1 h) hold data only for their stated retention bounds, enforced by the retention job.
+
+**Suppression store** (§2 `SuppressionEntry`): `crm_suppression_add {kind, value, channel?, reason, sub_reason?, expires_at?, note?}` (value normalized + hashed in memory, never stored raw; `expires_at` refused on `objection`/`erasure`), `crm_suppression_check {entries: [{kind, value, channel?}]}` → per-entry `{suppressed, reason?, sub_reason?}` (an `all` entry suppresses every channel; expired entries answer false) — **the send-time gate any outbound product must call**, `crm_suppression_list` (hashes + metadata only), `crm_suppression_remove` (owner + approval — un-suppressing an objector is a real decision). Suppression rows survive tenant deletion and erasure by construction (no FKs).
+
+**Normalisations are pinned byte-exactly** (clients pre-filtering against listed hashes must reproduce them; R7): `email` — trim, lower-case, strip display name; `phone` — **input must already be E.164** (must start `+`; anything else is `VALIDATION_FAILED` — no region guessing at this seam); `domain` — registrable domain via `tldts`, lower-case; `company_number` — uppercase, strip spaces/hyphens/dots, strip leading zeros (Companies House `01234567` ≡ `1234567`), the same normalizer as the `registry_id` attribute type; `postal` — **the caller pre-normalizes** to `ISO2 country + '|' + uppercase postcode + '|' + first address line`, DeepCRM only trims, uppercases and collapses whitespace before hashing (address canonicalisation is the sender's problem, stated rather than pretended). Hash = `sha256hex(kind + '\x1f' + normalized)`.
 
 ## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
 
@@ -877,7 +939,7 @@ Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unli
 ]}
 ```
 
-Ops by type: `eq neq in not_in is_null is_not_null` (all); `contains starts_with` (text, email, url, domain, personal_name, select-multi); `gt gte lt lte between` (number, currency.amount, percent, rating, date, datetime, timestamp_system). `text` = full-text on `record_search.tsv`. Sort: `[{attribute|system, direction}]`, max 3 keys. Pagination: opaque cursor = base64 of the last sort values + id, **bound to (tool, tenant, full argument set)** — a mismatched cursor is `VALIDATION_FAILED {detail: "cursor_mismatch"}`; `limit` 1–200 (default 50). Filters are capped at depth 8, 100 nodes, 16 KiB serialized. Object-valued attributes (`actor_reference`, `currency`, `location`, `personal_name`) compare with JSONB equality (`data->slug = $::jsonb`) against values canonicalised at write (fixed key order), never `->>` text comparison. A filter on a `record_reference` attribute compiles to an `EXISTS` over `record_links` (§4a). Attribute values are read as `data->>slug` with casts per type; indexed attributes use expression indexes named `idx_records_<first 8 hex of the attribute id>` (stable, unique, inside the 63-byte identifier limit) `ON records ((data->>'slug')) WHERE object_type_id = '…'`, created by the worker job `attribute.index` when `isIndexed` is set — the one exception to "no DDL": `CONCURRENTLY`, idempotent, and the job first drops any `INVALID` index of that name (a crashed build). Unsetting `isIndexed` or archiving the attribute runs `DROP INDEX CONCURRENTLY`. Indexed attributes are capped per tenant (`LIMIT_EXCEEDED`).
+Ops by type: `eq neq in not_in is_null is_not_null` (all); `contains starts_with` (text, email, url, domain, registry_id, personal_name, select-multi); `contains` additionally on **multi `actor_reference`** (matches one canonicalised `{type, id}` element — "records where I am a preferred subowner"; R4) and on multi `record_reference` (compiled as `linked_to` over the backing relation); `gt gte lt lte between` (number, currency.amount, percent, rating, date, datetime, timestamp_system). `text` = full-text on `record_search.tsv`. Sort: `[{attribute|system, direction}]`, max 3 keys. Pagination: opaque cursor = base64 of the last sort values + id, **bound to (tool, tenant, full argument set)** — a mismatched cursor is `VALIDATION_FAILED {detail: "cursor_mismatch"}`; `limit` 1–200 (default 50). Filters are capped at depth 8, 100 nodes, 16 KiB serialized. Object-valued attributes (`actor_reference`, `currency`, `location`, `personal_name`) compare with JSONB equality (`data->slug = $::jsonb`) against values canonicalised at write (fixed key order), never `->>` text comparison. A filter on a `record_reference` attribute compiles to an `EXISTS` over `record_links` (§4a). Attribute values are read as `data->>slug` with casts per type; indexed attributes use expression indexes named `idx_records_<first 8 hex of the attribute id>` (stable, unique, inside the 63-byte identifier limit) `ON records ((data->>'slug')) WHERE object_type_id = '…'`, created by the worker job `attribute.index` when `isIndexed` is set — the one exception to "no DDL": `CONCURRENTLY`, idempotent, and the job first drops any `INVALID` index of that name (a crashed build). Unsetting `isIndexed` or archiving the attribute runs `DROP INDEX CONCURRENTLY`. Indexed attributes are capped per tenant (`LIMIT_EXCEEDED`).
 
 ## 6. Matching rules
 
@@ -894,7 +956,7 @@ Result: `candidates: [{record, rule_position, evidence}]`. Evidence values are r
 Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id}`, `reason`. Approval-gated by policy default.
 
 1. Lock all records (sorted). Same object type, same tenant, none deleted; merged inputs rejected.
-2. Per attribute: chosen value = `field_choices[slug]` if given, else survivor's non-null, else newest non-null among losers (by last `set` change). `isMulti` ⇒ union de-duplicated by `normalize`. A `field_choices` id outside the merge set ⇒ `VALIDATION_FAILED`.
+2. Per attribute: chosen value = `field_choices[slug]` if given — **for multi attributes the chosen record's list wins wholesale, no union** (R3a) — else survivor's non-null, else newest non-null among losers (by last `set` change). Default for `isMulti` without a choice: **the survivor's list in its stored order, then losers' unseen values appended in their order — never interleaved** (order is data; R3b). A `field_choices` id outside the merge set ⇒ `VALIDATION_FAILED`.
 3. **Keys follow data, no exceptions** (review M5): a loser's unique key moves to the survivor only when its value is present in the survivor's post-merge `data` (union for multi; explicit `field_choices` replacement for single). Keys whose values did not survive are dropped and recorded in the snapshot.
 4. Links: re-point losers' `record_links` rows to the survivor (one edge write each — projections are computed, §4a, so no third-party records are touched); duplicates on `(relation_type, from, to)` collapse keeping the oldest; a `*_to_one` conflict keeps the survivor's own link and ends the loser's. Every re-point/end writes its paired change rows.
 5. List entries re-pointed; duplicates dropped and recorded.
@@ -905,11 +967,13 @@ Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id
 
 ## 8. Search document
 
-`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). Max 8 KiB. A `display_name` change enqueues one `record.reindex_neighbours` job that re-renders inbound-linked records' content in batches, re-embedding only when a stored `content_hash` changed (review M9); the `crm_search` description states the eventual-consistency window. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Embedding requests are batched (≤ 64 records per call) behind a circuit breaker — on failure records stay keyword-searchable and the job dead-letters rather than blocking the queue. Semantic queries run a tenant-filtered iterative scan (`hnsw.iterative_scan`, pgvector ≥ 0.8) so small tenants keep recall in a shared index; an `embed.model_migrate` job re-embeds rows whose `embedding_model` differs from current. Per-tenant index partitioning is deferred until one tenant exceeds ~1M vectors. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
+`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). Max 8 KiB. Content assembly order (the 8 KiB cap truncates from the end): `display_name`, attributes by `position` (rich_text stripped + 2 KiB-capped per value), then linked names — for `activity` records the newest content wins the budget (R14). A `display_name` change enqueues one `record.reindex_neighbours` job that re-renders inbound-linked records' content in batches, re-embedding only when a stored `content_hash` changed (review M9); the `crm_search` description states the eventual-consistency window. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Embedding requests are batched (≤ 64 records per call) behind a circuit breaker — on failure records stay keyword-searchable and the job dead-letters rather than blocking the queue. Semantic queries run a tenant-filtered iterative scan (`hnsw.iterative_scan`, pgvector ≥ 0.8) so small tenants keep recall in a shared index; an `embed.model_migrate` job re-embeds rows whose `embedding_model` differs from current — and **semantic queries always filter `embedding_model = current`** (cosine distance across models is meaningless; recall dips during migration, the keyword leg of hybrid is unaffected; a replacement model must produce `EMBEDDING_DIMENSIONS`-wide vectors or the change is a column migration, not a job; R13). Per-tenant index partitioning is deferred until one tenant exceeds ~1M vectors. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
 
 ## 9. Templates (`packages/schema-engine/src/templates/*.json`)
 
 `standard_crm` (person, company, deal + relations + matching rules as in brief §5.6), `system` (activity, note, task, their relation types — applied automatically on tenant provision), later `saas`, `agency`. Template application is idempotent: existing slugs are left untouched; new ones added; never archives.
+
+**Evidence-bearing facts — the blessed idiom (R18):** a fact that carries its own provenance (`observed_at`, source URL, confidence band, verdict) is modelled as its **own object type** with a `{subject}:{dimension}` unique text key and a `record_reference` to its subject — not as metadata bolted onto another record's attribute. `crm_record_assert` on the unique key gives idempotent re-observation; history gives the audit trail. A per-attribute evidence sidecar may come later; this pattern is supported today and is what integrations should build on.
 
 System object types created on provision:
 - `activity`: `kind (select: email|call|meeting|note|message|task_event|custom)`, `occurred_at (datetime, required)`, `direction (select: inbound|outbound|internal)`, `subject (text)`, `body (rich_text)`, `participants (actor_reference, multi)`, `external_ref (text, unique)`.
@@ -919,4 +983,4 @@ System object types created on provision:
 
 ## 10. Error codes (`@deepcrm/schemas/errors.ts`)
 
-`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `IDEMPOTENCY_IN_PROGRESS`, `RESTORE_CONFLICT {attribute, held_by}`, `UNKNOWN_TEMPLATE {available}`, `TENANT_MISMATCH`, `ORIGIN_REJECTED {origin}`, `ERASED`, `LIMIT_EXCEEDED {limit}`, `INTERNAL {correlation_id}`. Error messages are templates and never echo submitted values; `VALIDATION_FAILED.issues[].path` is an RFC 6901 JSON Pointer, and op/type-mismatch issues name the ops valid for the attribute's type.
+`POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `IDEMPOTENCY_IN_PROGRESS`, `RESTORE_CONFLICT {attribute, held_by}`, `UNKNOWN_TEMPLATE {available}`, `TENANT_MISMATCH`, `TENANT_REPARENTING` (retryable — UOA re-parented the team and reconciliation is running), `ORIGIN_REJECTED {origin}`, `VISIBILITY_REJECTED`, `ERASED`, `LIMIT_EXCEEDED {limit}`, `INTERNAL {correlation_id}`. **`ErrorCode` is append-only** — codes are never renamed or removed, so consumers may treat unknown codes as fatal-and-surface (R8). Error messages are templates and never echo submitted values; `VALIDATION_FAILED.issues[].path` is an RFC 6901 JSON Pointer, and op/type-mismatch issues name the ops valid for the attribute's type.
