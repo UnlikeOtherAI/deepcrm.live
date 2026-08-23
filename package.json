@@ -1,0 +1,27 @@
+{
+  "name": "deepcrm",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.22.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "pnpm --filter @deepcrm/api dev",
+    "lint": "node scripts/lint-migrations.mjs && node scripts/lint-tenant-where.mjs && turbo run lint",
+    "typecheck": "pnpm prisma:generate && turbo run typecheck",
+    "build": "pnpm lint && pnpm prisma:generate && turbo run build",
+    "test": "turbo run test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test",
+    "prisma:generate": "pnpm --filter @deepcrm/db prisma:generate",
+    "docs:mcp": "node scripts/generate-mcp-docs.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.0",
+    "@typescript-eslint/parser": "^8.58.0",
+    "eslint": "^10.2.0",
+    "tsx": "^4.20.6",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
+  }
+}

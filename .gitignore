@@ -5,3 +5,6 @@ dist
 *.tsbuildinfo
 coverage
 .exports/
+
+# Turbo cache/task logs (generated, never commit)
+.turbo/

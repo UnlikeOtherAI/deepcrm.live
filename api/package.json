@@ -1,0 +1,26 @@
+{
+  "name": "@deepcrm/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --max-warnings=0",
+    "test": "vitest run",
+    "dev": "tsx watch --poll src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@deepcrm/db": "workspace:*",
+    "@deepcrm/mcp-inbound": "workspace:*",
+    "@deepcrm/queue": "workspace:*",
+    "@deepcrm/schema-engine": "workspace:*",
+    "@deepcrm/schemas": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "fastify": "^5.8.4",
+    "zod": "^3.25.76"
+  }
+}
