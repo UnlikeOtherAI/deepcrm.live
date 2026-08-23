@@ -67,7 +67,7 @@ Both exit 0.
 
 ---
 
-### T02 — Shared contracts: errors, actors, tenant, embedding width
+### T02 ✅ — Shared contracts: errors, actors, tenant, embedding width
 
 **Depends on:** T01. **Spec:** `docs/schema-engine.md` §10, `docs/auth-and-tenancy.md` §2, `docs/spec/contracts.md` (`primitives.ts`, `errors.ts` — copy verbatim).
 
