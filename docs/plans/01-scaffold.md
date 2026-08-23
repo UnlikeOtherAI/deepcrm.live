@@ -2,7 +2,7 @@
 
 Outcome: the monorepo installs, lints, typechecks; Prisma migrations apply to a pgvector Postgres; `pnpm dev` serves `GET /health` on 5656 with a dev principal.
 
-### T01 — Monorepo skeleton
+### T01 ✅ — Monorepo skeleton
 
 **Depends on:** none. **Spec:** `CLAUDE.md`, `docs/architecture.md` §2.
 
