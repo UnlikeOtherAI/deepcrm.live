@@ -1,10 +1,819 @@
-// Minimal placeholder so `prisma generate` succeeds before T03 replaces
-// this file with the full schema from docs/schema-engine.md §2.
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pg_trgm]
+}
+
+// ───────────────────────── tenancy (UOA 1:1 mirrors) ─────────────────────────
+
+model Organization {
+  id            String   @id @default(uuid()) @db.Uuid
+  externalOrgId String   @unique @map("external_org_id")
+  name          String
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  teams         Team[]
+
+  @@map("organizations")
+}
+
+model Team {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  externalTeamId String       @unique @map("external_team_id")
+  name           String
+  schemaVersion  Int          @default(0) @map("schema_version")
+  policyVersion  Int          @default(0) @map("policy_version")
+  // Commit-ordered change-feed sequence. Allocated via
+  // `UPDATE teams SET feed_seq = feed_seq + n ... RETURNING` in applyWrite
+  // AFTER all data/links writes and change-intent formation but BEFORE the
+  // change-row inserts, the enqueues, the idempotency result and the audit
+  // insert (§4 step 12), so the row lock makes seq order equal commit order
+  // per tenant. Never a Postgres sequence: sequences
+  // allocate at insert time and a slow transaction would commit a seq the
+  // feed cursor has already passed (review C1).
+  feedSeq        BigInt       @default(0) @map("feed_seq")
+  // Origin write-guard (defence in depth for taint boundaries like DeepSignal's
+  // per-user connector gate): a write whose declared `origin` is in this list
+  // is refused with ORIGIN_REJECTED. Owner-set via crm_origin_guard_set.
+  rejectedOrigins String[]    @default([]) @map("rejected_origins")
+  // Write-guard extensions (R1/R16): refuse origin-less writes; refuse
+  // non-team visibility from listed app keys (server-enforces a product's
+  // "everything we write is team-visible" invariant).
+  requireOrigin  Boolean      @default(false) @map("require_origin")
+  teamVisibilityOnlyApps String[] @default([]) @map("team_visibility_only_apps")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("teams")
+}
+
+// ───────────────────────── enums ─────────────────────────
+
+enum ActorType {
+  human
+  agent
+  system
+}
+
+enum ObjectTypeKind {
+  system
+  standard
+  custom
+}
+
+enum AttributeType {
+  text
+  rich_text
+  number
+  currency
+  percent
+  boolean
+  date
+  datetime
+  select
+  status
+  rating
+  email
+  phone
+  url
+  domain
+  registry_id
+  location
+  personal_name
+  actor_reference
+  record_reference
+  timestamp_system
+  json
+}
+
+enum Sensitivity {
+  public
+  internal
+  confidential
+  restricted
+}
+
+enum Visibility {
+  team
+  users
+  private
+}
+
+enum SuppressionKind {
+  email
+  phone
+  domain
+  company_number
+  postal
+}
+
+enum SuppressionChannel {
+  all
+  email
+  phone_call
+  sms
+  post
+}
+
+enum SuppressionReason {
+  objection
+  erasure
+  bounce
+  manual
+}
+
+enum Cardinality {
+  one_to_one
+  one_to_many
+  many_to_one
+  many_to_many
+}
+
+enum OnDelete {
+  unlink
+  cascade
+  restrict
+}
+
+enum ChangeKind {
+  create
+  set
+  unset
+  link
+  unlink
+  delete
+  restore
+  merge
+  unmerge
+  schema_change @map("schema")
+}
+
+enum MatchMethod {
+  exact
+  normalized
+  fuzzy
+}
+
+enum MatchAction {
+  block
+  warn
+  allow
+}
+
+enum PolicyScope {
+  team
+  object_type
+  record
+  list
+}
+
+enum PolicyResourceType {
+  schema
+  object_type
+  attribute
+  record
+  link
+  list
+  view
+  merge
+  export
+  webhook
+  approval
+  suppression
+}
+
+enum PolicyAction {
+  view
+  create
+  edit
+  delete
+  restore
+  erase
+  link
+  merge
+  export
+  define
+  admin
+}
+
+enum PolicyEffect {
+  allow
+  deny
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  consumed
+}
+
+enum AuditOutcome {
+  success
+  denied
+  failure
+}
+
+enum JobStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+}
+
+// ───────────────────────── metadata ─────────────────────────
+
+model ObjectType {
+  id                 String         @id @default(uuid()) @db.Uuid
+  organizationId     String         @map("organization_id") @db.Uuid
+  teamId             String         @map("team_id") @db.Uuid
+  slug               String
+  singularName       String         @map("singular_name")
+  pluralName         String         @map("plural_name")
+  description        String
+  icon               String?
+  kind               ObjectTypeKind
+  templateSlug       String?        @map("template_slug")
+  primaryAttributeId String?        @map("primary_attribute_id") @db.Uuid
+  archivedAt         DateTime?      @map("archived_at")
+  createdByType      ActorType      @map("created_by_type")
+  createdById        String         @map("created_by_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  attributes         Attribute[]
+  records            Record[]
+  relationsFrom      RelationType[] @relation("RelationFrom")
+  relationsTo        RelationType[] @relation("RelationTo")
+  matchingRules      MatchingRule[]
+
+  @@unique([organizationId, teamId, slug])
+  @@index([organizationId, teamId, kind])
+  @@map("object_types")
+}
+
+model Attribute {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  teamId         String        @map("team_id") @db.Uuid
+  objectTypeId   String?       @map("object_type_id") @db.Uuid
+  listId         String?       @map("list_id") @db.Uuid
+  slug           String
+  name           String
+  description    String
+  type           AttributeType
+  config         Json          @default("{}")
+  isMulti        Boolean       @default(false) @map("is_multi")
+  isRequired     Boolean       @default(false) @map("is_required")
+  isUnique       Boolean       @default(false) @map("is_unique")
+  isSystem       Boolean       @default(false) @map("is_system")
+  isIndexed      Boolean       @default(false) @map("is_indexed")
+  sensitivity    Sensitivity   @default(internal)
+  defaultValue   Json?         @map("default_value")
+  position       Int           @default(0)
+  archivedAt     DateTime?     @map("archived_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  objectType     ObjectType?   @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  list           List?         @relation(fields: [listId], references: [id], onDelete: Cascade)
+  uniqueKeys     RecordUniqueKey[]
+
+  @@unique([objectTypeId, slug])
+  @@unique([listId, slug])
+  @@index([organizationId, teamId])
+  @@map("attributes")
+}
+
+model RelationType {
+  id                     String      @id @default(uuid()) @db.Uuid
+  organizationId         String      @map("organization_id") @db.Uuid
+  teamId                 String      @map("team_id") @db.Uuid
+  slug                   String
+  fromObjectTypeId       String?     @map("from_object_type_id") @db.Uuid   // null = any
+  toObjectTypeId         String?     @map("to_object_type_id") @db.Uuid     // null = any
+  forwardName            String      @map("forward_name")
+  inverseName            String      @map("inverse_name")
+  description            String      @default("")
+  cardinality            Cardinality
+  onDelete               OnDelete    @default(unlink) @map("on_delete")
+  edgeAttributes         Json        @default("[]") @map("edge_attributes")  // AttributeSpec[] for link.data
+  projectionAttributeSlug String?    @map("projection_attribute_slug")      // set when backing a record_reference attribute
+  isSystem               Boolean     @default(false) @map("is_system")
+  archivedAt             DateTime?   @map("archived_at")
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+  fromObjectType         ObjectType? @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
+  toObjectType           ObjectType? @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
+  links                  RecordLink[]
+
+  @@unique([organizationId, teamId, slug])
+  @@map("relation_types")
+}
+
+model MatchingRule {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  objectTypeId   String      @map("object_type_id") @db.Uuid
+  position       Int
+  attributeSlugs String[]    @map("attribute_slugs")
+  method         MatchMethod
+  threshold      Float?
+  action         MatchAction
+  createdAt      DateTime    @default(now()) @map("created_at")
+  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+
+  @@index([objectTypeId, position])
+  @@map("matching_rules")
+}
+
+// ───────────────────────── data ─────────────────────────
+
+model Record {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  teamId         String     @map("team_id") @db.Uuid
+  objectTypeId   String     @map("object_type_id") @db.Uuid
+  data           Json       @default("{}")
+  displayName    String     @default("") @map("display_name")
+  ownerType      ActorType? @map("owner_type")
+  ownerId        String?    @map("owner_id")
+  // Per-record visibility (DATA, not policy — deepsignal policy-asks §1):
+  // team (default) = tenant policy applies; users = only the humans in
+  // record_visibility_grants (plus the creator); private = the creating
+  // on_behalf_of human only. Evaluated BEFORE policy on every read and write;
+  // unlisted principals get NOT_FOUND. Admins are NOT exempt — the one
+  // recovery path is an owner-only, approval-gated visibility change.
+  visibility     Visibility @default(team)
+  createdOnBehalfOf String? @map("created_on_behalf_of")
+  // Declared origin class of the data (set-once, caller-supplied); checked
+  // against Team.rejectedOrigins at write.
+  origin         String?
+  // Set by crm_record_erase: data scrubbed, tombstone retained (§4d).
+  erasedAt       DateTime?  @map("erased_at")
+  version        Int        @default(1)
+  lastActivityAt DateTime?  @map("last_activity_at")
+  // Transitive redirect pointer: merging B into C re-points every row whose
+  // merged_into_id = B to C, so reads stay one hop (review M4). Deliberately
+  // no FK: the survivor may be hard-deleted by retention after the loser.
+  mergedIntoId   String?    @map("merged_into_id") @db.Uuid
+  deletedAt      DateTime?  @map("deleted_at")
+  createdByType  ActorType  @map("created_by_type")
+  createdById    String     @map("created_by_id")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  objectType     ObjectType @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  linksFrom      RecordLink[] @relation("LinkFrom")
+  linksTo        RecordLink[] @relation("LinkTo")
+  changes        RecordChange[]
+  uniqueKeys     RecordUniqueKey[]
+  search         RecordSearch?
+  matchKeys      RecordMatchKey[]
+  visibilityGrants RecordVisibilityGrant[]
+  listEntries    ListEntry[]
+
+  @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
+  @@index([organizationId, teamId, objectTypeId, lastActivityAt])
+  @@index([mergedIntoId])
+  @@map("records")
+}
+// Added by raw SQL in the same migration (Prisma cannot express them):
+//   CREATE INDEX records_data_gin ON records USING gin (data jsonb_path_ops);
+//   CREATE INDEX records_display_name_trgm ON records USING gin (display_name gin_trgm_ops);
+
+model RecordLink {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  relationTypeId String       @map("relation_type_id") @db.Uuid
+  fromRecordId   String       @map("from_record_id") @db.Uuid
+  toRecordId     String       @map("to_record_id") @db.Uuid
+  label          String?
+  data           Json         @default("{}")
+  // Non-null only on links backing a multi record_reference attribute:
+  // the target's slot in the projected array — contiguous, 0-based, one
+  // active link per position (unique partial index below). Direct links
+  // (crm_link, scalar references) always carry null.
+  position       Int?
+  activeFrom     DateTime     @default(now()) @map("active_from")
+  activeUntil    DateTime?    @map("active_until")
+  createdByType  ActorType    @map("created_by_type")
+  createdById    String       @map("created_by_id")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  relationType   RelationType @relation(fields: [relationTypeId], references: [id], onDelete: Cascade)
+  fromRecord     Record       @relation("LinkFrom", fields: [fromRecordId], references: [id], onDelete: Cascade)
+  toRecord       Record       @relation("LinkTo", fields: [toRecordId], references: [id], onDelete: Cascade)
+
+  @@index([fromRecordId, relationTypeId])
+  @@index([toRecordId, relationTypeId])
+  @@index([organizationId, teamId, relationTypeId])
+  @@map("record_links")
+}
+// Raw SQL: CREATE UNIQUE INDEX record_links_active_unique
+//   ON record_links (relation_type_id, from_record_id, to_record_id) WHERE active_until IS NULL;
+// Raw SQL: CREATE UNIQUE INDEX record_links_active_position_unique
+//   ON record_links (organization_id, team_id, from_record_id, relation_type_id, position)
+//   WHERE active_until IS NULL AND position IS NOT NULL;
+
+model RecordUniqueKey {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  teamId          String    @map("team_id") @db.Uuid
+  attributeId     String    @map("attribute_id") @db.Uuid
+  recordId        String    @map("record_id") @db.Uuid
+  // sha-256 hex of the normalized value. The unique index is on the hash so a
+  // long text value cannot exceed the btree tuple limit (review M14); the raw
+  // normalized value is kept, unindexed, for evidence display.
+  normalizedHash  String    @map("normalized_hash")
+  normalizedValue String    @map("normalized_value")
+  attribute       Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  record          Record    @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([attributeId, normalizedHash])
+  @@index([recordId])
+  @@index([organizationId, teamId])
+  @@map("record_unique_keys")
+}
+
+/// Materialised keys for `block`-action matching rules (methods exact and
+/// normalized only), written in the same transaction as the record so the
+/// database enforces the block under concurrency (review C4). This table —
+/// not a shadow key inside records.data — is where normalized matching state
+/// lives, so redaction of `data` can never leak it (review S5.2).
+model RecordMatchKey {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  teamId         String @map("team_id") @db.Uuid
+  objectTypeId   String @map("object_type_id") @db.Uuid
+  rulePosition   Int    @map("rule_position")
+  normalizedHash String @map("normalized_hash")
+  recordId       String @map("record_id") @db.Uuid
+  record         Record @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([objectTypeId, rulePosition, normalizedHash])
+  @@index([recordId])
+  @@map("record_match_keys")
+}
+
+/// Explicit principal list for visibility = users. Grants name HUMANS (UOA
+/// user ids); an agent sees the record when its on_behalf_of human is granted.
+model RecordVisibilityGrant {
+  id        String @id @default(uuid()) @db.Uuid
+  recordId  String @map("record_id") @db.Uuid
+  uoaUserId String @map("uoa_user_id")
+  record    Record @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, uoaUserId])
+  @@index([uoaUserId])
+  @@map("record_visibility_grants")
+}
+
+/// Compliance note: suppression_entries INTENTIONALLY has no FK to
+/// organizations/teams/records. A suppression list must outlive the data it
+/// protects: tenant deletion and record erasure must never delete the fact
+/// that a person objected (deepsignal policy-asks §3). Rows hold NO readable
+/// personal data — only sha-256 hashes of normalized structural facts.
+model SuppressionEntry {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  teamId         String            @map("team_id") @db.Uuid
+  kind           SuppressionKind
+  // PECR routing is per channel: an address lawful for post may be suppressed
+  // for email. 'all' suppresses every channel (R7).
+  channel        SuppressionChannel @default(all)
+  // sha256hex(kind + '\x1f' + normalized value). Normalisations are pinned
+  // byte-exactly in §4d — clients pre-filtering against crm_suppression_list
+  // hashes must reproduce them.
+  keyHash        String            @map("key_hash")
+  reason         SuppressionReason
+  // Queryable refinement (opt_out, not_interested, complaint, existing_client…);
+  // `note` is prose and not queryable.
+  subReason      String?           @map("sub_reason")
+  // Time-boxed suppression ("not interested" ⇒ 12 months). NEVER allowed on
+  // reason objection|erasure — those are permanent. Expired entries answer
+  // suppressed:false and are pruned by retention.
+  expiresAt      DateTime?         @map("expires_at")
+  note           String?
+  sourceRecordId String?           @map("source_record_id") @db.Uuid
+  createdByType  ActorType         @map("created_by_type")
+  createdById    String            @map("created_by_id")
+  onBehalfOf     String?           @map("on_behalf_of")
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  @@unique([teamId, kind, keyHash, channel])
+  @@index([organizationId, teamId])
+  @@map("suppression_entries")
+}
+
+model RecordChange {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  teamId         String     @map("team_id") @db.Uuid
+  // Null exactly when kind = schema_change (enforced by a raw-SQL check
+  // constraint). Link/unlink ops write ONE ROW PER ENDPOINT sharing group_id,
+  // so both records' timelines and object-type-filtered feeds see the event
+  // (review M2/M3).
+  recordId       String?    @map("record_id") @db.Uuid
+  groupId        String?    @map("group_id") @db.Uuid
+  kind           ChangeKind
+  attributeSlug  String?    @map("attribute_slug")
+  relationTypeId String?    @map("relation_type_id") @db.Uuid
+  linkId         String?    @map("link_id") @db.Uuid
+  oldValue       Json?      @map("old_value")
+  newValue       Json?      @map("new_value")
+  snapshot       Json?                                   // full pre-image for merge/delete
+  actorType      ActorType  @map("actor_type")
+  actorId        String     @map("actor_id")
+  onBehalfOf     String?    @map("on_behalf_of")          // UOA user id
+  runId          String?    @map("run_id")
+  toolCallId     String?    @map("tool_call_id")
+  requestId      String     @map("request_id")
+  reason         String?
+  // The record's version immediately after this change applied — the field
+  // crm_record_at derives `version_at` from. Non-null on EVERY row: record
+  // rows carry the record's post-write version (paired link/unlink rows each
+  // carry their own endpoint's post-write version); kind = schema_change rows
+  // carry the tenant's current schema version (teams.schema_version) — never
+  // a null or sentinel. Set at change-intent formation, before seq
+  // allocation (§4 step 12).
+  resultingVersion Int      @map("resulting_version")
+  // Allocated from teams.feed_seq (commit-ordered, per tenant) as a block
+  // BEFORE these rows are inserted, so change rows are written with a final
+  // non-null seq in one insert — never allocated at insert time (see Team).
+  seq            BigInt
+  occurredAt     DateTime   @default(now()) @map("occurred_at")
+  // Cascade means retention hard-delete of a record removes its change rows;
+  // the feed durability bound this implies is documented in events.md §2.
+  record         Record?    @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, seq])
+  @@index([recordId, occurredAt(sort: Desc)])
+  @@index([organizationId, teamId, seq])
+  @@index([organizationId, teamId, attributeSlug, occurredAt])
+  @@map("record_changes")
+}
+// Raw SQL: ALTER TABLE record_changes ADD CONSTRAINT record_changes_schema_kind
+//   CHECK ((kind = 'schema') = (record_id IS NULL));
+
+model RecordSearch {
+  recordId       String                      @id @map("record_id") @db.Uuid
+  organizationId String                      @map("organization_id") @db.Uuid
+  teamId         String                      @map("team_id") @db.Uuid
+  objectTypeId   String                      @map("object_type_id") @db.Uuid
+  content        String
+  embedding      Unsupported("vector(1024)")?
+  embeddingModel String?                     @map("embedding_model")
+  indexedAt      DateTime                    @default(now()) @map("indexed_at")
+  record         Record                      @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, objectTypeId])
+  @@map("record_search")
+}
+// Raw SQL:
+//   ALTER TABLE record_search ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
+//   CREATE INDEX record_search_tsv ON record_search USING gin (tsv);
+//   CREATE INDEX record_search_embedding ON record_search USING hnsw (embedding vector_cosine_ops);
+//   (record_search_model on embedding_model is NOT created here — it lands
+//    with the R13 model-migration machinery in T48's migration.)
+
+// ───────────────────────── lists & views ─────────────────────────
+
+model List {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  slug           String
+  name           String
+  description    String      @default("")
+  objectTypeId   String?     @map("object_type_id") @db.Uuid   // null = mixed
+  createdByType  ActorType   @map("created_by_type")
+  createdById    String      @map("created_by_id")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  attributes     Attribute[]
+  entries        ListEntry[]
+
+  @@unique([organizationId, teamId, slug])
+  @@map("lists")
+}
+
+model ListEntry {
+  id        String   @id @default(uuid()) @db.Uuid
+  listId    String   @map("list_id") @db.Uuid
+  recordId  String   @map("record_id") @db.Uuid
+  data      Json     @default("{}")
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  record    Record   @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, recordId])
+  @@map("list_entries")
+}
+
+model View {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  teamId         String    @map("team_id") @db.Uuid
+  objectTypeId   String    @map("object_type_id") @db.Uuid
+  slug           String
+  name           String
+  description    String    @default("")
+  filter         Json      @default("{}")
+  sort           Json      @default("[]")
+  attributes     String[]  @default([])
+  createdByType  ActorType @map("created_by_type")
+  createdById    String    @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([organizationId, teamId, slug])
+  @@map("views")
+}
+
+// ───────────────────────── policy, approvals, audit ─────────────────────────
+
+model PolicyRule {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  teamId         String             @map("team_id") @db.Uuid
+  scope          PolicyScope
+  scopeId        String             @map("scope_id")
+  resourceType   PolicyResourceType @map("resource_type")
+  action         PolicyAction
+  effect         PolicyEffect
+  priority       Int                @default(0)
+  conditions     Json?
+  requiresApproval Boolean          @default(false) @map("requires_approval")
+  createdById    String             @map("created_by_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  bindings       PolicyBinding[]
+
+  @@index([organizationId, teamId, resourceType, action, scopeId, priority])
+  @@map("policy_rules")
+}
+
+model PolicyBinding {
+  id           String     @id @default(uuid()) @db.Uuid
+  policyRuleId String     @map("policy_rule_id") @db.Uuid
+  actorType    String     @map("actor_type")   // human | agent | role
+  actorId      String     @map("actor_id")
+  policyRule   PolicyRule @relation(fields: [policyRuleId], references: [id], onDelete: Cascade)
+
+  @@unique([policyRuleId, actorType, actorId])
+  @@index([actorType, actorId])
+  @@map("policy_bindings")
+}
+
+model ApprovalRequest {
+  id                String         @id @default(uuid()) @db.Uuid
+  organizationId    String         @map("organization_id") @db.Uuid
+  teamId            String         @map("team_id") @db.Uuid
+  action            String                      // tool name; consumption is bound to it
+  resourceType      String         @map("resource_type")
+  resourceId        String?        @map("resource_id")
+  argumentsHash     String         @map("arguments_hash")
+  argumentsSnapshot Json           @map("arguments_snapshot")
+  requesterType     ActorType      @map("requester_type")
+  requesterId       String         @map("requester_id")
+  onBehalfOf        String         @map("on_behalf_of")
+  reason            String
+  status            ApprovalStatus @default(pending)
+  // sha-256 of the bearer token (>= 128-bit CSPRNG, prefixed apr_); the raw
+  // value is returned once inside requestState and never stored.
+  continuationTokenHash String     @unique @map("continuation_token_hash")
+  resolverUoaUserId String?        @map("resolver_uoa_user_id")
+  resolvedAt        DateTime?      @map("resolved_at")
+  resolutionNote    String?        @map("resolution_note")
+  expiresAt         DateTime       @map("expires_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  @@index([organizationId, teamId, status])
+  @@map("approval_requests")
+}
+
+/// INTENTIONALLY no FK on organization_id: audit rows survive tenant deletion.
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String?      @map("team_id") @db.Uuid
+  actorType      ActorType    @map("actor_type")
+  actorId        String       @map("actor_id")
+  onBehalfOf     String?      @map("on_behalf_of")
+  action         String
+  resourceType   String       @map("resource_type")
+  resourceId     String?      @map("resource_id")
+  outcome        AuditOutcome
+  reason         String?
+  metadata       Json?
+  requestId      String       @map("request_id")
+  ipAddress      String?      @map("ip_address")
+  userAgent      String?      @map("user_agent")
+  prevHash       String?      @map("prev_hash")
+  entryHash      String?      @map("entry_hash")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+// ───────────────────────── jobs, webhooks, idempotency ─────────────────────────
+
+model QueueJob {
+  id             String    @id @default(uuid()) @db.Uuid
+  // Null ONLY for system jobs (retention). Every client-addressable job
+  // (bulk, dedup, export) carries both; tasks/get and tasks/cancel resolve by
+  // (id, tenant) and answer NOT_FOUND on mismatch (review S1.1).
+  organizationId String?   @map("organization_id") @db.Uuid
+  teamId         String?   @map("team_id") @db.Uuid
+  type           String
+  // Lanes: delivery/reindex run in a high-priority pool bulk jobs cannot
+  // starve; claim uses FOR UPDATE SKIP LOCKED with a lease — locked_at older
+  // than the lease is reclaimable (review M7).
+  priority       Int       @default(0)
+  payload        Json
+  idempotencyKey String?   @unique @map("idempotency_key")
+  status         JobStatus @default(queued)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5) @map("max_attempts")
+  visibleAt      DateTime  @default(now()) @map("visible_at")
+  lockedAt       DateTime? @map("locked_at")
+  lockedBy       String?   @map("locked_by")
+  lastError      String?   @map("last_error")
+  result         Json?
+  progress       Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, visibleAt])
+  @@index([organizationId, teamId, type, createdAt(sort: Desc)])
+  @@map("queue_jobs")
+}
+
+model Webhook {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  teamId         String    @map("team_id") @db.Uuid
+  // The human who registered it: events are visibility-filtered as this
+  // principal (events.md §1). Deliveries pause when this principal has not
+  // been seen (principal_last_seen) within DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS
+  // and resume on their next authenticated call (R11).
+  subscribingUoaUserId String @map("subscribing_uoa_user_id")
+  url            String
+  events         String[]
+  secretCiphertext String  @map("secret_ciphertext")
+  active         Boolean   @default(true)
+  lastDeliveredSeq BigInt  @default(0) @map("last_delivered_seq")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([organizationId, teamId, url])
+  @@map("webhooks")
+}
+
+/// Operational liveness evidence, NOT an identity store: one row per human
+/// seen in a team through a verified delegation, upserted on every request.
+/// Backs webhook-subscriber staleness (R11), actor-reference validation (R25 —
+/// owner/grant/subowner ids must have been seen in this team, or be the
+/// caller), and the data-quality stale_actors bucket. Also the PG-backed
+/// single-use requestId seen-set lives here-adjacent (unlogged table
+/// seen_request_ids, raw SQL) so replay bounds hold across API replicas.
+model PrincipalLastSeen {
+  teamId     String   @map("team_id") @db.Uuid
+  uoaUserId  String   @map("uoa_user_id")
+  lastSeenAt DateTime @map("last_seen_at")
+
+  @@id([teamId, uoaUserId])
+  @@map("principal_last_seen")
+}
+
+model IdempotencyReplay {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  teamId          String   @map("team_id") @db.Uuid
+  // Replays are bound to the calling principal so a cached result shaped by
+  // one caller's redaction can never be served to another (review S9.5).
+  principalUserId String   @map("principal_user_id")
+  key             String
+  tool            String
+  argumentsHash   String   @map("arguments_hash")
+  // Null while the reserving transaction is in flight (step 0 of the write
+  // path); filled in the same commit as the mutation (review C2).
+  result          Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([organizationId, teamId, principalUserId, tool, key])
+  @@map("idempotency_replays")
 }

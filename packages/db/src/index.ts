@@ -1,1 +1,5 @@
-export {}
+export { createDb, type Db } from './client.js'
+export { tenantWhere, type TenantRef } from './tenant-where.js'
+export { withTenantGuard } from './tenant-guard.js'
+export { seedTenant, dropTenant, type SeededTenant } from './testing.js'
+export * from '@prisma/client'
