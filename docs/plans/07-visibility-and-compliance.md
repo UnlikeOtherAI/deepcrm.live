@@ -50,7 +50,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T50 — Write guard + ordering
+### T50 ✅ — Write guard + ordering
 
 **Depends on:** T49. **Spec:** `docs/schema-engine.md` §4 step 3; `docs/spec/contracts.md` (`CrmOriginGuardSet`).
 
