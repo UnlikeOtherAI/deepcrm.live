@@ -38,7 +38,7 @@ describe('filtering help resource', () => {
     const help = z.object({
       caps: z.object({ max_depth: z.literal(8), max_nodes: z.literal(100), max_json_bytes: z.literal(16_384) }),
       operators_by_type: z.array(z.object({ types: z.array(z.string()), ops: z.array(z.string()) }).passthrough()),
-      examples: z.array(z.object({ name: z.string(), filter: z.unknown() })).length(3),
+      examples: z.array(z.object({ name: z.string(), filter: z.unknown() })).length(4),
     }).parse(JSON.parse(content.text))
     expect(help.operators_by_type.some((row) => row.types.includes('record_reference (multi)'))).toBe(true)
     const operators = new Map(help.operators_by_type.map((row) => [row.types.join('|'), row.ops]))
@@ -57,6 +57,7 @@ describe('filtering help resource', () => {
       'qualified_or_proposal_deals_over_amount',
       'owned_or_enterprise_tag',
       'company_linked_deals_with_recent_activity_filter',
+      'data_quality_orphans',
     ])
   })
 })

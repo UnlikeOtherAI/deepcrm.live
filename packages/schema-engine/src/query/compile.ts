@@ -3,6 +3,7 @@ import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import Decimal from 'decimal.js'
 
 import { getAttributeType } from '../attribute-types/index.js'
+import { qualityFilterPredicate } from '../quality/report.js'
 import { canonicalJson, canonicalJsonValue, type JsonValue } from '../records/json.js'
 import type { LoadedAttribute, LoadedObjectType, LoadedRelationType, LoadedSchema } from '../schema/load.js'
 import { attributeReadAccess, rowAccess } from './access.js'
@@ -307,14 +308,18 @@ function nodeCount(filter: QueryFilter): number {
   if ('or' in filter) return 1 + filter.or.reduce((count, item) => count + nodeCount(item), 0)
   return 'not' in filter ? 1 + nodeCount(filter.not) : 1
 }
-function filters(schema: LoadedSchema, objectType: LoadedObjectType, filter: QueryFilter, depth = 1): Prisma.Sql {
+function filters(
+  schema: LoadedSchema, objectType: LoadedObjectType, filter: QueryFilter,
+  ctx: ActorContext, depth = 1,
+): Prisma.Sql {
   if (depth > 8 || nodeCount(filter) > 100 || Buffer.byteLength(canonicalJson(filter), 'utf8') > 16_384) failure('filter_limit')
-  if ('and' in filter) return filter.and.length === 0 ? failure('empty_logical') : Prisma.sql`(${Prisma.join(filter.and.map((item) => filters(schema, objectType, item, depth + 1)), ' AND ')})`
-  if ('or' in filter) return filter.or.length === 0 ? failure('empty_logical') : Prisma.sql`(${Prisma.join(filter.or.map((item) => filters(schema, objectType, item, depth + 1)), ' OR ')})`
-  if ('not' in filter) return Prisma.sql`NOT (${filters(schema, objectType, filter.not, depth + 1)})`
+  if ('and' in filter) return filter.and.length === 0 ? failure('empty_logical') : Prisma.sql`(${Prisma.join(filter.and.map((item) => filters(schema, objectType, item, ctx, depth + 1)), ' AND ')})`
+  if ('or' in filter) return filter.or.length === 0 ? failure('empty_logical') : Prisma.sql`(${Prisma.join(filter.or.map((item) => filters(schema, objectType, item, ctx, depth + 1)), ' OR ')})`
+  if ('not' in filter) return Prisma.sql`NOT (${filters(schema, objectType, filter.not, ctx, depth + 1)})`
   if ('attribute' in filter) return attributeFilter(schema, objectType, filter)
   if ('system' in filter) return systemFilter(filter)
   if ('linked_to' in filter) return linked(schema, filter)
+  if ('quality' in filter) return qualityFilterPredicate(ctx, schema, objectType, filter.quality)
   if ('text' in filter && typeof filter.text === 'string') return Prisma.sql`EXISTS (SELECT 1 FROM record_search rs WHERE rs.record_id = r.id AND rs.organization_id = r.organization_id AND rs.team_id = r.team_id AND rs.tsv @@ plainto_tsquery('simple', ${filter.text}))`
   return failure('unsupported_filter')
 }
@@ -415,7 +420,7 @@ export function compileRecordSet(
   }
   const filter = input.filter === undefined
     ? Prisma.empty
-    : Prisma.sql` AND ${filters(schema, objectType, input.filter)}`
+    : Prisma.sql` AND ${filters(schema, objectType, input.filter, ctx)}`
   return Prisma.sql`${rowAccess(tenant, ctx, objectType)}${
     attributeReadAccess(tenant, ctx, objectType, [...attributes.values()])
   }${filter}`

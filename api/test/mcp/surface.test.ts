@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestServer } from './harness.js'
 
 const NOT_YET: string[] = [
-  'crm_data_quality',
   'crm_record_erase',
   'crm_suppression_add',
   'crm_suppression_check',

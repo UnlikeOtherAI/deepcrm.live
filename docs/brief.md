@@ -258,7 +258,7 @@ Templates are *suggestions the agent can change*: rename, add, archive, re-stage
 
 - `record_search(record_id, tsv tsvector, embedding vector(1024), content text)` rebuilt by the worker on change; `content` is a type-aware rendering of the record plus its one-hop link names ("Anna Novak · CTO at Asahi Europe · anna@asahi.eu").
 - `crm_search(query, object_types?, mode ∈ {keyword, semantic, hybrid})` — hybrid = RRF over tsvector rank and cosine distance, tenant-scoped, policy-filtered post-retrieval (restricted attributes never enter `content`).
-- Structured filtering is a separate tool (`crm_records_query`) with a small JSON filter grammar: `{and|or|not, [ {attribute, op, value} ]}` with ops per type (`eq, neq, in, contains, starts_with, gt, gte, lt, lte, between, is_null, is_not_null, linked_to(relation, record)`). No free-form query language.
+- Structured filtering is a separate tool (`crm_records_query`) with a small JSON filter grammar: `{and|or|not, [ {attribute, op, value} ]}` with ops per type (`eq, neq, in, contains, starts_with, gt, gte, lt, lte, between, is_null, is_not_null, linked_to(relation, record)`). Data-quality reports additionally return an opaque `{quality}` leaf that the same compiler executes without truncating membership to preview rows. No free-form query language.
 
 ### 5.8 Dedup & merge
 

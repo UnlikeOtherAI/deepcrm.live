@@ -1,13 +1,31 @@
-import { CrmMergeRecords, CrmUnmerge, type ActorContext } from '@deepcrm/schemas'
+import {
+  CrmDataQuality,
+  CrmMergeRecords,
+  CrmUnmerge,
+  type ActorContext,
+} from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
 import { mergeRecords, unmergeRecords } from '../../services/merge.js'
+import { dataQualityReport } from '../../services/quality.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
 export function registerQualityTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
+  defineTool(server, {
+    name: 'crm_data_quality',
+    description: 'Find visible records with missing required values, stale activity, required-relation orphans, or duplicate values on unique attributes. Each bucket includes a reusable crm_records_query filter.',
+    input: CrmDataQuality.in.shape,
+    handler: async (args) => {
+      const result = await dataQualityReport(deps, ctx, {
+        ...(args.object_type === undefined ? {} : { objectType: args.object_type }),
+        staleDays: args.stale_days,
+      })
+      return ok(result, JSON.stringify(result))
+    },
+  })
   defineTool(server, {
     name: 'crm_merge_records',
     description: 'Merge visible same-type duplicates into one survivor. Re-points links and lists, moves surviving unique keys, and leaves reversible redirects. Requires merge entitlement; use crm_find_duplicates first.',

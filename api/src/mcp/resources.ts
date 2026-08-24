@@ -15,7 +15,7 @@ const filteringHelp = {
   caps: { max_depth: 8, max_nodes: 100, max_json_bytes: 16_384 },
   grammar: {
     combinators: ['and', 'or', 'not'],
-    leaves: ['attribute', 'system', 'linked_to', 'text'],
+    leaves: ['attribute', 'system', 'linked_to', 'quality', 'text'],
     null_ops: ['is_null', 'is_not_null'],
     value_arity: {
       one: ['eq', 'neq', 'contains', 'starts_with', 'gt', 'gte', 'lt', 'lte'],
@@ -59,6 +59,10 @@ const filteringHelp = {
         { system: 'last_activity_at', op: 'lt', value: '2026-07-01T00:00:00Z' },
         { text: 'packaging' },
       ] },
+    },
+    {
+      name: 'data_quality_orphans',
+      filter: { quality: { category: 'orphans' } },
     },
   ],
 }

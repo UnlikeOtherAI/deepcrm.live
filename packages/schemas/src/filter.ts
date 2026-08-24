@@ -11,6 +11,19 @@ export const SystemField = z.enum([
   'created_at', 'updated_at', 'last_activity_at', 'display_name', 'owner',
 ]).describe('read-only record field outside data')
 
+const QualityFilter = z.union([
+  z.object({
+    category: z.literal('stale')
+      .describe('records with null or old last activity'),
+    stale_days: z.number().int().min(1).max(3650).optional()
+      .describe('stale window, default 90 days'),
+  }).strict(),
+  z.object({
+    category: z.enum(['missing_required', 'orphans', 'collisions'])
+      .describe('structural data-quality category reported by crm_data_quality'),
+  }).strict(),
+]).describe('reusable data-quality filter returned by crm_data_quality')
+
 export type Filter =
   | { and: Filter[] }
   | { or: Filter[] }
@@ -18,6 +31,10 @@ export type Filter =
   | { attribute: string; op: z.infer<typeof FilterOp>; value?: unknown }
   | { system: z.infer<typeof SystemField>; op: z.infer<typeof FilterOp>; value?: unknown }
   | { linked_to: { relation: string; record_id: string; direction?: 'from' | 'to' } }
+  | { quality: {
+    category: 'missing_required' | 'stale' | 'orphans' | 'collisions'
+    stale_days?: number
+  } }
   | { text: string }
 
 export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
@@ -40,6 +57,7 @@ export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
     direction: z.enum(['from', 'to']).default('from')
       .describe('from matches selected records at the link source; to matches them at the target'),
   }).strict().describe('match records joined to this record by an active link') }).strict(),
+  z.object({ quality: QualityFilter }).strict(),
   z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }).strict(),
 ])).describe('structured filter; grammar + examples in resource crm://help/filtering. Caps: depth 8, 100 nodes, 16 KiB')
 

@@ -1147,6 +1147,14 @@ object-scoped record-search join. T32 owns search-document materialisation; unti
 then T15 proves these compiler paths but does not claim populated full-text
 results.
 
+The standalone `{quality}` node is the opaque, reusable filter returned by
+`crm_data_quality`. It accepts `missing_required`, `stale`, `orphans`, or
+`collisions`; `stale_days` is carried for the stale category. The compiler
+resolves required and unique attributes and required many-to-one relations
+against the selected object type at query time. Attribute-policy and record-
+visibility predicates remain in the same SQL statement, and collision
+membership is not truncated to the report's first 100 preview rows.
+
 Ordered comparisons apply only to scalar `number`, `percent`, `rating`, `date`,
 `datetime`, and `timestamp_system`. Currency ordered comparisons read
 `(data->slug->>'amount')::numeric`, accept a canonical decimal operand, and
