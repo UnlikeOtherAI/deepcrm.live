@@ -372,7 +372,7 @@ MCP; T16 must not register them early.
 
 ---
 
-### T17 — History: record_at and record_history
+### T17 ✅ — History: record_at and record_history
 
 **Depends on:** T16. **Spec:** `docs/mcp-surface.md` §3 (`crm_record_at`, `crm_record_history`).
 
