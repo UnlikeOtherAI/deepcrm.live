@@ -2,7 +2,6 @@ import { Prisma, tenantWhere, type TenantRef, writeAudit } from '@deepcrm/db'
 import { AttributeSpec, ErrorCode, ServiceError, type AttributeSpec as AttributeSpecValue } from '@deepcrm/schemas'
 import { getAttributeType } from '../attribute-types/index.js'
 import type { SchemaTx } from './tx.js'
-
 type Tx = SchemaTx
 type AuditActor = {
   type: 'human' | 'agent' | 'system'
