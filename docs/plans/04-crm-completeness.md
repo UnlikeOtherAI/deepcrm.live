@@ -53,7 +53,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T31 — Lists and views
+### T31 ✅ — Lists and views
 
 **Depends on:** T30. **Spec:** `docs/mcp-surface.md` §5.
 
