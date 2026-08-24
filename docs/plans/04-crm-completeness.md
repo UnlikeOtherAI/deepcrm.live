@@ -15,7 +15,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T28 — Tasks
+### T28 ✅ — Tasks
 
 **Depends on:** T27. **Spec:** `docs/mcp-surface.md` §6 (`crm_task_create/update`, `crm_tasks_list`).
 
