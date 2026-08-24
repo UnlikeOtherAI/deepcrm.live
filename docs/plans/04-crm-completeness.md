@@ -63,7 +63,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T32 — Reindex job, search content, last_activity maintenance
+### T32 ✅ — Reindex job, search content, last_activity maintenance
 
 **Depends on:** T31. **Spec:** `docs/schema-engine.md` §8; `docs/architecture.md` §1.
 
