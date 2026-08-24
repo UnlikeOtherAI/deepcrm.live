@@ -67,6 +67,11 @@ export async function redactInvisibleDuplicate(
     typeof recordId === 'string'
     && await findVisibleRecord(db, ctx, recordId) !== null
   ) throw error
+  const recordIds = error.details['record_ids']
+  if (Array.isArray(recordIds) && recordIds.every((id): id is string => typeof id === 'string')) {
+    const visible = await findVisibleLiveRecords(db, ctx, recordIds)
+    if (visible.length === recordIds.length) throw error
+  }
   const details = { ...error.details }
   delete details['record_id']
   delete details['record_ids']

@@ -137,6 +137,10 @@ describe('record query service', () => {
   it('pages hydrated records, returns optional total, and applies projection and redaction', async () => {
     const target = await fixture()
     await addPhoneDeny(target)
+    await db.record.update({
+      where: { id: target.personIds[1] },
+      data: { ownerType: 'system', ownerId: 'system' },
+    })
     const ctx = context(target)
     const input = {
       objectType: 'person', attributes: ['name', 'company', 'phones'],
@@ -163,6 +167,7 @@ describe('record query service', () => {
     expect(new Set(combined.map((record) => record.id)).size).toBe(3)
     expect(combined.find((record) => record.id === target.personIds[0])?.data['company'])
       .toBe(target.companyId)
+    expect(combined.find((record) => record.id === target.personIds[1])?.owner).toBeNull()
 
     const empty = await queryRecords(deps, ctx, {
       objectType: 'person',

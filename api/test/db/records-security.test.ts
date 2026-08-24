@@ -152,7 +152,7 @@ describe('record service security boundaries', () => {
     })
     await expect(updateRecord(deps, caller, {
       recordId: created.record.id, data: { name: 'Visible' },
-    })).resolves.toMatchObject({ changed: true, record: { displayName: 'visible' } })
+    })).resolves.toMatchObject({ changed: true, record: { display_name: 'visible' } })
   })
 
   it('redacts an invisible duplicate id but preserves a visible duplicate id', async () => {
@@ -314,8 +314,8 @@ describe('record service security boundaries', () => {
 
     expect([created, updated, asserted, deleted, restored].map((result) => result.record.version))
       .toEqual([1, 2, 3, 4, 5])
-    expect(deleted.record.deletedAt).not.toBeNull()
-    expect(restored.record.deletedAt).toBeNull()
+    expect(deleted.changed).toBe(true)
+    expect(restored.changed).toBe(true)
     const where = { organizationId: target.organizationId, teamId: target.teamId }
     const [changes, jobs, replays, audits] = await Promise.all([
       db.recordChange.findMany({ where, orderBy: { seq: 'asc' } }),

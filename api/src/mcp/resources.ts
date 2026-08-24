@@ -10,7 +10,65 @@ function jsonResource(uri: URL, value: Record<string, unknown>) {
   }
 }
 
+const filteringHelp = {
+  caps: { max_depth: 8, max_nodes: 100, max_json_bytes: 16_384 },
+  grammar: {
+    combinators: ['and', 'or', 'not'],
+    leaves: ['attribute', 'system', 'linked_to', 'text'],
+    null_ops: ['is_null', 'is_not_null'],
+    value_arity: {
+      one: ['eq', 'neq', 'contains', 'starts_with', 'gt', 'gte', 'lt', 'lte'],
+      array_1_to_100: ['in', 'not_in'],
+      pair: ['between'],
+    },
+  },
+  operators_by_type: [
+    { types: ['all'], ops: ['is_null', 'is_not_null'] },
+    { types: ['non_json'], ops: ['eq', 'neq', 'in', 'not_in'] },
+    { types: ['text', 'email', 'url', 'domain', 'registry_id', 'personal_name', 'select'], ops: ['contains', 'starts_with'] },
+    { types: ['rich_text'], ops: ['contains'] },
+    { types: ['number', 'percent', 'rating', 'date', 'datetime', 'timestamp_system'], ops: ['gt', 'gte', 'lt', 'lte', 'between'] },
+    { types: ['currency'], ops: ['gt', 'gte', 'lt', 'lte', 'between'], note: 'requires fixedCurrency' },
+    { types: ['actor_reference (multi)'], ops: ['contains'], note: 'canonical {type,id} element membership' },
+    { types: ['record_reference (multi)'], ops: ['contains'], note: 'active backing-link membership' },
+    { types: ['system:display_name'], ops: ['eq', 'neq', 'in', 'not_in', 'contains', 'starts_with', 'is_null', 'is_not_null'] },
+    { types: ['system:created_at', 'system:updated_at', 'system:last_activity_at'], ops: ['eq', 'neq', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null'] },
+    { types: ['system:owner'], ops: ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'], note: 'filter only; not sortable' },
+  ],
+  examples: [
+    {
+      name: 'qualified_or_proposal_deals_over_amount',
+      filter: { and: [
+        { attribute: 'stage', op: 'in', value: ['qualified', 'proposal'] },
+        { attribute: 'amount', op: 'gte', value: 10000 },
+        { not: { attribute: 'close_date', op: 'is_null' } },
+      ] },
+    },
+    {
+      name: 'owned_or_enterprise_tag',
+      filter: { or: [
+        { system: 'owner', op: 'eq', value: { type: 'human', id: 'usr_1' } },
+        { attribute: 'tags', op: 'contains', value: 'enterprise' },
+      ] },
+    },
+    {
+      name: 'company_linked_deals_with_recent_activity_filter',
+      filter: { and: [
+        { linked_to: { relation: 'deal_for_company', record_id: '018f2e65-7a7b-7d2f-8c4d-111111111111', direction: 'from' } },
+        { system: 'last_activity_at', op: 'lt', value: '2026-07-01T00:00:00Z' },
+        { text: 'packaging' },
+      ] },
+    },
+  ],
+}
+
 export function registerResources(server: McpServer, ctx: ActorContext, deps: AppDeps): void {
+  server.registerResource('filtering-help', 'crm://help/filtering', {
+    title: 'Filtering grammar',
+    description: 'Filter operators, limits, and examples for crm_records_query.',
+    mimeType: 'application/json',
+  }, async (uri) => jsonResource(uri, filteringHelp))
+
   server.registerResource('schema', 'crm://schema', {
     title: 'Workspace schema',
     description: 'Current object types, relation types, and matching rules for this workspace.',

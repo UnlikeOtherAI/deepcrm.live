@@ -24,7 +24,7 @@ import {
   storeLinkReplay,
   type LinkDescriptor,
 } from './link-idempotency.js'
-import { checkPolicy, type PolicyRequest, type PolicyScopeRef } from './policy.js'
+import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { findVisibleRecord, requireVisibleRecord, type VisibleRecord } from './record-visibility.js'
 
@@ -157,7 +157,7 @@ function relationBySlug(
   return relation
 }
 
-function policyRequests(
+export function linkPolicyRequests(
   ctx: ActorContext,
   relation: LoadedSchema['relationTypes'][number],
   records: readonly VisibleRecord[],
@@ -175,6 +175,20 @@ function policyRequests(
   ]
 }
 
+export function assertLinkPolicies(
+  evaluator: PolicyEvaluator,
+  requests: readonly PolicyRequest[],
+): void {
+  const decisions = requests.map((request) => ({ request, decision: evaluator.evaluate(request) }))
+  const denied = decisions.find(({ decision }) => !decision.allowed && !decision.requiresApproval)
+    ?? decisions.find(({ decision }) => !decision.allowed || decision.requiresApproval)
+  if (denied === undefined) return
+  throw new ServiceError(
+    denied.decision.requiresApproval ? ErrorCode.APPROVAL_REQUIRED : ErrorCode.POLICY_DENIED,
+    'Link operation is not permitted', { resource: denied.request.resourceType, action: denied.request.action },
+  )
+}
+
 async function authorizeResolved(
   deps: AppDeps,
   ctx: ActorContext,
@@ -190,7 +204,7 @@ async function authorizeResolved(
   if (relation === undefined) {
     throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Relation type is not active')
   }
-  await authorize(deps, ctx, descriptor, policyRequests(ctx, relation, records, data))
+  await authorize(deps, ctx, descriptor, linkPolicyRequests(ctx, relation, records, data))
 }
 
 async function enqueueChanges(
@@ -355,7 +369,7 @@ export function linkRecords(
       }
       const relation = relationBySlug(schema, input.relationType)
       const initialRecords = [from, to]
-      await authorize(deps, ctx, descriptor, policyRequests(
+      await authorize(deps, ctx, descriptor, linkPolicyRequests(
         ctx, relation, initialRecords, input.data,
       ))
       return runWrite(deps, ctx, descriptor, (tx) => engineLinkRecords(
@@ -409,7 +423,7 @@ export function unlinkRecords(
         deps,
         ctx,
         descriptor,
-        policyRequests(ctx, relation, initialRecords, undefined),
+        linkPolicyRequests(ctx, relation, initialRecords, undefined),
       )
       return runWrite(deps, ctx, descriptor, (tx) => engineUnlinkRecords(
         tx,

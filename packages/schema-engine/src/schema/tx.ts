@@ -7,5 +7,5 @@ export type SchemaTx = AuditTx & Pick<Db,
 
 export type RecordTx = AuditTx & Pick<Db,
   'team' | 'record' | 'recordLink' | 'recordUniqueKey' | 'recordMatchKey' | 'recordMatchLookupKey'
-  | 'recordChange' | 'queueJob' | 'idempotencyReplay'
+  | 'recordChange' | 'recordVisibilityGrant' | 'queueJob' | 'idempotencyReplay'
 >

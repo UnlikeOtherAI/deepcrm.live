@@ -4,6 +4,7 @@ import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
 import { canonicalJsonValue, type JsonValue } from './json.js'
+import { planRecordMetadata, replaceVisibilityGrants, requestedVisibility, type RecordMetadataInput } from './metadata.js'
 import { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
 import {
   findMatches, refreshMatchingRecords, removeMatchingKeys,
@@ -12,6 +13,8 @@ import {
 import { findUniqueRecord, keyHash, normalizedAttributeValue, syncUniqueKeys } from './unique-keys.js'
 import { validateRecordData } from './validate.js'
 import type { LinkIntent } from './types.js'
+import { linkRecords } from '../links/mutate.js'
+import type { ResolvedLinkOperation } from '../links/types.js'
 import type { LoadedObjectType, LoadedSchema } from '../schema/load.js'
 import type { RecordTx } from '../schema/tx.js'
 
@@ -48,10 +51,19 @@ export type RecordWriteResult = {
   duplicates: readonly MatchCandidateFact[]
 }
 
-export type CreateRecordInput = { objectType: string; data: Record<string, unknown>; reason?: string }
-export type UpdateRecordInput = {
-  recordId: string; data: Record<string, unknown>; expectedVersion?: number; reason?: string
+export type InlineLinkInput = {
+  relationType: string; toRecordId: string; data?: Record<string, unknown>; label?: string
 }
+export type InlineLinkAuthorizer = (resolved: ResolvedLinkOperation, link: InlineLinkInput) => Promise<void>
+type RecordMetadata = RecordMetadataInput
+export type CreateRecordInput = {
+  objectType: string; data: Record<string, unknown>; links?: readonly InlineLinkInput[];
+  inlineLinkAuthorizer?: InlineLinkAuthorizer; reason?: string
+} & RecordMetadata
+export type UpdateRecordInput = {
+  recordId: string; data: Record<string, unknown>; links?: readonly InlineLinkInput[];
+  inlineLinkAuthorizer?: InlineLinkAuthorizer; expectedVersion?: number; reason?: string
+} & RecordMetadata
 export type AssertRecordInput = CreateRecordInput & { matchAttribute: string; expectedVersion?: number }
 
 function object(schema: LoadedSchema, slug: string): LoadedObjectType {
@@ -145,6 +157,13 @@ type PreparedCreate = {
   links: LinkWriteResult
 }
 
+function combineLinks(results: readonly LinkWriteResult[]): LinkWriteResult {
+  return {
+    changes: results.flatMap((result) => result.changes),
+    touchedRecordIds: [...new Set(results.flatMap((result) => result.touchedRecordIds))].sort(),
+  }
+}
+
 async function prepareCreate(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: CreateRecordInput, linkWriter: LinkWriter,
 ): Promise<PreparedCreate> {
@@ -155,16 +174,33 @@ async function prepareCreate(
   const record = await tx.record.create({
     data: {
       ...tenantWhere(ctx.tenant), objectTypeId: objectType.id, data: validatedData, displayName,
-      visibility: 'team', createdOnBehalfOf: ctx.onBehalfOf.uoaUserId, origin: null,
+      visibility: requestedVisibility(input) ?? 'team', createdOnBehalfOf: ctx.onBehalfOf.uoaUserId,
+      origin: input.origin ?? null, ownerType: input.owner?.type ?? null, ownerId: input.owner?.id ?? null,
       createdByType: ctx.actor.type, createdById: ctx.actor.id,
     },
   })
+  await replaceVisibilityGrants(tx, record.id, input.visibleTo)
   await syncUniqueKeys(tx, schema, objectType, record.id, validatedData)
-  const links = validated.linkOps.length === 0
+  const projected = validated.linkOps.length === 0
     ? { changes: [], touchedRecordIds: [] }
     : await linkWriter.apply(tx, ctx, schema, record.id, validated.linkOps)
+  const direct = await Promise.all((input.links ?? []).map(async (link) => {
+    const result = await linkRecords(tx, ctx, schema, {
+      relationType: link.relationType, fromRecordId: record.id, toRecordId: link.toRecordId,
+      ...(link.data === undefined ? {} : { data: link.data }),
+      ...(link.label === undefined ? {} : { label: link.label }),
+    }, input.inlineLinkAuthorizer === undefined ? undefined : (resolved) => {
+      const authorizer = input.inlineLinkAuthorizer
+      if (authorizer === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Inline link authorizer is missing')
+      return authorizer(resolved, link)
+    })
+    return { changes: result.changes, touchedRecordIds: result.touchedRecordIds }
+  }))
+  const links = combineLinks([projected, ...direct])
   await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
-  return { record, changes: createChanges(validatedData, record.id), links }
+  const current = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: record.id } })
+  if (current === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  return { record: current, changes: createChanges(validatedData, record.id), links }
 }
 
 export async function createRecord(
@@ -191,8 +227,9 @@ async function updateRecordInternal(
   const before = data(record.data)
   const validated = validateRecordData(schema, objectType, before, input.data, 'update')
   const validatedData = data(validated.data)
-  const changes = diffChanges(before, validatedData, record.id, record.version + 1)
-  if (changes.length === 0 && validated.linkOps.length === 0) {
+  const metadata = await planRecordMetadata(tx, record, input)
+  const changes = [...diffChanges(before, validatedData, record.id, record.version + 1), ...metadata.changes]
+  if (changes.length === 0 && validated.linkOps.length === 0 && (input.links?.length ?? 0) === 0) {
     const result: RecordWriteResult = {
       record: output(record), created: false, changed: false, changes: [], sequences: [], touchedRecordIds: [],
       duplicates: [],
@@ -210,15 +247,30 @@ async function updateRecordInternal(
       data: validatedData,
       displayName: computeDisplayName(schema, objectType, validatedData),
       version: { increment: 1 },
+      ...metadata.data,
     },
   })
   if (persisted.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const updated = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: record.id } })
   if (updated === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  await replaceVisibilityGrants(tx, record.id, metadata.visibleTo)
   await syncUniqueKeys(tx, schema, objectType, record.id, validatedData)
-  const links = validated.linkOps.length === 0
+  const projected = validated.linkOps.length === 0
     ? { changes: [], touchedRecordIds: [] }
     : await linkWriter.apply(tx, ctx, schema, record.id, validated.linkOps)
+  const direct = await Promise.all((input.links ?? []).map(async (link) => {
+    const result = await linkRecords(tx, ctx, schema, {
+      relationType: link.relationType, fromRecordId: record.id, toRecordId: link.toRecordId,
+      ...(link.data === undefined ? {} : { data: link.data }),
+      ...(link.label === undefined ? {} : { label: link.label }),
+    }, input.inlineLinkAuthorizer === undefined ? undefined : (resolved) => {
+      const authorizer = input.inlineLinkAuthorizer
+      if (authorizer === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Inline link authorizer is missing')
+      return authorizer(resolved, link)
+    })
+    return { changes: result.changes, touchedRecordIds: result.touchedRecordIds }
+  }))
+  const links = combineLinks([projected, ...direct])
   if (changes.length === 0 && links.changes.length === 0 && links.touchedRecordIds.length === 0) {
     await tx.$executeRaw`ROLLBACK TO SAVEPOINT record_update`
     await tx.$executeRaw`RELEASE SAVEPOINT record_update`
@@ -234,7 +286,9 @@ async function updateRecordInternal(
   }
   await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
   await tx.$executeRaw`RELEASE SAVEPOINT record_update`
-  const result = await finish(tx, ctx, updated, changes, false, links, input.reason)
+  const current = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: record.id } })
+  if (current === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  const result = await finish(tx, ctx, current, changes, false, links, input.reason)
   const duplicates = includeDuplicates
     ? await matchingDuplicates(tx, ctx, schema, objectType.id, record.id)
     : []
@@ -400,7 +454,11 @@ export async function assertRecord(
       tx,
       ctx,
       schema,
-      { recordId: existingId, data: input.data, expectedVersion: input.expectedVersion, reason: input.reason },
+      {
+        recordId: existingId, data: input.data, links: input.links, inlineLinkAuthorizer: input.inlineLinkAuthorizer,
+        owner: input.owner, visibility: input.visibility, visibleTo: input.visibleTo, origin: input.origin,
+        expectedVersion: input.expectedVersion, reason: input.reason,
+      },
       linkWriter,
       true,
     )
@@ -423,7 +481,11 @@ export async function assertRecord(
       tx,
       ctx,
       schema,
-      { recordId: retriedId, data: input.data, expectedVersion: input.expectedVersion, reason: input.reason },
+      {
+        recordId: retriedId, data: input.data, links: input.links, inlineLinkAuthorizer: input.inlineLinkAuthorizer,
+        owner: input.owner, visibility: input.visibility, visibleTo: input.visibleTo, origin: input.origin,
+        expectedVersion: input.expectedVersion, reason: input.reason,
+      },
       linkWriter,
       true,
     )

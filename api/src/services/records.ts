@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-
 import {
   canonicalJson, tenantWhere, type Db, type PolicyAction, type Prisma,
 } from '@deepcrm/db'
@@ -14,20 +13,36 @@ import {
   type AssertResolvedAction,
   type AssertRecordInput,
   type CreateRecordInput,
+  type InlineLinkAuthorizer,
   type LoadedSchema,
   type RecordTx,
   type RecordWriteResult,
   type UpdateRecordInput,
 } from '@deepcrm/schema-engine'
-import { Candidate, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
-
+import { Candidate, ErrorCode, RecordOut as RecordOutSchema, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
 import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
+import {
+  asInlineLinkPolicyError,
+  createInlineLinkAuthorizer,
+  isInlineLinkPolicyError,
+  preflightInlineLinks,
+  reauthorizeAssertReplay,
+} from './record-inline-links.js'
+import {
+  attributePolicies,
+  commonArgs,
+  metadataArgs,
+  objectIdScopes,
+  objectScopes,
+  recordPolicy,
+  recordScopes,
+} from './record-write-authorization.js'
 import { recordBoundary } from './record-boundary.js'
 import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } from './record-results.js'
-import { requireVisibleRecord, type VisibleRecord } from './record-visibility.js'
-
-type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook'>
+import { requireVisibleRecord } from './record-visibility.js'
+import { presentWriteRecord } from './record-write-presenter.js'
+type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule'>
 type CommonWriteInput = { idempotencyKey?: string; reason?: string }
 export type CreateRecordServiceInput = CreateRecordInput & CommonWriteInput
 export type UpdateRecordServiceInput = UpdateRecordInput & CommonWriteInput
@@ -35,71 +50,46 @@ export type AssertRecordServiceInput = AssertRecordInput & CommonWriteInput
 export type DeleteRecordServiceInput = {
   recordId: string; expectedVersion?: number; idempotencyKey?: string; reason?: string
 }
-
-export type RecordServiceResult = {
+type EngineServiceResult = {
   record: {
     id: string; version: number; data: Prisma.JsonObject
     displayName: string; deletedAt: string | null
   }
   created: boolean; changed: boolean; duplicates?: PresentedDuplicates
 }
-
+export type RecordServiceResult = {
+  record: ReturnType<typeof RecordOutSchema.parse>
+  created: boolean; changed: boolean; duplicates?: PresentedDuplicates
+}
 type WriteDescriptor = {
   tool: string; action: PolicyAction; scopes: PolicyScopeRef[]
   args: Record<string, unknown>; idempotencyKey: string | undefined
   reason: string | undefined; resourceId: string | null
 }
-
 type Reservation =
   | { kind: 'none' }
   | { kind: 'replay'; result: RecordServiceResult }
   | { kind: 'reserved'; id: string }
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
-
-function isJsonValue(value: unknown): value is Prisma.JsonValue {
-  if (
-    value === null ||
-    typeof value === 'string' ||
-    typeof value === 'boolean'
-  ) return true
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  return isObject(value) && Object.values(value).every(isJsonValue)
-}
-
-function isJsonObject(value: unknown): value is Prisma.JsonObject {
-  return isObject(value) && Object.values(value).every(isJsonValue)
-}
-
 function replayResult(value: unknown): RecordServiceResult {
   if (!isObject(value)) throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
   const record = value['record']
   if (
     !isObject(record) ||
-    typeof record['id'] !== 'string' ||
-    typeof record['version'] !== 'number' ||
-    !Number.isInteger(record['version']) ||
-    !isJsonObject(record['data']) ||
-    typeof record['displayName'] !== 'string' ||
-    !(record['deletedAt'] === null || typeof record['deletedAt'] === 'string') ||
     typeof value['created'] !== 'boolean' ||
     typeof value['changed'] !== 'boolean'
   ) throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
   const duplicates = value['duplicates'] === undefined ? undefined : Candidate.array().parse(value['duplicates'])
+  const recordOut = RecordOutSchema.parse(record)
   return {
-    record: {
-      id: record['id'], version: record['version'], data: record['data'],
-      displayName: record['displayName'], deletedAt: record['deletedAt'],
-    },
+    record: recordOut,
     created: value['created'], changed: value['changed'],
     ...(duplicates === undefined ? {} : { duplicates }),
   }
 }
-
-function serviceResult(result: RecordWriteResult, duplicates: PresentedDuplicates): RecordServiceResult {
+function serviceResult(result: RecordWriteResult, duplicates: PresentedDuplicates): EngineServiceResult {
   return {
     record: {
       id: result.record.id, version: result.record.version, data: result.record.data,
@@ -110,7 +100,6 @@ function serviceResult(result: RecordWriteResult, duplicates: PresentedDuplicate
     ...(duplicates.length === 0 ? {} : { duplicates }),
   }
 }
-
 function argumentHash(args: Record<string, unknown>): string {
   try {
     return createHash('sha256').update(canonicalJson(args), 'utf8').digest('hex')
@@ -120,11 +109,9 @@ function argumentHash(args: Record<string, unknown>): string {
     })
   }
 }
-
 function idempotencyLock(ctx: ActorContext, tool: string, key: string): string {
   return [ctx.tenant.teamId, ctx.onBehalfOf.uoaUserId, tool, key].join(':')
 }
-
 async function reserve(
   tx: RecordServiceTx, ctx: ActorContext, descriptor: WriteDescriptor, hash: string,
 ): Promise<Reservation> {
@@ -165,7 +152,6 @@ async function reserve(
   })
   return { kind: 'reserved', id: created.id }
 }
-
 async function storeReplay(
   tx: RecordServiceTx, ctx: ActorContext, reservation: Reservation, result: RecordServiceResult,
 ): Promise<void> {
@@ -179,7 +165,6 @@ async function storeReplay(
   })
   if (updated.count !== 1) throw new ServiceError(ErrorCode.INTERNAL, 'Idempotency result was not stored')
 }
-
 function auditMetadata(ctx: ActorContext): Prisma.InputJsonObject {
   return {
     app: ctx.app,
@@ -187,7 +172,6 @@ function auditMetadata(ctx: ActorContext): Prisma.InputJsonObject {
     provenance: ctx.provenance,
   }
 }
-
 async function writeDeniedAudit(
   deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
 ): Promise<void> {
@@ -208,7 +192,6 @@ async function writeDeniedAudit(
     userAgent: null,
   }))
 }
-
 async function authorize(
   deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
   requests: readonly PolicyRequest[],
@@ -229,7 +212,6 @@ async function authorize(
     { resource: rejected.request.resourceType, action: rejected.request.action },
   )
 }
-
 async function enqueueChanges(
   tx: RecordServiceTx, ctx: ActorContext, result: RecordWriteResult,
 ): Promise<void> {
@@ -262,97 +244,64 @@ async function enqueueChanges(
     priority: 100,
   })
 }
-
 async function runWrite(
   deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
   authorization: readonly PolicyRequest[] | null,
   duplicateEvaluator: PolicyEvaluator | null,
   schema: LoadedSchema,
-  operation: (tx: RecordTx) => Promise<RecordWriteResult>,
+  operation: (tx: RecordServiceTx) => Promise<RecordWriteResult>,
+  replayAuthorizer?: (tx: RecordServiceTx, result: RecordServiceResult) => Promise<void>,
 ): Promise<RecordServiceResult> {
   if (authorization !== null) await authorize(deps, ctx, descriptor, authorization)
   const hash = argumentHash(descriptor.args)
-  return deps.db.$transaction(async (tx) => {
-    const serviceTx: RecordServiceTx = tx
-    const reservation = await reserve(serviceTx, ctx, descriptor, hash)
-    if (reservation.kind === 'replay') return reservation.result
-    const engineResult = await operation(serviceTx)
-    const duplicates = duplicateEvaluator === null
-      ? [] : await presentDuplicates(serviceTx, ctx, duplicateEvaluator, schema, engineResult.duplicates)
-    const result = serviceResult(engineResult, duplicates)
-    if (engineResult.changed) await enqueueChanges(serviceTx, ctx, engineResult)
-    await storeReplay(serviceTx, ctx, reservation, result)
-    if (!engineResult.changed) return result
-    await deps.writeAudit(serviceTx, {
-      organizationId: ctx.tenant.organizationId,
-      teamId: ctx.tenant.teamId,
-      actorType: ctx.actor.type,
-      actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
-      action: descriptor.tool,
-      resourceType: 'record',
-      resourceId: result.record.id,
-      outcome: 'success',
-      reason: descriptor.reason ?? null,
-      metadata: auditMetadata(ctx),
-      requestId: ctx.requestId,
-      ipAddress: null,
-      userAgent: null,
+  try {
+    return await deps.db.$transaction(async (tx) => {
+      const serviceTx: RecordServiceTx = tx
+      const reservation = await reserve(serviceTx, ctx, descriptor, hash)
+      if (reservation.kind === 'replay') {
+        if (replayAuthorizer !== undefined) await replayAuthorizer(serviceTx, reservation.result)
+        return reservation.result
+      }
+      const engineResult = await operation(serviceTx)
+      const duplicates = duplicateEvaluator === null
+        ? [] : await presentDuplicates(serviceTx, ctx, duplicateEvaluator, schema, engineResult.duplicates)
+      const initial = serviceResult(engineResult, duplicates)
+      const result: RecordServiceResult = {
+        record: await presentWriteRecord(serviceTx, ctx, schema, initial.record.id),
+        created: initial.created, changed: initial.changed,
+        ...(initial.duplicates === undefined ? {} : { duplicates: initial.duplicates }),
+      }
+      if (engineResult.changed) await enqueueChanges(serviceTx, ctx, engineResult)
+      await storeReplay(serviceTx, ctx, reservation, result)
+      if (!engineResult.changed) return result
+      await deps.writeAudit(serviceTx, {
+        organizationId: ctx.tenant.organizationId,
+        teamId: ctx.tenant.teamId,
+        actorType: ctx.actor.type,
+        actorId: ctx.actor.id,
+        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        action: descriptor.tool,
+        resourceType: 'record',
+        resourceId: result.record.id,
+        outcome: 'success',
+        reason: descriptor.reason ?? null,
+        metadata: auditMetadata(ctx),
+        requestId: ctx.requestId,
+        ipAddress: null,
+        userAgent: null,
+      })
+      return result
     })
-    return result
-  })
-}
-
-function teamScopes(ctx: ActorContext): PolicyScopeRef[] {
-  return [{ scope: 'team', id: ctx.tenant.teamId }]
-}
-
-function objectScopes(ctx: ActorContext, schema: LoadedSchema, slug: string): PolicyScopeRef[] {
-  const selected = schema.objectTypesBySlug.get(slug)
-  const scopes = teamScopes(ctx)
-  if (selected !== undefined) scopes.push({ scope: 'object_type', id: selected.id })
-  return scopes
-}
-
-function objectIdScopes(ctx: ActorContext, objectTypeId: string): PolicyScopeRef[] {
-  return [...teamScopes(ctx), { scope: 'object_type', id: objectTypeId }]
-}
-
-function recordScopes(ctx: ActorContext, record: VisibleRecord): PolicyScopeRef[] {
-  return [
-    ...teamScopes(ctx),
-    { scope: 'object_type', id: record.objectTypeId },
-    { scope: 'record', id: record.id },
-  ]
-}
-
-function recordPolicy(action: PolicyAction, scopes: PolicyScopeRef[]): PolicyRequest {
-  return { resourceType: 'record', action, scopes }
-}
-
-function attributePolicies(
-  schema: LoadedSchema,
-  objectTypeId: string | undefined,
-  data: Record<string, unknown>,
-  scopes: PolicyScopeRef[],
-): PolicyRequest[] {
-  if (objectTypeId === undefined) return []
-  const attributes = schema.attributesByObjectTypeId.get(objectTypeId)
-  if (attributes === undefined) return []
-  const requests: PolicyRequest[] = []
-  for (const slug of Object.keys(data).sort()) {
-    const sensitivity = attributes.get(slug)?.sensitivity
-    if (sensitivity !== 'confidential' && sensitivity !== 'restricted') continue
-    requests.push({ resourceType: 'attribute', action: 'edit', scopes, sensitivity })
+  } catch (error) {
+    if (isInlineLinkPolicyError(error)) await writeDeniedAudit(deps, ctx, descriptor)
+    throw error
   }
-  return requests
 }
 
-function commonArgs(input: CommonWriteInput): Record<string, unknown> {
-  return {
-    ...(input.reason === undefined ? {} : { reason: input.reason }),
-    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-  }
+async function inlineAuthorizer(
+  tx: RecordServiceTx, ctx: ActorContext, schema: LoadedSchema,
+): Promise<InlineLinkAuthorizer> {
+  return createInlineLinkAuthorizer(tx, ctx, schema)
 }
 
 export async function createRecord(
@@ -364,7 +313,7 @@ export async function createRecord(
     const descriptor: WriteDescriptor = {
       tool: 'crm_record_create', action: 'create',
       scopes: objectScopes(ctx, schema, input.objectType),
-      args: { objectType: input.objectType, data: input.data, ...commonArgs(input) },
+      args: { objectType: input.objectType, data: input.data, ...metadataArgs(input), ...commonArgs(input) },
       idempotencyKey, reason, resourceId: null,
     }
     const objectTypeId = schema.objectTypesBySlug.get(input.objectType)?.id
@@ -372,9 +321,23 @@ export async function createRecord(
       recordPolicy(descriptor.action, descriptor.scopes),
       ...attributePolicies(schema, objectTypeId, input.data, descriptor.scopes),
     ]
-    return runWrite(deps, ctx, descriptor, authorization, await loadDuplicateEvaluator(deps.db, ctx), schema, (tx) => (
-      engineCreateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
-    ))
+    try {
+      await preflightInlineLinks(deps.db, ctx, schema, input.links)
+    } catch (error) {
+      if (error instanceof ServiceError && (
+        error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
+      )) await writeDeniedAudit(deps, ctx, descriptor)
+      throw error
+    }
+    return runWrite(
+      deps, ctx, descriptor, authorization, await loadDuplicateEvaluator(deps.db, ctx), schema,
+      async (tx) => {
+        const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
+        return engineCreateRecord(
+          tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter,
+        )
+      },
+    )
   })
 }
 
@@ -391,6 +354,7 @@ export async function updateRecord(
       tool: 'crm_record_update', action: 'edit', scopes,
       args: {
         recordId: input.recordId, data: input.data,
+        ...metadataArgs(input),
         ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
         ...commonArgs(input),
       },
@@ -400,9 +364,18 @@ export async function updateRecord(
       recordPolicy(descriptor.action, scopes),
       ...attributePolicies(schema, record.objectTypeId, input.data, scopes),
     ]
-    return runWrite(deps, ctx, descriptor, authorization, null, schema, (tx) => (
-      engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
-    ))
+    try {
+      await preflightInlineLinks(deps.db, ctx, schema, input.links, input.recordId)
+    } catch (error) {
+      if (error instanceof ServiceError && (
+        error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
+      )) await writeDeniedAudit(deps, ctx, descriptor)
+      throw error
+    }
+    return runWrite(deps, ctx, descriptor, authorization, null, schema, async (tx) => {
+      const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
+      return engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter)
+    })
   })
 }
 
@@ -415,6 +388,7 @@ export async function assertRecord(
     const scopes = objectScopes(ctx, schema, input.objectType)
     const args: Record<string, unknown> = {
       objectType: input.objectType, matchAttribute: input.matchAttribute, data: input.data,
+      ...metadataArgs(input),
       ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
       ...commonArgs(input),
     }
@@ -439,9 +413,37 @@ export async function assertRecord(
       ])
     }
     const evaluator = await loadDuplicateEvaluator(deps.db, ctx)
-    return runWrite(deps, ctx, descriptor, null, evaluator, schema, (tx) => (
-      engineAssertRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter, onResolved)
-    ))
+    try {
+      await preflightInlineLinks(deps.db, ctx, schema, input.links)
+    } catch (error) {
+      if (error instanceof ServiceError && (
+        error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
+      )) await writeDeniedAudit(deps, ctx, descriptor)
+      throw error
+    }
+    return runWrite(
+      deps,
+      ctx,
+      descriptor,
+      null,
+      evaluator,
+      schema,
+      async (tx) => {
+        const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
+        return engineAssertRecord(
+          tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter, onResolved,
+        )
+      },
+      async (tx, result) => {
+        try {
+          await reauthorizeAssertReplay(
+            tx, ctx, schema, result.record.id, result.created, input.links,
+          )
+        } catch (error) {
+          asInlineLinkPolicyError(error)
+        }
+      },
+    )
   })
 }
 

@@ -198,8 +198,10 @@ function requestKey(request: PolicyRequest): string {
   return `${request.resourceType}:${request.action}`
 }
 
+type PolicyReadDb = Pick<Db, 'policyRule'>
+
 export async function loadPolicyEvaluator(
-  db: Db,
+  db: PolicyReadDb,
   ctx: ActorContext,
   requests: readonly PolicyRequest[],
 ): Promise<PolicyEvaluator> {

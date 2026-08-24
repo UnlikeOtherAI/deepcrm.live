@@ -18,7 +18,7 @@ export type RecordOut = {
   data: QueryRecord['data']
   visibility: QueryRecord['visibility']
   origin: string | null
-  owner: { type: NonNullable<QueryRecord['ownerType']>; id: string } | null
+  owner: { type: 'human' | 'agent'; id: string } | null
   created_at: string
   updated_at: string
   last_activity_at: string | null
@@ -84,7 +84,7 @@ export function buildRedactionMatrix(
 }
 
 function owner(record: QueryRecord): RecordOut['owner'] {
-  if (record.ownerType === null || record.ownerId === null) return null
+  if (record.ownerType === null || record.ownerType === 'system' || record.ownerId === null) return null
   return { type: record.ownerType, id: record.ownerId }
 }
 

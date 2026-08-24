@@ -5,12 +5,19 @@ export { assertRecord, createRecord, deleteRecord, restoreRecord, updateRecord }
 export { diffChanges, writeChanges } from './changes.js'
 export { recordAt, recordHistory } from './history.js'
 export { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
-export { syncUniqueKeys } from './unique-keys.js'
+export {
+  findUniqueRecord,
+  keyHash,
+  normalizedAttributeValue,
+  syncUniqueKeys,
+} from './unique-keys.js'
 export type {
   AssertRecordInput,
   AssertResolvedAction,
   AssertResolvedActionHandler,
   CreateRecordInput,
+  InlineLinkAuthorizer,
+  InlineLinkInput,
   LinkWriter,
   LinkWriteResult,
   RecordWriteResult,
