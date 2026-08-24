@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 
 export DEEPCRM_ENV_FILE="${DEEPCRM_ENV_FILE:-/srv/deepcrm/.env}"
 
-compose=(docker compose -f infrastructure/compose/docker-compose.prod.yml)
+compose=(docker compose --env-file "$DEEPCRM_ENV_FILE" -f infrastructure/compose/docker-compose.prod.yml)
 bootstrap_args=()
 
 if [[ $# -gt 1 || (${#} -eq 1 && ${1} != "--retry-terminal") ]]; then
