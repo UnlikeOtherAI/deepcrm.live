@@ -7,7 +7,7 @@ export async function buildActorContext(
   principal: Principal,
   requestId: string,
 ): Promise<ActorContext> {
-  const tenant = await resolveTenant(deps, principal)
+  const tenant = await resolveTenant(deps, principal, requestId)
   const actor: ActorContext['actor'] = principal.agentId === null
     ? { type: 'human', id: principal.uoaUserId }
     : { type: 'agent', id: principal.agentId }

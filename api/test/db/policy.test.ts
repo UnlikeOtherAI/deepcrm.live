@@ -230,9 +230,11 @@ async function normalizedSeededPolicies(target: Tenant) {
 describe('policy default seeding', () => {
   it('seeds the authoritative source exactly and is idempotent', async () => {
     const target = await tenant()
-    await db.$transaction((tx) => seedDefaultPolicies(tx, target))
+    const seeded = await db.$transaction((tx) => seedDefaultPolicies(tx, target))
+    expect(seeded).toEqual({ seeded: true })
     expect(await normalizedSeededPolicies(target)).toEqual(normalizedPolicySource())
-    await db.$transaction((tx) => seedDefaultPolicies(tx, target))
+    const repeated = await db.$transaction((tx) => seedDefaultPolicies(tx, target))
+    expect(repeated).toEqual({ seeded: false })
     expect(await normalizedSeededPolicies(target)).toEqual(normalizedPolicySource())
   })
 
@@ -295,10 +297,11 @@ describe('policy default seeding', () => {
 
   it('serializes concurrent seeds into one exact set', async () => {
     const target = await tenant()
-    await Promise.all([
+    const results = await Promise.all([
       db.$transaction((tx) => seedDefaultPolicies(tx, target)),
       db.$transaction((tx) => seedDefaultPolicies(tx, target)),
     ])
+    expect(results.map((result) => result.seeded).sort()).toEqual([false, true])
     expect(await normalizedSeededPolicies(target)).toEqual(normalizedPolicySource())
   })
 })

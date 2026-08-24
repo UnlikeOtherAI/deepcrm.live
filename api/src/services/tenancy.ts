@@ -1,8 +1,12 @@
+import { writeAudit, type TenantRef } from '@deepcrm/db'
+import { applyTemplateBatch, type TemplateAdded } from '@deepcrm/schema-engine'
 import { ErrorCode, ServiceError, type Principal } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
+import { seedDefaultPolicies } from './policy.js'
 
 const CACHE_TTL_MS = 60_000
 const CACHE_LIMIT = 1_000
+const PROVISIONING_ACTOR_ID = 'provisioning'
 
 type CachedTenantIds = {
   organizationId: string
@@ -21,6 +25,18 @@ const tenantCache = new Map<string, CachedTenantIds>()
 
 function cacheKey(principal: Principal): string {
   return `${principal.uoaOrgId}:${principal.uoaTeamId}`
+}
+
+function totalAdded(added: TemplateAdded): number {
+  return added.objectTypes + added.attributes + added.relationTypes + added.matchingRules
+}
+
+function enforceOrgAllowlist(deps: AppDeps, principal: Principal): void {
+  if (deps.orgAllowlist === null || deps.orgAllowlist.has(principal.uoaOrgId)) return
+  throw new ServiceError(
+    ErrorCode.POLICY_DENIED,
+    'Organisation is not allowed to provision a tenant',
+  )
 }
 
 function cacheTenant(key: string, ids: Omit<CachedTenantIds, 'expiresAt'>): void {
@@ -52,7 +68,9 @@ async function readCurrentVersions(
 export async function resolveTenant(
   deps: AppDeps,
   principal: Principal,
+  requestId: string,
 ): Promise<TenantResolution> {
+  enforceOrgAllowlist(deps, principal)
   const key = cacheKey(principal)
   const cached = tenantCache.get(key)
   if (cached !== undefined && cached.expiresAt > Date.now()) {
@@ -88,7 +106,7 @@ export async function resolveTenant(
       }
       return existingTeam
     }
-    return tx.team.create({
+    const created = await tx.team.create({
       data: {
         organizationId: organization.id,
         externalTeamId: principal.uoaTeamId,
@@ -96,6 +114,48 @@ export async function resolveTenant(
       },
       select: { id: true, organizationId: true, schemaVersion: true, policyVersion: true },
     })
+    const tenant: TenantRef = {
+      organizationId: created.organizationId,
+      teamId: created.id,
+    }
+    const actor: {
+      type: 'system'
+      id: string
+      onBehalfOf: string
+      requestId: string
+    } = {
+      type: 'system',
+      id: PROVISIONING_ACTOR_ID,
+      onBehalfOf: principal.uoaUserId,
+      requestId,
+    }
+    const policy = await seedDefaultPolicies(tx, tenant)
+    const template = await applyTemplateBatch(tx, tenant, actor, 'system')
+    const versioned = await tx.team.update({
+      where: { id: created.id, organizationId: created.organizationId },
+      data: {
+        policyVersion: { increment: policy.seeded ? 1 : 0 },
+        schemaVersion: { increment: totalAdded(template.added) === 0 ? 0 : 1 },
+      },
+      select: { id: true, organizationId: true, schemaVersion: true, policyVersion: true },
+    })
+    await writeAudit(tx, {
+      organizationId: tenant.organizationId,
+      teamId: tenant.teamId,
+      actorType: 'system',
+      actorId: PROVISIONING_ACTOR_ID,
+      onBehalfOf: principal.uoaUserId,
+      action: 'tenant.provisioned',
+      resourceType: 'team',
+      resourceId: tenant.teamId,
+      outcome: 'success',
+      reason: null,
+      metadata: null,
+      requestId,
+      ipAddress: null,
+      userAgent: null,
+    })
+    return versioned
   })
 
   cacheTenant(key, { organizationId: resolved.organizationId, teamId: resolved.id })

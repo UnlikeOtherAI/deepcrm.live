@@ -29,6 +29,7 @@ const deps: AppDeps = {
   clock: () => new Date(),
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
+  orgAllowlist: null,
 }
 type Tenant = { organizationId: string; teamId: string }
 

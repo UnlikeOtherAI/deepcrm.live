@@ -1,7 +1,7 @@
 import { createDb, type Db } from '@deepcrm/db'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
-import type { AppDeps } from '../src/deps.js'
+import { createAppDeps, type AppDeps } from '../src/deps.js'
 import { parseEnv, type Env } from '../src/env.js'
 
 const testEnv: Env = parseEnv({ DATABASE_URL: 'postgresql://unused', NODE_ENV: 'test' })
@@ -11,7 +11,13 @@ function makeDeps(ok: boolean): AppDeps {
   const queryRaw = (): Promise<unknown> =>
     ok ? Promise.resolve([{ '?column?': 1 }]) : Promise.reject(new Error('db down'))
   Reflect.defineProperty(db, '$queryRaw', { value: queryRaw, configurable: true })
-  return { db, clock: () => new Date(), ids: () => 'id_test', version: '0.0.0' }
+  return {
+    db,
+    clock: () => new Date(),
+    ids: () => 'id_test',
+    version: '0.0.0',
+    orgAllowlist: null,
+  }
 }
 
 describe('GET /health', () => {
@@ -29,5 +35,20 @@ describe('GET /health', () => {
     expect(res.statusCode).toBe(503)
     expect(res.json()).toEqual({ ok: true, version: '0.0.0', db: 'error' })
     await app.close()
+  })
+})
+
+describe('createAppDeps', () => {
+  it('parses the organization allowlist once into a normalized set', async () => {
+    const deps = createAppDeps(parseEnv({
+      DATABASE_URL: 'postgresql://unused',
+      NODE_ENV: 'test',
+      DEEPCRM_ORG_ALLOWLIST: ' org_a,org_b, org_a ',
+    }))
+
+    expect(deps.orgAllowlist).not.toBeNull()
+    if (deps.orgAllowlist === null) throw new Error('expected an organization allowlist')
+    expect([...deps.orgAllowlist]).toEqual(['org_a', 'org_b'])
+    await deps.db.$disconnect()
   })
 })

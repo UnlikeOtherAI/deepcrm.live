@@ -245,7 +245,10 @@ function encodeRule(rule: NormalizedRule): string {
   return encoded
 }
 
-export async function seedDefaultPolicies(tx: SeedTx, tenant: TenantRef): Promise<void> {
+export async function seedDefaultPolicies(
+  tx: SeedTx,
+  tenant: TenantRef,
+): Promise<{ seeded: boolean }> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(4, hashtext(${tenant.teamId}))`
   const expected = policyDefaults.rules.map(parseRule)
   const existing = await tx.policyRule.findMany({
@@ -277,7 +280,7 @@ export async function seedDefaultPolicies(tx: SeedTx, tenant: TenantRef): Promis
     ) {
       throw seedDrift()
     }
-    return
+    return { seeded: false }
   }
   for (const rule of expected) {
     await tx.policyRule.create({
@@ -297,4 +300,5 @@ export async function seedDefaultPolicies(tx: SeedTx, tenant: TenantRef): Promis
       },
     })
   }
+  return { seeded: true }
 }

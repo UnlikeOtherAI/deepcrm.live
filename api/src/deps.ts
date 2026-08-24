@@ -7,11 +7,17 @@ export type AppDeps = {
   clock: () => Date
   ids: () => string
   version: string
+  orgAllowlist: ReadonlySet<string> | null
 }
 
 export type WorkerDeps = AppDeps
 
 export type JobHandler = (payload: unknown) => Promise<void>
+
+function parseOrgAllowlist(value: string | undefined): ReadonlySet<string> | null {
+  if (value === undefined) return null
+  return new Set(value.split(',').map((entry) => entry.trim()).filter((entry) => entry !== ''))
+}
 
 export function createAppDeps(env: Env): AppDeps {
   return {
@@ -19,5 +25,6 @@ export function createAppDeps(env: Env): AppDeps {
     clock: () => new Date(),
     ids: () => randomUUID(),
     version: '0.0.0',
+    orgAllowlist: parseOrgAllowlist(env.DEEPCRM_ORG_ALLOWLIST),
   }
 }

@@ -3,13 +3,13 @@ import { AttributeSpec, ErrorCode, ServiceError, type AttributeSpec as Attribute
 import { getAttributeType } from '../attribute-types/index.js'
 import type { SchemaTx } from './tx.js'
 type Tx = SchemaTx
-type AuditActor = {
+export type AuditActor = {
   type: 'human' | 'agent' | 'system'
   id: string
   onBehalfOf: string | null
   requestId: string
 }
-type ObjectInput = {
+export type ObjectInput = {
   slug: string
   singularName: string
   pluralName: string
@@ -18,8 +18,8 @@ type ObjectInput = {
   kind?: 'system' | 'standard' | 'custom'
   primaryAttribute?: string
 }
-type AttributeInput = AttributeSpecValue & { objectType: string; isSystem?: boolean }
-type RelationInput = {
+export type AttributeInput = AttributeSpecValue & { objectType: string; isSystem?: boolean }
+export type RelationInput = {
   slug: string
   fromObjectType: string | null
   toObjectType: string | null
@@ -29,6 +29,7 @@ type RelationInput = {
   cardinality: 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
   onDelete?: 'unlink' | 'cascade' | 'restrict'
   edgeAttributes?: AttributeSpecValue[]
+  isSystem?: boolean
 }
 type RelationUpdateInput = Partial<Omit<RelationInput, 'slug' | 'fromObjectType' | 'toObjectType'>>
 type StoredJsonValue = Prisma.InputJsonValue | typeof Prisma.JsonNull
@@ -75,7 +76,7 @@ function audit(
   })
 }
 
-async function bump(tx: Tx, tenant: TenantRef): Promise<void> {
+export async function bumpSchemaVersion(tx: Tx, tenant: TenantRef): Promise<void> {
   const result = await tx.team.updateMany({
     where: { id: tenant.teamId, organizationId: tenant.organizationId },
     data: { schemaVersion: { increment: 1 } },
@@ -89,7 +90,7 @@ async function object(tx: Tx, tenant: TenantRef, slug: string) {
   return value
 }
 
-async function primary(
+export async function resolvePrimaryAttribute(
   tx: Tx,
   tenant: TenantRef,
   objectTypeId: string,
@@ -134,7 +135,7 @@ function jsonValue(value: unknown): StoredJsonValue {
   return result
 }
 
-function validateAttributeValue(spec: AttributeSpecValue): {
+export function validateAttributeValue(spec: AttributeSpecValue): {
   config: StoredJsonValue
   defaultValue: StoredJsonValue | undefined
 } {
@@ -155,7 +156,9 @@ function validateAttributeValue(spec: AttributeSpecValue): {
   }
 }
 
-export async function defineObjectType(tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) {
+async function defineObjectTypeInternal(
+  tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput, finalize: boolean,
+) {
   let created
   try {
     created = await tx.objectType.create({ data: { ...tenantWhere(tenant), slug: input.slug, singularName: input.singularName, pluralName: input.pluralName, description: input.description, icon: input.icon ?? null, kind: input.kind ?? 'custom', createdByType: actor.type, createdById: actor.id } })
@@ -163,12 +166,11 @@ export async function defineObjectType(tx: Tx, tenant: TenantRef, actor: AuditAc
     if (isUniqueConstraint(error)) throw schemaConflict('object_type_slug')
     throw error
   }
-  await bump(tx, tenant)
-  await audit(tx, tenant, actor, 'define', 'object_type', created.id)
+  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'object_type', created.id) }
   return created
 }
 
-async function ensureBackingRelation(
+export async function ensureBackingRelation(
   tx: Tx,
   tenant: TenantRef,
   attribute: AttributeInput,
@@ -219,7 +221,7 @@ async function ensureBackingRelation(
         description: attribute.description,
         cardinality: expectedCardinality,
         projectionAttributeSlug: attribute.slug,
-        isSystem: false,
+        isSystem: attribute.isSystem ?? false,
       },
     })
   } catch (error) {
@@ -228,7 +230,9 @@ async function ensureBackingRelation(
   }
 }
 
-export async function defineAttribute(tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput) {
+async function defineAttributeInternal(
+  tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput, finalize: boolean,
+) {
   const objectType = await object(tx, tenant, input.objectType)
   const parsed = AttributeSpec.parse(input)
   const values = validateAttributeValue(parsed)
@@ -259,12 +263,13 @@ export async function defineAttribute(tx: Tx, tenant: TenantRef, actor: AuditAct
     throw error
   }
   await ensureBackingRelation(tx, tenant, input, objectType.id)
-  await bump(tx, tenant)
-  await audit(tx, tenant, actor, 'define', 'attribute', created.id)
+  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'attribute', created.id) }
   return created
 }
 
-export async function defineRelationType(tx: Tx, tenant: TenantRef, actor: AuditActor, input: RelationInput) {
+async function defineRelationTypeInternal(
+  tx: Tx, tenant: TenantRef, actor: AuditActor, input: RelationInput, finalize: boolean,
+) {
   if (Object.hasOwn(input, 'projectionAttributeSlug')) {
     throw schemaConflict('projection_ownership_is_internal')
   }
@@ -288,34 +293,35 @@ export async function defineRelationType(tx: Tx, tenant: TenantRef, actor: Audit
         onDelete: input.onDelete ?? 'unlink',
         edgeAttributes: jsonValue(edgeAttributes),
         projectionAttributeSlug: null,
+        isSystem: input.isSystem ?? false,
       },
     })
   } catch (error) {
     if (isUniqueConstraint(error)) throw schemaConflict('relation_type_slug')
     throw error
   }
-  await bump(tx, tenant)
-  await audit(tx, tenant, actor, 'define', 'relation_type', created.id)
+  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'relation_type', created.id) }
   return created
 }
 
 export async function archiveObjectType(tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string) {
   const target = await object(tx, tenant, slug)
   const archived = await tx.objectType.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
-  await bump(tx, tenant)
+  await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'archive', 'object_type', archived.id)
   return archived
 }
 
-export async function updateObjectType(
+async function updateObjectTypeInternal(
   tx: Tx,
   tenant: TenantRef,
   actor: AuditActor,
   slug: string,
   input: Partial<Omit<ObjectInput, 'slug'>>,
+  finalize: boolean,
 ) {
   const target = await object(tx, tenant, slug)
-  const primaryAttributeId = await primary(tx, tenant, target.id, input.primaryAttribute)
+  const primaryAttributeId = await resolvePrimaryAttribute(tx, tenant, target.id, input.primaryAttribute)
   const updated = await tx.objectType.update({
     where: { id: target.id },
     data: {
@@ -326,8 +332,7 @@ export async function updateObjectType(
       primaryAttributeId,
     },
   })
-  await bump(tx, tenant)
-  await audit(tx, tenant, actor, 'define', 'object_type', updated.id)
+  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'object_type', updated.id) }
   return updated
 }
 
@@ -371,7 +376,7 @@ export async function updateAttribute(
       defaultValue: values.defaultValue,
     },
   })
-  await bump(tx, tenant)
+  await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'define', 'attribute', updated.id)
   return updated
 }
@@ -389,7 +394,7 @@ export async function archiveAttribute(
   })
   if (target === null) throw unknownAttribute(slug)
   const archived = await tx.attribute.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
-  await bump(tx, tenant)
+  await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'archive', 'attribute', archived.id)
   return archived
 }
@@ -424,7 +429,7 @@ export async function updateRelationType(
       edgeAttributes: edgeAttributes === undefined ? undefined : jsonValue(edgeAttributes),
     },
   })
-  await bump(tx, tenant)
+  await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'define', 'relation_type', updated.id)
   return updated
 }
@@ -433,12 +438,12 @@ export async function archiveRelationType(tx: Tx, tenant: TenantRef, actor: Audi
   const target = await tx.relationType.findFirst({ where: { ...tenantWhere(tenant), slug, archivedAt: null } })
   if (target === null) throw schemaConflict('unknown_relation_type')
   const archived = await tx.relationType.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
-  await bump(tx, tenant)
+  await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'archive', 'relation_type', archived.id)
   return archived
 }
 
-export async function setMatchingRules(tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>) {
+async function setMatchingRulesInternal(tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>, finalize: boolean) {
   const objectType = await object(tx, tenant, objectSlug)
   if (rules.length > 10) throw schemaConflict('too_many_matching_rules')
   for (const rule of rules) {
@@ -495,6 +500,26 @@ export async function setMatchingRules(tx: Tx, tenant: TenantRef, actor: AuditAc
       })),
     })
   }
-  await bump(tx, tenant)
-  await audit(tx, tenant, actor, 'define', 'object_type', objectType.id)
+  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'object_type', objectType.id) }
 }
+
+export const defineObjectType = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
+  defineObjectTypeInternal(tx, tenant, actor, input, true)
+export const defineObjectTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
+  defineObjectTypeInternal(tx, tenant, actor, input, false)
+export const defineAttribute = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput) =>
+  defineAttributeInternal(tx, tenant, actor, input, true)
+export const defineAttributeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput) =>
+  defineAttributeInternal(tx, tenant, actor, input, false)
+export const defineRelationType = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: RelationInput) =>
+  defineRelationTypeInternal(tx, tenant, actor, input, true)
+export const defineRelationTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: RelationInput) =>
+  defineRelationTypeInternal(tx, tenant, actor, input, false)
+export const updateObjectType = (tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string, input: Partial<Omit<ObjectInput, 'slug'>>) =>
+  updateObjectTypeInternal(tx, tenant, actor, slug, input, true)
+export const updateObjectTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string, input: Partial<Omit<ObjectInput, 'slug'>>) =>
+  updateObjectTypeInternal(tx, tenant, actor, slug, input, false)
+export const setMatchingRules = (tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>) =>
+  setMatchingRulesInternal(tx, tenant, actor, objectSlug, rules, true)
+export const setMatchingRulesBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>) =>
+  setMatchingRulesInternal(tx, tenant, actor, objectSlug, rules, false)
