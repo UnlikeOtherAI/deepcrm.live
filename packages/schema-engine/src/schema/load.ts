@@ -26,6 +26,7 @@ export type LoadedSchema = Readonly<{
   objectTypesById: ReadonlyMap<string, LoadedObjectType>
   attributesById: ReadonlyMap<string, LoadedAttribute>
   attributesByObjectTypeId: ReadonlyMap<string, ReadonlyMap<string, LoadedAttribute>>
+  archivedAttributeSlugsByObjectTypeId: ReadonlyMap<string, ReadonlySet<string>>
   relationTypesBySlug: ReadonlyMap<string, LoadedRelationType>
   relationTypesById: ReadonlyMap<string, LoadedRelationType>
   matchingRulesByObjectTypeId: ReadonlyMap<string, readonly LoadedMatchingRule[]>
@@ -92,6 +93,43 @@ class ImmutableMap<K, V> implements ReadonlyMap<K, V> {
   }
 }
 
+class ImmutableSet<T> implements ReadonlySet<T> {
+  readonly #values: Set<T>
+
+  constructor(values: Iterable<T>) {
+    this.#values = new Set(values)
+    Object.freeze(this)
+  }
+
+  get size(): number {
+    return this.#values.size
+  }
+
+  has(value: T): boolean {
+    return this.#values.has(value)
+  }
+
+  entries(): SetIterator<[T, T]> {
+    return this.#values.entries()
+  }
+
+  keys(): SetIterator<T> {
+    return this.#values.keys()
+  }
+
+  values(): SetIterator<T> {
+    return this.#values.values()
+  }
+
+  forEach(callbackfn: (value: T, value2: T, set: ReadonlySet<T>) => void, thisArg?: unknown): void {
+    for (const value of this.#values) callbackfn.call(thisArg, value, value, this)
+  }
+
+  [Symbol.iterator](): SetIterator<T> {
+    return this.values()
+  }
+}
+
 function pair<K, V>(key: K, value: V): readonly [K, V] {
   return [key, value]
 }
@@ -154,7 +192,12 @@ function tenantError(): ServiceError {
 function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
   const copied = structuredClone(rows)
   freezeDeep(copied)
-  const objectTypes: readonly LoadedObjectType[] = copied.objectTypes
+  const objectTypes: readonly LoadedObjectType[] = Object.freeze(copied.objectTypes.map(
+    (objectType) => Object.freeze({
+      ...objectType,
+      attributes: Object.freeze(objectType.attributes.filter((attribute) => attribute.archivedAt === null)),
+    }),
+  ))
   const relationTypes: readonly LoadedRelationType[] = copied.relationTypes
   const matchingRules: readonly LoadedMatchingRule[] = copied.matchingRules
   const objectTypesBySlug = new ImmutableMap(objectTypes.map(
@@ -169,6 +212,12 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
   const attributesByObjectTypeId = new ImmutableMap(objectTypes.map((objectType) => pair(
     objectType.id,
     new ImmutableMap(objectType.attributes.map((attribute) => pair(attribute.slug, attribute))),
+  )))
+  const archivedAttributeSlugsByObjectTypeId = new ImmutableMap(copied.objectTypes.map((objectType) => pair(
+    objectType.id,
+    new ImmutableSet(objectType.attributes
+      .filter((attribute) => attribute.archivedAt !== null)
+      .map((attribute) => attribute.slug)),
   )))
   const relationTypesBySlug = new ImmutableMap(relationTypes.map(
     (relationType) => pair(relationType.slug, relationType),
@@ -217,6 +266,7 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
     objectTypesById,
     attributesById,
     attributesByObjectTypeId,
+    archivedAttributeSlugsByObjectTypeId,
     relationTypesBySlug,
     relationTypesById,
     matchingRulesByObjectTypeId,
@@ -260,7 +310,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
           where: activeWhere,
           include: {
             attributes: {
-              where: { ...tenantWhere(target), archivedAt: null },
+              where: tenantWhere(target),
               orderBy: { position: 'asc' },
             },
           },
