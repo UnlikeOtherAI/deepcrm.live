@@ -91,7 +91,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ---
 
-### T15 — Query compiler
+### T15 ✅ — Query compiler
 
 **Depends on:** T14. **Spec:** `docs/schema-engine.md` §5.
 
