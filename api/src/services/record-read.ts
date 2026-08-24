@@ -14,7 +14,6 @@ import {
   listLinks,
   loadSchema,
   normalizedAttributeValue,
-  type HistoricalChange,
   type LoadedObjectType,
   type LoadedSchema,
   type QueryRecord,
@@ -23,7 +22,7 @@ import {
 import type { AppDeps } from '../deps.js'
 import { loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
-import { recordHistory } from './record-history.js'
+import { recordTimeline, type RecordTimelineResult } from './timeline.js'
 import { findVisibleLiveRecords, requireVisibleRecord } from './record-visibility.js'
 import { buildRedactionMatrix, redactForActor, type RecordOut } from './redact.js'
 
@@ -50,7 +49,7 @@ export type RecordLinkOut = {
 export type GetRecordResult = {
   record: RecordOut
   links?: Record<string, Array<{ link: RecordLinkOut; related: Pick<RecordOut, 'id' | 'object_type' | 'display_name'> }>>
-  timeline?: Array<{ kind: 'change'; change: HistoricalChange; occurred_at: string }>
+  timeline?: RecordTimelineResult['items']
 }
 
 type Lookup = { kind: 'id'; id: string } | {
@@ -323,10 +322,10 @@ export async function getRecord(
     })
     const matrix = buildRedactionMatrix(evaluator, ctx, schema, [primary, ...permittedRelated])
     const record = redactForActor(ctx, schema, primary, matrix)
-    const timeline = timelineLimit === 0 ? undefined : (await recordHistory(deps, ctx, {
-      recordId: primary.id,
+    const timeline = timelineLimit === 0 ? undefined : (await recordTimeline(deps, ctx, {
+      id: primary.id,
       limit: timelineLimit,
-    })).changes.map((change) => ({ kind: 'change' as const, change, occurred_at: change.occurred_at }))
+    })).items
     if (input.includeLinks !== true) return { record, ...(timeline === undefined ? {} : { timeline }) }
     const relatedById = new Map(permittedRelated.map((item) => [item.id, item]))
     const summaries = new Map<string, Pick<RecordOut, 'id' | 'object_type' | 'display_name'>>(permittedRelated.map((item) => {

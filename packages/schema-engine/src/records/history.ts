@@ -4,7 +4,7 @@ import {
   type ChangeKind,
   type TenantRef,
 } from '@deepcrm/db'
-import { ErrorCode, ServiceError } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, Uuid } from '@deepcrm/schemas'
 
 import { canonicalJsonValue, type JsonValue } from './json.js'
 import type { RecordTx } from '../schema/tx.js'
@@ -74,6 +74,11 @@ export type RecordHistoryInput = HistoryVisibility & Readonly<{
 export type RecordHistoryPage = Readonly<{
   changes: readonly HistoricalChange[]
   next: HistoryCursorState | null
+}>
+
+export type RecordChangesByIdsInput = HistoryVisibility & Readonly<{
+  recordId: string
+  ids: readonly string[]
 }>
 
 type HistoryRow = Awaited<ReturnType<HistoryTx['recordChange']['findMany']>>[number]
@@ -340,6 +345,64 @@ function serializeChange(
   }
 }
 
+async function changeRelations(
+  tx: HistoryTx,
+  tenant: TenantRef,
+  rows: readonly HistoryRow[],
+): Promise<ReadonlyMap<string, { slug: string; projectionAttributeSlug: string | null }>> {
+  const relationIds = [...new Set(rows.flatMap((row) => (
+    row.relationTypeId === null ? [] : [row.relationTypeId]
+  )))]
+  const relationRows = relationIds.length === 0 ? [] : await tx.$queryRaw<Array<{
+    id: string; slug: string; projection_attribute_slug: string | null
+  }>>`
+    SELECT id, slug, projection_attribute_slug FROM relation_types
+    WHERE organization_id = ${tenant.organizationId}::uuid
+      AND team_id = ${tenant.teamId}::uuid
+      AND id = ANY(${relationIds}::uuid[])
+  `
+  return new Map(relationRows.map((relation) => [relation.id, {
+    slug: relation.slug, projectionAttributeSlug: relation.projection_attribute_slug,
+  }]))
+}
+
+export async function recordChangesByIds(
+  tx: HistoryTx,
+  tenant: TenantRef,
+  input: RecordChangesByIdsInput,
+): Promise<readonly HistoricalChange[]> {
+  if (
+    !Uuid.safeParse(input.recordId).success
+    || input.ids.length > 200
+    || new Set(input.ids).size !== input.ids.length
+    || input.ids.some((id) => !Uuid.safeParse(id).success)
+  ) {
+    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'History change ids are invalid')
+  }
+  if (input.ids.length === 0) return []
+  const [summary, rows] = await Promise.all([
+    tx.record.findFirst({
+      where: { ...tenantWhere(tenant), id: input.recordId },
+      select: { id: true, displayName: true, objectType: { select: { slug: true } } },
+    }),
+    tx.recordChange.findMany({
+      where: {
+        ...tenantWhere(tenant), recordId: input.recordId, id: { in: [...input.ids] },
+      },
+    }),
+  ])
+  if (summary === null) throw notFound()
+  const relations = await changeRelations(tx, tenant, rows)
+  const rowsById = new Map(rows.map((row) => [row.id, row]))
+  return input.ids.map((id) => {
+    const row = rowsById.get(id)
+    if (row === undefined) {
+      throw new ServiceError(ErrorCode.INTERNAL, 'Timeline change is missing')
+    }
+    return serializeChange(row, input.recordId, summary, relations, input)
+  })
+}
+
 export async function recordHistory(
   tx: HistoryTx,
   tenant: TenantRef,
@@ -372,20 +435,10 @@ export async function recordHistory(
     take: limit + 1,
   })
   const page = rows.slice(0, limit)
-  const relationIds = [...new Set(page.flatMap((row) => row.relationTypeId === null ? [] : [row.relationTypeId]))]
-  const relationRows = relationIds.length === 0 ? [] : await tx.$queryRaw<Array<{
-    id: string; slug: string; projection_attribute_slug: string | null
-  }>>`
-    SELECT id, slug, projection_attribute_slug FROM relation_types
-    WHERE organization_id = ${tenant.organizationId}::uuid
-      AND team_id = ${tenant.teamId}::uuid
-      AND id = ANY(${relationIds}::uuid[])
-  `
-  const relations = new Map(relationRows.map((relation) => [relation.id, {
-    slug: relation.slug, projectionAttributeSlug: relation.projection_attribute_slug,
-  }]))
+  const relations = await changeRelations(tx, tenant, page)
+  const last = page.at(-1)
   return {
     changes: page.map((row) => serializeChange(row, input.recordId, summary, relations, input)),
-    next: rows.length > limit && page.length > 0 ? cursor(page[page.length - 1] as HistoryRow) : null,
+    next: rows.length > limit && last !== undefined ? cursor(last) : null,
   }
 }

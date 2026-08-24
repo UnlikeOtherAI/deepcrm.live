@@ -3,7 +3,7 @@ export { computeDisplayName } from './display-name.js'
 export { validateRecordData } from './validate.js'
 export { assertRecord, createRecord, deleteRecord, restoreRecord, updateRecord } from './write.js'
 export { diffChanges, writeChanges } from './changes.js'
-export { recordAt, recordHistory } from './history.js'
+export { recordAt, recordChangesByIds, recordHistory } from './history.js'
 export { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
 export {
   findUniqueRecord,
@@ -30,6 +30,7 @@ export type {
   HistoryCursorState,
   HistoryTx,
   HistoryVisibility,
+  RecordChangesByIdsInput,
   RecordAtResult,
   RecordHistoryInput,
   RecordHistoryPage,

@@ -38,7 +38,7 @@ type CurrentAttribute = {
 
 type CurrentLinkAttribute = CurrentAttribute & { relationType: string }
 
-type HistoryAccess = {
+export type HistoryAccess = {
   visibleAttributeSlugs: ReadonlySet<string>
   visibleLinkDataSlugsByRelationType: ReadonlyMap<string, ReadonlySet<string>>
   visibleLinkedRecordIds: ReadonlySet<string>
@@ -144,7 +144,7 @@ function auditMetadata(ctx: ActorContext): Prisma.InputJsonObject {
 async function writeDeniedAudit(
   deps: AppDeps,
   ctx: ActorContext,
-  tool: 'crm_record_at' | 'crm_record_history',
+  tool: 'crm_record_at' | 'crm_record_history' | 'crm_record_timeline',
   record: VisibleRecord,
 ): Promise<void> {
   await deps.db.$transaction((tx) => deps.writeAudit(tx, {
@@ -173,7 +173,7 @@ function rejection(decisions: readonly { request: PolicyRequest; decision: Polic
 async function authorizeRecord(
   deps: AppDeps,
   ctx: ActorContext,
-  tool: 'crm_record_at' | 'crm_record_history',
+  tool: 'crm_record_at' | 'crm_record_history' | 'crm_record_timeline',
   record: VisibleRecord,
   request: PolicyRequest,
   evaluator: PolicyEvaluator,
@@ -279,10 +279,10 @@ function visibleLinkAttributes(
   return visible
 }
 
-async function historyAccess(
+export async function buildHistoryAccess(
   deps: AppDeps,
   ctx: ActorContext,
-  tool: 'crm_record_at' | 'crm_record_history',
+  tool: 'crm_record_at' | 'crm_record_history' | 'crm_record_timeline',
   id: string,
   requested?: readonly string[],
 ): Promise<HistoryAccess> {
@@ -349,7 +349,7 @@ export async function recordAt(
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const id = recordId(input.recordId)
     const at = historyTime(input.at)
-    const visibility = await historyAccess(deps, ctx, 'crm_record_at', id)
+    const visibility = await buildHistoryAccess(deps, ctx, 'crm_record_at', id)
     const result = await engineRecordAt(deps.db, ctx.tenant, id, at, visibility)
     return { record_at: result }
   })
@@ -366,7 +366,7 @@ export async function recordHistory(
     const after = normalized.cursor === undefined
       ? undefined
       : deps.historyCursor.open(normalized.cursor, cursorBinding)
-    const visibility = await historyAccess(
+    const visibility = await buildHistoryAccess(
       deps, ctx, 'crm_record_history', normalized.recordId, normalized.attributes,
     )
     const page = await engineRecordHistory(deps.db, ctx.tenant, {

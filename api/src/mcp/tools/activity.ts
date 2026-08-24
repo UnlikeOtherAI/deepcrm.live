@@ -1,11 +1,13 @@
 import {
-  CrmActivityLog, CrmNoteAdd, CrmTaskCreate, CrmTasksList, CrmTaskUpdate,
+  CrmActivityLog, CrmNoteAdd, CrmRecordTimeline,
+  CrmTaskCreate, CrmTasksList, CrmTaskUpdate,
   type ActorContext,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
 import { addNote, logActivity } from '../../services/activity.js'
 import { createTask, listTasks, updateTask } from '../../services/tasks.js'
+import { recordTimeline } from '../../services/timeline.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
@@ -51,6 +53,21 @@ export function registerActivityTools(
       })
       return jsonResult({ record: result.record })
     },
+  })
+
+  defineTool(server, {
+    name: 'crm_record_timeline',
+    description: "Read a visible record's activities, notes, tasks, and changes; hops 1 includes visible linked records. Use crm_record_history for change-only audit detail. Returns redacted items and a cursor. Errors: NOT_FOUND for hidden anchors, policy errors for denied view, VALIDATION_FAILED for cursor mismatch.",
+    input: CrmRecordTimeline.in.shape,
+    handler: async (args) => jsonResult(await recordTimeline(deps, ctx, {
+      id: args.id,
+      hops: args.hops,
+      relationTypes: args.relation_types,
+      kinds: args.kinds,
+      since: args.since,
+      cursor: args.cursor,
+      limit: args.limit,
+    })),
   })
 
   defineTool(server, {

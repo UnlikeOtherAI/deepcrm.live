@@ -1,5 +1,5 @@
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
-import { createProjectionLinkWriter, keyHash } from '@deepcrm/schema-engine'
+import { applyTemplate, createProjectionLinkWriter, keyHash } from '@deepcrm/schema-engine'
 import { ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -56,6 +56,13 @@ async function fixture(): Promise<Fixture> {
   const seeded = await seedTenant(db)
   const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
   organizations.push(tenant.organizationId)
+  const ctx = context(tenant)
+  await db.$transaction((tx) => applyTemplate(tx, tenant, {
+    type: ctx.actor.type,
+    id: ctx.actor.id,
+    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    requestId: ctx.requestId,
+  }, 'system'))
   const caseType = await db.objectType.create({ data: {
     ...tenant, slug: 'case', singularName: 'Case', pluralName: 'Cases', description: 'Case',
     kind: 'custom', createdByType: 'system', createdById: 'record_read_fixture',

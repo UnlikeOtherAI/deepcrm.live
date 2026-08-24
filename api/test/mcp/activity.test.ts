@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { createDb, type PolicyAction, type PolicyResourceType } from '@deepcrm/db'
-import { CrmActivityLog, CrmNoteAdd } from '@deepcrm/schemas'
+import { CrmActivityLog, CrmNoteAdd, CrmRecordTimeline } from '@deepcrm/schemas'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -116,5 +116,18 @@ describe('activity and note MCP tools', () => {
       title: 'Follow-up', body: 'Send a proposal.', about, idempotency_key: noteKey,
     })))
     expect(noteReplay.record.id).toBe(note.record.id)
+
+    const timeline = CrmRecordTimeline.out.parse(structured(await call('crm_record_timeline', {
+      id: company.id, kinds: ['activity', 'note'], limit: 10,
+    })))
+    expect(timeline.items.map((item) => item.kind)).toEqual(['note', 'activity'])
+    expect(timeline.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'activity', record: expect.objectContaining({ id: first.record.id }),
+      }),
+      expect.objectContaining({
+        kind: 'note', record: expect.objectContaining({ id: note.record.id }),
+      }),
+    ]))
   })
 })

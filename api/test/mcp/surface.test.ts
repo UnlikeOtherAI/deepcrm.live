@@ -13,7 +13,6 @@ const NOT_YET: string[] = [
   'crm_view_save',
   'crm_view_run',
   'crm_view_delete',
-  'crm_record_timeline',
   'crm_pipeline_summary',
   'crm_search',
   'crm_find_duplicates',
