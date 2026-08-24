@@ -52,7 +52,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T39 — Unmerge and property invariant (d)
+### T39 ✅ — Unmerge and property invariant (d)
 
 **Depends on:** T38. **Spec:** `docs/schema-engine.md` §7 step 8.
 
