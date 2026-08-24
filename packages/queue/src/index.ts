@@ -1,6 +1,8 @@
 import { Prisma, type Db, type QueueJob } from '@deepcrm/db'
 
 export type QueueEnqueueTx = Pick<Db, 'queueJob'>
+export type QueueCompleteTx = Pick<Db, 'queueJob'>
+export type QueueCancelTx = Pick<Db, 'queueJob'>
 
 type TenantJob = { organizationId: string; teamId: string }
 type SystemJob = { organizationId?: never; teamId?: never }
@@ -72,16 +74,18 @@ export async function claimNext(
   types: string[],
 ): Promise<QueueJob | null> {
   if (types.length === 0) return null
-  const jobs = await db.$queryRaw<QueueJob[]>`
+  const claimed = await db.$queryRaw<Array<{ id: string }>>`
     UPDATE queue_jobs SET status = 'running', locked_at = now(), locked_by = ${workerId}, attempts = attempts + 1
     WHERE id = (SELECT id FROM queue_jobs WHERE ((status = 'queued' AND visible_at <= now()) OR (status = 'running' AND locked_at < now() - interval '10 minutes')) AND type = ANY(${types}) ORDER BY priority DESC, created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-    RETURNING *
+    RETURNING id
   `
-  return jobs[0] ?? null
+  const id = claimed[0]?.id
+  if (id === undefined) return null
+  return db.queueJob.findUnique({ where: { id } })
 }
 
 export async function complete(
-  db: Db,
+  db: QueueCompleteTx,
   id: string,
   workerId: string,
   result: Prisma.InputJsonValue | null,
@@ -110,7 +114,7 @@ export async function progress(
   return update.count === 1
 }
 export async function cancel(
-  db: Db,
+  db: QueueCancelTx,
   id: string,
   tenant: TenantJob,
 ): Promise<boolean> {

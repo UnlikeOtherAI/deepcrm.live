@@ -215,6 +215,56 @@ afterAll(async () => {
 })
 
 describe('record service policy, transaction, and idempotency seam', () => {
+  it('presents a visible warn candidate and replays it byte-for-byte', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    const person = await db.objectType.findFirstOrThrow({
+      where: { organizationId: target.organizationId, teamId: target.teamId, slug: 'person' },
+    })
+    await db.attribute.updateMany({
+      where: { organizationId: target.organizationId, teamId: target.teamId, objectTypeId: person.id, slug: 'email' },
+      data: { isUnique: false },
+    })
+    const generation = await db.matchingRuleGeneration.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: person.id,
+        state: 'active',
+        fingerprint: 'fixture-warn-email',
+        keysReadyAt: fixedNow,
+      },
+    })
+    await db.matchingRule.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: person.id,
+        generationId: generation.id,
+        position: 0,
+        attributeSlugs: ['email'],
+        method: 'normalized',
+        action: 'warn',
+      },
+    })
+    await createRecord(deps, ctx, {
+      objectType: 'person', data: { name: 'First', email: 'candidate@example.com' },
+    })
+    const input = {
+      objectType: 'person', data: { name: 'Second', email: 'candidate@example.com' },
+      idempotencyKey: 'matching-warn-replay',
+    }
+    const first = await createRecord(deps, ctx, input)
+    const replay = await createRecord(deps, ctx, input)
+
+    expect(first).toEqual(replay)
+    expect(first.duplicates).toEqual([expect.objectContaining({
+      record: expect.objectContaining({ display_name: 'first' }),
+      rule_position: 0,
+      evidence: [expect.objectContaining({ attribute: 'email', matched: true })],
+    })])
+  })
+
   it('stores and replays a completed result and rejects mismatched arguments', async () => {
     const target = await tenant()
     const ctx = context(target)

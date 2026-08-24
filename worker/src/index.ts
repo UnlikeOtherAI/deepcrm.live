@@ -1,19 +1,34 @@
-import type { Db, QueueJob, Prisma } from '@deepcrm/db'
-import { claimNext, complete, fail, progress } from '@deepcrm/queue'
+import type { Db, QueueJob, Prisma, writeAudit } from '@deepcrm/db'
+import {
+  claimNext,
+  complete,
+  fail,
+  progress,
+  type QueueCompleteTx,
+} from '@deepcrm/queue'
 
 export type WorkerDeps = {
   db: Db
   clock: () => Date
   ids: () => string
+  writeAudit: typeof writeAudit
 }
 
 export type JobHandlerInput = {
   db: Db
   job: QueueJob
+  workerId: string
+  clock: () => Date
+  writeAudit: typeof writeAudit
   progress: (value: Prisma.InputJsonValue) => Promise<boolean>
+  terminalize: (
+    tx: QueueCompleteTx,
+    result: Prisma.InputJsonValue | null,
+  ) => Promise<boolean>
 }
 
-export type JobHandler = (input: JobHandlerInput) => Promise<void>
+export type JobHandlerOutcome = void | { terminalized: true }
+export type JobHandler = (input: JobHandlerInput) => Promise<JobHandlerOutcome>
 
 /**
  * Processes at most four claimed jobs concurrently until aborted.
@@ -37,11 +52,16 @@ export async function startWorker(
     const handler = handlers[job.type]
     if (handler === undefined) return
     try {
-      await handler({
+      const outcome = await handler({
         db: deps.db,
         job,
+        workerId,
+        clock: deps.clock,
+        writeAudit: deps.writeAudit,
         progress: (value) => progress(deps.db, job.id, workerId, value),
+        terminalize: (tx, result) => complete(tx, job.id, workerId, result),
       })
+      if (outcome?.terminalized === true) return
       await complete(deps.db, job.id, workerId, null)
     } catch (error: unknown) {
       await fail(deps.db, job.id, workerId, error instanceof Error ? error.message : 'worker failure')

@@ -19,11 +19,12 @@ import {
   type RecordWriteResult,
   type UpdateRecordInput,
 } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { Candidate, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
-import { checkPolicy, type PolicyRequest, type PolicyScopeRef } from './policy.js'
+import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
+import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } from './record-results.js'
 import { requireVisibleRecord, type VisibleRecord } from './record-visibility.js'
 
 type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook'>
@@ -40,7 +41,7 @@ export type RecordServiceResult = {
     id: string; version: number; data: Prisma.JsonObject
     displayName: string; deletedAt: string | null
   }
-  created: boolean; changed: boolean
+  created: boolean; changed: boolean; duplicates?: PresentedDuplicates
 }
 
 type WriteDescriptor = {
@@ -87,16 +88,18 @@ function replayResult(value: unknown): RecordServiceResult {
     typeof value['created'] !== 'boolean' ||
     typeof value['changed'] !== 'boolean'
   ) throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
+  const duplicates = value['duplicates'] === undefined ? undefined : Candidate.array().parse(value['duplicates'])
   return {
     record: {
       id: record['id'], version: record['version'], data: record['data'],
       displayName: record['displayName'], deletedAt: record['deletedAt'],
     },
     created: value['created'], changed: value['changed'],
+    ...(duplicates === undefined ? {} : { duplicates }),
   }
 }
 
-function serviceResult(result: RecordWriteResult): RecordServiceResult {
+function serviceResult(result: RecordWriteResult, duplicates: PresentedDuplicates): RecordServiceResult {
   return {
     record: {
       id: result.record.id, version: result.record.version, data: result.record.data,
@@ -104,6 +107,7 @@ function serviceResult(result: RecordWriteResult): RecordServiceResult {
       deletedAt: result.record.deletedAt?.toISOString() ?? null,
     },
     created: result.created, changed: result.changed,
+    ...(duplicates.length === 0 ? {} : { duplicates }),
   }
 }
 
@@ -262,6 +266,8 @@ async function enqueueChanges(
 async function runWrite(
   deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
   authorization: readonly PolicyRequest[] | null,
+  duplicateEvaluator: PolicyEvaluator | null,
+  schema: LoadedSchema,
   operation: (tx: RecordTx) => Promise<RecordWriteResult>,
 ): Promise<RecordServiceResult> {
   if (authorization !== null) await authorize(deps, ctx, descriptor, authorization)
@@ -271,7 +277,9 @@ async function runWrite(
     const reservation = await reserve(serviceTx, ctx, descriptor, hash)
     if (reservation.kind === 'replay') return reservation.result
     const engineResult = await operation(serviceTx)
-    const result = serviceResult(engineResult)
+    const duplicates = duplicateEvaluator === null
+      ? [] : await presentDuplicates(serviceTx, ctx, duplicateEvaluator, schema, engineResult.duplicates)
+    const result = serviceResult(engineResult, duplicates)
     if (engineResult.changed) await enqueueChanges(serviceTx, ctx, engineResult)
     await storeReplay(serviceTx, ctx, reservation, result)
     if (!engineResult.changed) return result
@@ -364,7 +372,7 @@ export async function createRecord(
       recordPolicy(descriptor.action, descriptor.scopes),
       ...attributePolicies(schema, objectTypeId, input.data, descriptor.scopes),
     ]
-    return runWrite(deps, ctx, descriptor, authorization, (tx) => (
+    return runWrite(deps, ctx, descriptor, authorization, await loadDuplicateEvaluator(deps.db, ctx), schema, (tx) => (
       engineCreateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
     ))
   })
@@ -392,7 +400,7 @@ export async function updateRecord(
       recordPolicy(descriptor.action, scopes),
       ...attributePolicies(schema, record.objectTypeId, input.data, scopes),
     ]
-    return runWrite(deps, ctx, descriptor, authorization, (tx) => (
+    return runWrite(deps, ctx, descriptor, authorization, null, schema, (tx) => (
       engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
     ))
   })
@@ -430,8 +438,9 @@ export async function assertRecord(
         ...attributePolicies(schema, resolution.objectTypeId, input.data, resolvedScopes),
       ])
     }
-    return runWrite(deps, ctx, descriptor, null, (tx) => engineAssertRecord(
-      tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter, onResolved,
+    const evaluator = await loadDuplicateEvaluator(deps.db, ctx)
+    return runWrite(deps, ctx, descriptor, null, evaluator, schema, (tx) => (
+      engineAssertRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter, onResolved)
     ))
   })
 }
@@ -456,7 +465,7 @@ async function changeDeletedState(
       },
       idempotencyKey: input.idempotencyKey, reason: input.reason, resourceId: input.recordId,
     }
-    return runWrite(deps, ctx, descriptor, [recordPolicy(action, scopes)], (tx) => (
+    return runWrite(deps, ctx, descriptor, [recordPolicy(action, scopes)], null, schema, (tx) => (
       restore
         ? engineRestoreRecord(
           tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,

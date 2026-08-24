@@ -1,6 +1,14 @@
 import { Prisma, tenantWhere, type TenantRef, writeAudit } from '@deepcrm/db'
 import { AttributeSpec, ErrorCode, ServiceError, type AttributeSpec as AttributeSpecValue } from '@deepcrm/schemas'
 import { getAttributeType } from '../attribute-types/index.js'
+import {
+  cancelMatchingRules,
+  finalizeMatchingBackfill,
+  finalizeMatchingBootstrap,
+  retryMatchingRules,
+  setMatchingRules,
+  setMatchingRulesBatch,
+} from './matching-rules.js'
 import type { AttributeInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
 import type { SchemaTx } from './tx.js'
 type Tx = SchemaTx
@@ -417,66 +425,6 @@ export async function archiveRelationType(tx: Tx, tenant: TenantRef, actor: Audi
   return archived
 }
 
-async function setMatchingRulesInternal(tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>, finalize: boolean) {
-  const objectType = await object(tx, tenant, objectSlug)
-  if (rules.length > 10) throw schemaConflict('too_many_matching_rules')
-  for (const rule of rules) {
-    if (rule.attributes.length < 1 || rule.attributes.length > 4) {
-      throw schemaConflict('invalid_matching_rule_attribute_count')
-    }
-    if (new Set(rule.attributes).size !== rule.attributes.length) {
-      throw schemaConflict('duplicate_matching_rule_attribute')
-    }
-    const attributes = await tx.attribute.findMany({
-      where: {
-        ...tenantWhere(tenant),
-        objectTypeId: objectType.id,
-        slug: { in: rule.attributes },
-        archivedAt: null,
-      },
-    })
-    if (attributes.length !== rule.attributes.length) throw schemaConflict('unknown_matching_rule_attribute')
-    if (rule.method === 'fuzzy') {
-      if (
-        rule.action !== 'warn' ||
-        rule.threshold === undefined ||
-        rule.threshold < 0.5 ||
-        rule.threshold > 1
-      ) throw schemaConflict('invalid_fuzzy_matching_rule')
-      if (
-        attributes.some(
-          (attribute) =>
-            attribute.type !== 'text' &&
-            attribute.type !== 'personal_name' &&
-            attribute.type !== 'domain',
-        )
-      ) throw schemaConflict('invalid_fuzzy_matching_attribute')
-    } else {
-      if (
-        rule.action === 'block' &&
-        attributes.some((attribute) => !getAttributeType(attribute.type).supportsUnique)
-      ) throw schemaConflict('blocking_matching_rule_requires_unique_capability')
-    }
-  }
-  await tx.matchingRule.deleteMany({
-    where: { ...tenantWhere(tenant), objectTypeId: objectType.id },
-  })
-  if (rules.length > 0) {
-    await tx.matchingRule.createMany({
-      data: rules.map((rule, position) => ({
-        ...tenantWhere(tenant),
-        objectTypeId: objectType.id,
-        position,
-        attributeSlugs: rule.attributes,
-        method: rule.method,
-        threshold: rule.threshold ?? null,
-        action: rule.action,
-      })),
-    })
-  }
-  if (finalize) { await bumpSchemaVersion(tx, tenant); await audit(tx, tenant, actor, 'define', 'object_type', objectType.id) }
-}
-
 export const defineObjectType = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
   defineObjectTypeInternal(tx, tenant, actor, input, true)
 export const defineObjectTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
@@ -493,7 +441,11 @@ export const updateObjectType = (tx: Tx, tenant: TenantRef, actor: AuditActor, s
   updateObjectTypeInternal(tx, tenant, actor, slug, input, true)
 export const updateObjectTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string, input: Partial<Omit<ObjectInput, 'slug'>>) =>
   updateObjectTypeInternal(tx, tenant, actor, slug, input, false)
-export const setMatchingRules = (tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>) =>
-  setMatchingRulesInternal(tx, tenant, actor, objectSlug, rules, true)
-export const setMatchingRulesBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, objectSlug: string, rules: Array<{ attributes: string[]; method: 'exact' | 'normalized' | 'fuzzy'; threshold?: number; action: 'block' | 'warn' | 'allow' }>) =>
-  setMatchingRulesInternal(tx, tenant, actor, objectSlug, rules, false)
+export {
+  cancelMatchingRules,
+  finalizeMatchingBackfill,
+  finalizeMatchingBootstrap,
+  retryMatchingRules,
+  setMatchingRules,
+  setMatchingRulesBatch,
+}

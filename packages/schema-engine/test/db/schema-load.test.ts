@@ -5,6 +5,7 @@ import {
   defineAttribute,
   defineObjectType,
   loadSchema,
+  loadSchemaForMatchingBootstrap,
   setMatchingRules,
 } from '../../src/index.js'
 import {
@@ -134,9 +135,9 @@ describe('schema loader', () => {
         is_indexed: true,
         sensitivity: 'internal',
       })
-      await setMatchingRules(tx, target, actor, 'person', [
-        { attributes: ['name'], method: 'exact', action: 'warn' },
-      ])
+      await setMatchingRules(tx, target, actor, 'person', {
+        rules: [{ attributes: ['name'], method: 'exact', action: 'warn' }],
+      })
     })
 
     const schema = await loadSchema(db, target)
@@ -185,6 +186,54 @@ describe('schema loader', () => {
     const reloaded = await loadSchema(db, target)
     expect(reloaded.schemaVersion).toBe(0)
     expect(reloaded.objectTypesBySlug.has('company')).toBe(true)
+  })
+
+  it('fails closed for unready matching keys except in the trusted bootstrap loader', async () => {
+    const target = await tenant()
+    await db.$transaction(async (tx) => {
+      await defineObjectType(tx, target, actor, {
+        slug: 'person',
+        singularName: 'Person',
+        pluralName: 'People',
+        description: 'A person',
+      })
+      await defineAttribute(tx, target, actor, {
+        objectType: 'person',
+        slug: 'email',
+        name: 'Email',
+        description: 'Email address',
+        type: 'email',
+        config: { type: 'email' },
+        is_multi: false,
+        is_required: false,
+        is_unique: true,
+        is_indexed: true,
+        sensitivity: 'internal',
+      })
+      await setMatchingRules(tx, target, actor, 'person', {
+        rules: [{ attributes: ['email'], method: 'normalized', action: 'block' }],
+      })
+    })
+    const generation = await db.matchingRuleGeneration.findFirstOrThrow({
+      where: { organizationId: target.organizationId, teamId: target.teamId, state: 'active' },
+      select: { id: true },
+    })
+    await db.matchingRuleGeneration.update({
+      where: { id: generation.id },
+      data: { keysReadyAt: null },
+    })
+
+    await expect(loadSchema(db, target)).rejects.toMatchObject({
+      code: 'SCHEMA_CONFLICT',
+      details: { detail: 'matching_keys_not_ready' },
+    })
+    const trusted = await loadSchemaForMatchingBootstrap(db, target, generation.id)
+    expect(trusted.matchingRules).toHaveLength(1)
+    await expect(loadSchemaForMatchingBootstrap(db, target, '00000000-0000-0000-0000-000000000000'))
+      .rejects.toMatchObject({
+        code: 'SCHEMA_CONFLICT',
+        details: { detail: 'matching_bootstrap_generation_not_active' },
+      })
   })
 
   it('evicts the least-recently-used entry when the 64-entry cache is full', async () => {

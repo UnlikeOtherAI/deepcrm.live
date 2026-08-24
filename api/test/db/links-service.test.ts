@@ -4,7 +4,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
 import { linkRecords, unlinkRecords } from '../../src/services/links.js'
-import { createRecord, updateRecord } from '../../src/services/records.js'
+import {
+  createRecord, deleteRecord, restoreRecord, updateRecord,
+} from '../../src/services/records.js'
 import {
   createLinkFixture,
   dropLinkFixture,
@@ -68,6 +70,16 @@ describe('direct link service', () => {
         activeUntil: null,
       },
     })
+    const personRule = await db.matchingRule.findFirstOrThrow({
+      where: {
+        ...tenant, objectType: { slug: 'person' }, position: 1,
+        generation: { state: 'active' },
+      },
+    })
+    const matchingRows = () => db.recordMatchLookupKey.count({
+      where: { ...tenant, recordId: person.record.id, matchingRuleId: personRule.id },
+    })
+    expect(await matchingRows()).toBe(1)
     await updateRecord(deps, ctx, {
       recordId: person.record.id,
       expectedVersion: person.record.version,
@@ -75,6 +87,40 @@ describe('direct link service', () => {
     })
     await expect(db.recordLink.findUniqueOrThrow({ where: { id: projected.id } }))
       .resolves.toMatchObject({ activeUntil: expect.any(Date) })
+    expect(await matchingRows()).toBe(0)
+
+    const direct = await linkRecords(deps, ctx, {
+      relationType: 'person_works_at',
+      fromRecordId: person.record.id,
+      toRecordId: company.record.id,
+    })
+    expect(await matchingRows()).toBe(1)
+    await unlinkRecords(deps, ctx, { linkId: direct.link.id })
+    expect(await matchingRows()).toBe(0)
+    await linkRecords(deps, ctx, {
+      relationType: 'person_works_at',
+      fromRecordId: person.record.id,
+      toRecordId: company.record.id,
+    })
+    expect(await matchingRows()).toBe(1)
+    for (const action of ['delete', 'restore'] as const) {
+      await db.policyRule.create({
+        data: {
+          ...tenant, scope: 'team', scopeId: tenant.teamId, resourceType: 'record',
+          action, effect: 'allow', priority: 1_000, createdById: 'matching_refresh_test',
+          bindings: { create: [{ actorType: 'human', actorId: ctx.actor.id }] },
+        },
+      })
+    }
+    const currentCompany = await db.record.findUniqueOrThrow({ where: { id: company.record.id } })
+    const deleted = await deleteRecord(deps, ctx, {
+      recordId: company.record.id, expectedVersion: currentCompany.version,
+    })
+    expect(await matchingRows()).toBe(0)
+    await restoreRecord(deps, ctx, {
+      recordId: company.record.id, expectedVersion: deleted.record.version,
+    })
+    expect(await matchingRows()).toBe(1)
   })
 
   it('enforces all cardinalities and reports every replacement compactly', async () => {

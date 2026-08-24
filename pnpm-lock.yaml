@@ -159,6 +159,9 @@ importers:
       '@deepcrm/schemas':
         specifier: workspace:*
         version: link:../packages/schemas
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
 
 packages:
 

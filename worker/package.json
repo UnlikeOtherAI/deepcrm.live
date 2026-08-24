@@ -15,6 +15,7 @@
     "@deepcrm/db": "workspace:*",
     "@deepcrm/queue": "workspace:*",
     "@deepcrm/schema-engine": "workspace:*",
-    "@deepcrm/schemas": "workspace:*"
+    "@deepcrm/schemas": "workspace:*",
+    "zod": "^3.25.76"
   }
 }

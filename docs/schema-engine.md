@@ -1399,7 +1399,8 @@ the completed queue state and do not repeat it.
 Initial and explicit-retry bootstrap enqueue each run in a namespace-7
 transaction: enqueue and persist the exact job/attempt first, then write one
 terminal `schema.matching_rules.bootstrap_queued` audit with count-free
-`{attempt,retry}` metadata and the same trusted context. A queued/running reuse
+`{attempt,retry,app:'deepcrm:migration',actChain:[],provenance}` metadata and
+the same trusted context. A queued/running reuse
 is a no-op with no audit. Polling/draining occurs in later transactions; nothing
 is written after an audit in its transaction.
 

@@ -5,7 +5,11 @@ import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
 import { canonicalJsonValue, type JsonValue } from './json.js'
 import { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
-import { findUniqueRecord, keyHash, normalizedAttributeValue, syncMatchKeys, syncUniqueKeys } from './unique-keys.js'
+import {
+  findMatches, refreshMatchingRecords, removeMatchingKeys,
+  type MatchCandidateFact,
+} from '../matching/index.js'
+import { findUniqueRecord, keyHash, normalizedAttributeValue, syncUniqueKeys } from './unique-keys.js'
 import { validateRecordData } from './validate.js'
 import type { LinkIntent } from './types.js'
 import type { LoadedObjectType, LoadedSchema } from '../schema/load.js'
@@ -41,6 +45,7 @@ export type RecordWriteResult = {
   changes: readonly ChangeIntent[]
   sequences: readonly number[]
   touchedRecordIds: readonly string[]
+  duplicates: readonly MatchCandidateFact[]
 }
 
 export type CreateRecordInput = { objectType: string; data: Record<string, unknown>; reason?: string }
@@ -101,8 +106,8 @@ async function deleteSnapshot(
     }),
     tx.recordMatchKey.findMany({
       where: { ...tenantWhere(ctx.tenant), recordId: record.id },
-      select: { objectTypeId: true, rulePosition: true, normalizedHash: true },
-      orderBy: [{ objectTypeId: 'asc' }, { rulePosition: 'asc' }, { normalizedHash: 'asc' }],
+      select: { matchingRuleId: true, normalizedHash: true },
+      orderBy: [{ matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
     }),
   ])
   return canonicalJsonValue({ data: data(record.data), unique_keys: uniqueKeys, match_keys: matchKeys })
@@ -123,7 +128,15 @@ async function finish(
   return {
     record: output(record), created, changed: true, changes: allChanges, sequences,
     touchedRecordIds: [...new Set([record.id, ...linkResult.touchedRecordIds])].sort(),
+    duplicates: [],
   }
+}
+
+async function matchingDuplicates(
+  tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, objectTypeId: string, recordId: string,
+): Promise<readonly MatchCandidateFact[]> {
+  const candidates = await findMatches(tx, ctx.tenant, ctx, schema, { objectTypeId, recordId })
+  return candidates.filter((candidate) => candidate.recordId !== recordId)
 }
 
 type PreparedCreate = {
@@ -147,10 +160,10 @@ async function prepareCreate(
     },
   })
   await syncUniqueKeys(tx, schema, objectType, record.id, validatedData)
-  await syncMatchKeys(tx, schema, objectType, record.id, validatedData)
   const links = validated.linkOps.length === 0
     ? { changes: [], touchedRecordIds: [] }
     : await linkWriter.apply(tx, ctx, schema, record.id, validated.linkOps)
+  await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
   return { record, changes: createChanges(validatedData, record.id), links }
 }
 
@@ -159,11 +172,16 @@ export async function createRecord(
 ): Promise<RecordWriteResult> {
   await lockLinkTopology(tx, ctx.tenant.teamId)
   const prepared = await prepareCreate(tx, ctx, schema, input, linkWriter)
-  return finish(tx, ctx, prepared.record, prepared.changes, true, prepared.links, input.reason)
+  const result = await finish(tx, ctx, prepared.record, prepared.changes, true, prepared.links, input.reason)
+  const duplicates = await matchingDuplicates(
+    tx, ctx, schema, object(schema, input.objectType).id, prepared.record.id,
+  )
+  return { ...result, duplicates }
 }
 
-export async function updateRecord(
+async function updateRecordInternal(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: UpdateRecordInput, linkWriter: LinkWriter,
+  includeDuplicates: boolean,
 ): Promise<RecordWriteResult> {
   await lockLinkTopology(tx, ctx.tenant.teamId)
   const record = await activeRecord(tx, ctx, input.recordId)
@@ -175,7 +193,15 @@ export async function updateRecord(
   const validatedData = data(validated.data)
   const changes = diffChanges(before, validatedData, record.id, record.version + 1)
   if (changes.length === 0 && validated.linkOps.length === 0) {
-    return { record: output(record), created: false, changed: false, changes: [], sequences: [], touchedRecordIds: [] }
+    const result: RecordWriteResult = {
+      record: output(record), created: false, changed: false, changes: [], sequences: [], touchedRecordIds: [],
+      duplicates: [],
+    }
+    if (!includeDuplicates) return result
+    return {
+      ...result,
+      duplicates: await matchingDuplicates(tx, ctx, schema, objectType.id, record.id),
+    }
   }
   const persisted = await tx.record.updateMany({
     where: { ...tenantWhere(ctx.tenant), id: record.id },
@@ -189,11 +215,21 @@ export async function updateRecord(
   const updated = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: record.id } })
   if (updated === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   await syncUniqueKeys(tx, schema, objectType, record.id, validatedData)
-  await syncMatchKeys(tx, schema, objectType, record.id, validatedData)
   const links = validated.linkOps.length === 0
     ? { changes: [], touchedRecordIds: [] }
     : await linkWriter.apply(tx, ctx, schema, record.id, validated.linkOps)
-  return finish(tx, ctx, updated, changes, false, links, input.reason)
+  await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
+  const result = await finish(tx, ctx, updated, changes, false, links, input.reason)
+  const duplicates = includeDuplicates
+    ? await matchingDuplicates(tx, ctx, schema, objectType.id, record.id)
+    : []
+  return { ...result, duplicates }
+}
+
+export function updateRecord(
+  tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: UpdateRecordInput, linkWriter: LinkWriter,
+): Promise<RecordWriteResult> {
+  return updateRecordInternal(tx, ctx, schema, input, linkWriter, false)
 }
 
 export async function deleteRecord(
@@ -219,7 +255,7 @@ export async function deleteRecord(
     cascaded: linkSnapshot['cascaded'] ?? [],
   })
   await syncUniqueKeys(tx, schema, objectType, record.id, {})
-  await syncMatchKeys(tx, schema, objectType, record.id, {})
+  await removeMatchingKeys(tx, ctx.tenant, [record.id])
   const persisted = await tx.record.updateMany({
     where: { ...tenantWhere(ctx.tenant), id: record.id },
     data: { deletedAt: ctx.now, version: { increment: 1 } },
@@ -227,6 +263,12 @@ export async function deleteRecord(
   if (persisted.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const updated = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: record.id } })
   if (updated === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  await refreshMatchingRecords(
+    tx,
+    ctx.tenant,
+    schema,
+    links.touchedRecordIds.filter((id) => id !== record.id),
+  )
   const changes: ChangeIntent[] = [{
     recordId, kind: 'delete', attributeSlug: null, relationTypeId: null, linkId: null, groupId: null, oldValue: null, newValue: null,
     snapshot, resultingVersion: updated.version, reason: null,
@@ -260,16 +302,6 @@ export async function restoreRecord(
     }
     throw error
   }
-  try {
-    await syncMatchKeys(tx, schema, objectType, record.id, data(record.data))
-  } catch (error) {
-    if (error instanceof ServiceError && error.code === ErrorCode.DUPLICATE_FOUND) {
-      throw new ServiceError(ErrorCode.RESTORE_CONFLICT, 'Record cannot be restored', {
-        attribute: error.details['attribute'], held_by: error.details['record_id'],
-      })
-    }
-    throw error
-  }
   const persisted = await tx.record.updateMany({
     where: { ...tenantWhere(ctx.tenant), id: record.id },
     data: { deletedAt: null, version: { increment: 1 } },
@@ -288,6 +320,16 @@ export async function restoreRecord(
     snapshot: null, resultingVersion: updated.version, reason: null,
   }]
   const links = await linkWriter.restore(tx, ctx, schema, record.id, snapshot)
+  try {
+    await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
+  } catch (error) {
+    if (error instanceof ServiceError && error.code === ErrorCode.DUPLICATE_FOUND) {
+      throw new ServiceError(ErrorCode.RESTORE_CONFLICT, 'Record cannot be restored', {
+        attribute: error.details['attribute'], held_by: error.details['record_id'],
+      })
+    }
+    throw error
+  }
   return finish(tx, ctx, updated, changes, false, links, reason)
 }
 
@@ -316,6 +358,17 @@ export async function assertRecord(
   const firstHash = hashes[0]
   if (firstHash === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Match key is missing')
   const existingId = await findUniqueRecord(tx, ctx.tenant, attribute.id, firstHash)
+  if (existingId !== null && input.expectedVersion !== undefined) {
+    const existing = await tx.record.findFirst({
+      where: { ...tenantWhere(ctx.tenant), id: existingId },
+      select: { version: true },
+    })
+    if (existing !== null && existing.version > input.expectedVersion) {
+      throw new ServiceError(ErrorCode.IDEMPOTENCY_MISMATCH, 'Expected version is older than the current record version', {
+        current: existing.version,
+      })
+    }
+  }
   const otherIds = new Set<string>()
   for (const hash of hashes.slice(1)) {
     const candidateId = await findUniqueRecord(tx, ctx.tenant, attribute.id, hash)
@@ -328,12 +381,13 @@ export async function assertRecord(
   }
   if (existingId !== null) {
     await onResolved({ action: 'edit', objectTypeId: objectType.id, recordId: existingId })
-    return updateRecord(
+    return updateRecordInternal(
       tx,
       ctx,
       schema,
       { recordId: existingId, data: input.data, expectedVersion: input.expectedVersion, reason: input.reason },
       linkWriter,
+      true,
     )
   }
   await onResolved({ action: 'create', objectTypeId: objectType.id, recordId: null })
@@ -341,20 +395,22 @@ export async function assertRecord(
   try {
     const prepared = await prepareCreate(tx, ctx, schema, input, linkWriter)
     const created = await finish(tx, ctx, prepared.record, prepared.changes, true, prepared.links, input.reason)
+    const duplicates = await matchingDuplicates(tx, ctx, schema, objectType.id, prepared.record.id)
     await tx.$executeRaw`RELEASE SAVEPOINT assert_create`
-    return created
+    return { ...created, duplicates }
   } catch (error) {
     await tx.$executeRaw`ROLLBACK TO SAVEPOINT assert_create`
     if (!(error instanceof ServiceError) || error.code !== ErrorCode.DUPLICATE_FOUND) throw error
     const retriedId = await findUniqueRecord(tx, ctx.tenant, attribute.id, firstHash)
     if (retriedId === null) throw error
     await onResolved({ action: 'edit', objectTypeId: objectType.id, recordId: retriedId })
-    return updateRecord(
+    return updateRecordInternal(
       tx,
       ctx,
       schema,
       { recordId: retriedId, data: input.data, expectedVersion: input.expectedVersion, reason: input.reason },
       linkWriter,
+      true,
     )
   }
 }

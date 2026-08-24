@@ -1,4 +1,4 @@
-import { createDb, seedTenant } from '@deepcrm/db'
+import { createDb, seedTenant, writeAudit } from '@deepcrm/db'
 import { cancel, enqueue } from '@deepcrm/queue'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { JobHandler } from '../../src/index.js'
@@ -14,6 +14,7 @@ const workerDeps = {
   db,
   clock: () => new Date(),
   ids: () => crypto.randomUUID(),
+  writeAudit,
 }
 const organizationIds: string[] = []
 
@@ -188,6 +189,46 @@ it('does not overwrite a cancellation after the handler returns', async () => {
   await loop
   const job = await db.queueJob.findUniqueOrThrow({ where: { id: item.id } })
   expect(job.status).toBe('cancelled')
+})
+
+it('accepts a handler-owned terminal result without fallback completion', async () => {
+  const tenant = await createTenant()
+  const item = await enqueue(db, {
+    type: 'terminalized',
+    payload: {},
+    organizationId: tenant.organizationId,
+    teamId: tenant.teamId,
+  })
+  let completionWrites = 0
+  const observedDb = db.$extends({
+    query: {
+      queueJob: {
+        async updateMany({ args, query }) {
+          if (args.data.status === 'completed') completionWrites += 1
+          return query(args)
+        },
+      },
+    },
+  })
+  const terminalized: JobHandler = async ({ db: workerDb, terminalize }) => (
+    workerDb.$transaction(async (tx) => {
+      const completed = await terminalize(tx, { state: 'activated' })
+      if (!completed) throw new Error('terminal completion lost ownership')
+      return { terminalized: true }
+    })
+  )
+  const controller = new AbortController()
+  const loop = startWorker({ ...workerDeps, db: observedDb }, { terminalized }, controller.signal)
+
+  await waitFor(async () => {
+    const job = await db.queueJob.findUniqueOrThrow({ where: { id: item.id } })
+    return job.status === 'completed'
+  }, 'handler did not terminalize its job')
+  controller.abort()
+  await loop
+  const job = await db.queueJob.findUniqueOrThrow({ where: { id: item.id } })
+  expect(job).toMatchObject({ status: 'completed', result: { state: 'activated' } })
+  expect(completionWrites).toBe(1)
 })
 
 it('drains active handlers after abort without claiming more jobs', async () => {

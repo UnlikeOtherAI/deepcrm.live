@@ -23,12 +23,12 @@ model Organization {
 }
 
 model Team {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  externalTeamId String       @unique @map("external_team_id")
-  name           String
-  schemaVersion  Int          @default(0) @map("schema_version")
-  policyVersion  Int          @default(0) @map("policy_version")
+  id                     String       @id @default(uuid()) @db.Uuid
+  organizationId         String       @map("organization_id") @db.Uuid
+  externalTeamId         String       @unique @map("external_team_id")
+  name                   String
+  schemaVersion          Int          @default(0) @map("schema_version")
+  policyVersion          Int          @default(0) @map("policy_version")
   // Commit-ordered change-feed sequence. Allocated via
   // `UPDATE teams SET feed_seq = feed_seq + n ... RETURNING` in applyWrite
   // AFTER all data/links writes and change-intent formation but BEFORE the
@@ -37,19 +37,19 @@ model Team {
   // per tenant. Never a Postgres sequence: sequences
   // allocate at insert time and a slow transaction would commit a seq the
   // feed cursor has already passed (review C1).
-  feedSeq        BigInt       @default(0) @map("feed_seq")
+  feedSeq                BigInt       @default(0) @map("feed_seq")
   // Origin write-guard (defence in depth for taint boundaries like DeepSignal's
   // per-user connector gate): a write whose declared `origin` is in this list
   // is refused with ORIGIN_REJECTED. Owner-set via crm_origin_guard_set.
-  rejectedOrigins String[]    @default([]) @map("rejected_origins")
+  rejectedOrigins        String[]     @default([]) @map("rejected_origins")
   // Write-guard extensions (R1/R16): refuse origin-less writes; refuse
   // non-team visibility from listed app keys (server-enforces a product's
   // "everything we write is team-visible" invariant).
-  requireOrigin  Boolean      @default(false) @map("require_origin")
-  teamVisibilityOnlyApps String[] @default([]) @map("team_visibility_only_apps")
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @updatedAt @map("updated_at")
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requireOrigin          Boolean      @default(false) @map("require_origin")
+  teamVisibilityOnlyApps String[]     @default([]) @map("team_visibility_only_apps")
+  createdAt              DateTime     @default(now()) @map("created_at")
+  updatedAt              DateTime     @updatedAt @map("updated_at")
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@map("teams")
@@ -165,7 +165,12 @@ enum MatchMethod {
 enum MatchAction {
   block
   warn
-  allow
+}
+
+enum MatchingRuleGenerationState {
+  active
+  pending_backfill
+  collision_blocked
 }
 
 enum PolicyScope {
@@ -234,27 +239,28 @@ enum JobStatus {
 // ───────────────────────── metadata ─────────────────────────
 
 model ObjectType {
-  id                 String         @id @default(uuid()) @db.Uuid
-  organizationId     String         @map("organization_id") @db.Uuid
-  teamId             String         @map("team_id") @db.Uuid
-  slug               String
-  singularName       String         @map("singular_name")
-  pluralName         String         @map("plural_name")
-  description        String
-  icon               String?
-  kind               ObjectTypeKind
-  templateSlug       String?        @map("template_slug")
-  primaryAttributeId String?        @map("primary_attribute_id") @db.Uuid
-  archivedAt         DateTime?      @map("archived_at")
-  createdByType      ActorType      @map("created_by_type")
-  createdById        String         @map("created_by_id")
-  createdAt          DateTime       @default(now()) @map("created_at")
-  updatedAt          DateTime       @updatedAt @map("updated_at")
-  attributes         Attribute[]
-  records            Record[]
-  relationsFrom      RelationType[] @relation("RelationFrom")
-  relationsTo        RelationType[] @relation("RelationTo")
-  matchingRules      MatchingRule[]
+  id                      String                   @id @default(uuid()) @db.Uuid
+  organizationId          String                   @map("organization_id") @db.Uuid
+  teamId                  String                   @map("team_id") @db.Uuid
+  slug                    String
+  singularName            String                   @map("singular_name")
+  pluralName              String                   @map("plural_name")
+  description             String
+  icon                    String?
+  kind                    ObjectTypeKind
+  templateSlug            String?                  @map("template_slug")
+  primaryAttributeId      String?                  @map("primary_attribute_id") @db.Uuid
+  archivedAt              DateTime?                @map("archived_at")
+  createdByType           ActorType                @map("created_by_type")
+  createdById             String                   @map("created_by_id")
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
+  attributes              Attribute[]
+  records                 Record[]
+  relationsFrom           RelationType[]           @relation("RelationFrom")
+  relationsTo             RelationType[]           @relation("RelationTo")
+  matchingRuleGenerations MatchingRuleGeneration[]
+  matchingRules           MatchingRule[]
 
   @@unique([organizationId, teamId, slug])
   @@index([organizationId, teamId, kind])
@@ -262,29 +268,29 @@ model ObjectType {
 }
 
 model Attribute {
-  id             String        @id @default(uuid()) @db.Uuid
-  organizationId String        @map("organization_id") @db.Uuid
-  teamId         String        @map("team_id") @db.Uuid
-  objectTypeId   String?       @map("object_type_id") @db.Uuid
-  listId         String?       @map("list_id") @db.Uuid
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  teamId         String            @map("team_id") @db.Uuid
+  objectTypeId   String?           @map("object_type_id") @db.Uuid
+  listId         String?           @map("list_id") @db.Uuid
   slug           String
   name           String
   description    String
   type           AttributeType
-  config         Json          @default("{}")
-  isMulti        Boolean       @default(false) @map("is_multi")
-  isRequired     Boolean       @default(false) @map("is_required")
-  isUnique       Boolean       @default(false) @map("is_unique")
-  isSystem       Boolean       @default(false) @map("is_system")
-  isIndexed      Boolean       @default(false) @map("is_indexed")
-  sensitivity    Sensitivity   @default(internal)
-  defaultValue   Json?         @map("default_value")
-  position       Int           @default(0)
-  archivedAt     DateTime?     @map("archived_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
-  objectType     ObjectType?   @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
-  list           List?         @relation(fields: [listId], references: [id], onDelete: Cascade)
+  config         Json              @default("{}")
+  isMulti        Boolean           @default(false) @map("is_multi")
+  isRequired     Boolean           @default(false) @map("is_required")
+  isUnique       Boolean           @default(false) @map("is_unique")
+  isSystem       Boolean           @default(false) @map("is_system")
+  isIndexed      Boolean           @default(false) @map("is_indexed")
+  sensitivity    Sensitivity       @default(internal)
+  defaultValue   Json?             @map("default_value")
+  position       Int               @default(0)
+  archivedAt     DateTime?         @map("archived_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  objectType     ObjectType?       @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  list           List?             @relation(fields: [listId], references: [id], onDelete: Cascade)
   uniqueKeys     RecordUniqueKey[]
 
   @@unique([objectTypeId, slug])
@@ -294,98 +300,134 @@ model Attribute {
 }
 
 model RelationType {
-  id                     String      @id @default(uuid()) @db.Uuid
-  organizationId         String      @map("organization_id") @db.Uuid
-  teamId                 String      @map("team_id") @db.Uuid
-  slug                   String
-  fromObjectTypeId       String?     @map("from_object_type_id") @db.Uuid   // null = any
-  toObjectTypeId         String?     @map("to_object_type_id") @db.Uuid     // null = any
-  forwardName            String      @map("forward_name")
-  inverseName            String      @map("inverse_name")
-  description            String      @default("")
-  cardinality            Cardinality
-  onDelete               OnDelete    @default(unlink) @map("on_delete")
-  edgeAttributes         Json        @default("[]") @map("edge_attributes")  // AttributeSpec[] for link.data
-  projectionAttributeSlug String?    @map("projection_attribute_slug")      // set when backing a record_reference attribute
-  isSystem               Boolean     @default(false) @map("is_system")
-  archivedAt             DateTime?   @map("archived_at")
-  createdAt              DateTime    @default(now()) @map("created_at")
-  updatedAt              DateTime    @updatedAt @map("updated_at")
-  fromObjectType         ObjectType? @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
-  toObjectType           ObjectType? @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
-  links                  RecordLink[]
+  id                      String       @id @default(uuid()) @db.Uuid
+  organizationId          String       @map("organization_id") @db.Uuid
+  teamId                  String       @map("team_id") @db.Uuid
+  slug                    String
+  fromObjectTypeId        String?      @map("from_object_type_id") @db.Uuid // null = any
+  toObjectTypeId          String?      @map("to_object_type_id") @db.Uuid // null = any
+  forwardName             String       @map("forward_name")
+  inverseName             String       @map("inverse_name")
+  description             String       @default("")
+  cardinality             Cardinality
+  onDelete                OnDelete     @default(unlink) @map("on_delete")
+  edgeAttributes          Json         @default("[]") @map("edge_attributes") // AttributeSpec[] for link.data
+  projectionAttributeSlug String?      @map("projection_attribute_slug") // set when backing a record_reference attribute
+  isSystem                Boolean      @default(false) @map("is_system")
+  archivedAt              DateTime?    @map("archived_at")
+  createdAt               DateTime     @default(now()) @map("created_at")
+  updatedAt               DateTime     @updatedAt @map("updated_at")
+  fromObjectType          ObjectType?  @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
+  toObjectType            ObjectType?  @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
+  links                   RecordLink[]
 
   @@unique([organizationId, teamId, slug])
   @@map("relation_types")
 }
 
+model MatchingRuleGeneration {
+  id               String                      @id @default(uuid()) @db.Uuid
+  organizationId   String                      @map("organization_id") @db.Uuid
+  teamId           String                      @map("team_id") @db.Uuid
+  objectTypeId     String                      @map("object_type_id") @db.Uuid
+  state            MatchingRuleGenerationState
+  fingerprint      String
+  backfillJobId    String?                     @unique @map("backfill_job_id") @db.Uuid
+  backfillAttempt  Int                         @default(0) @map("backfill_attempt")
+  bootstrapJobId   String?                     @unique @map("bootstrap_job_id") @db.Uuid
+  bootstrapAttempt Int                         @default(0) @map("bootstrap_attempt")
+  processedRecords Int                         @default(0) @map("processed_records")
+  totalRecords     Int?                        @map("total_records")
+  collisionGroups  Int                         @default(0) @map("collision_groups")
+  collisionRecords Int                         @default(0) @map("collision_records")
+  keysReadyAt      DateTime?                   @map("keys_ready_at")
+  requestId        String?                     @map("request_id")
+  provenance       Json?                       @map("provenance")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  activatedAt      DateTime?                   @map("activated_at")
+  objectType       ObjectType                  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  rules            MatchingRule[]
+
+  @@index([organizationId, teamId])
+  @@index([objectTypeId, state])
+  @@map("matching_rule_generations")
+}
+
 model MatchingRule {
-  id             String      @id @default(uuid()) @db.Uuid
-  organizationId String      @map("organization_id") @db.Uuid
-  teamId         String      @map("team_id") @db.Uuid
-  objectTypeId   String      @map("object_type_id") @db.Uuid
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @map("organization_id") @db.Uuid
+  teamId         String                 @map("team_id") @db.Uuid
+  objectTypeId   String                 @map("object_type_id") @db.Uuid
+  generationId   String                 @map("generation_id") @db.Uuid
   position       Int
-  attributeSlugs String[]    @map("attribute_slugs")
+  attributeSlugs String[]               @map("attribute_slugs")
   method         MatchMethod
   threshold      Float?
   action         MatchAction
-  createdAt      DateTime    @default(now()) @map("created_at")
-  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  createdAt      DateTime               @default(now()) @map("created_at")
+  generation     MatchingRuleGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  objectType     ObjectType             @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  blockKeys      RecordMatchKey[]
+  lookupKeys     RecordMatchLookupKey[]
 
-  @@index([objectTypeId, position])
+  @@unique([generationId, position])
+  @@index([organizationId, teamId])
+  @@index([objectTypeId, generationId, position])
   @@map("matching_rules")
 }
 
 // ───────────────────────── data ─────────────────────────
 
 model Record {
-  id             String     @id @default(uuid()) @db.Uuid
-  organizationId String     @map("organization_id") @db.Uuid
-  teamId         String     @map("team_id") @db.Uuid
-  objectTypeId   String     @map("object_type_id") @db.Uuid
-  data           Json       @default("{}")
-  displayName    String     @default("") @map("display_name")
-  ownerType      ActorType? @map("owner_type")
-  ownerId        String?    @map("owner_id")
+  id                String                  @id @default(uuid()) @db.Uuid
+  organizationId    String                  @map("organization_id") @db.Uuid
+  teamId            String                  @map("team_id") @db.Uuid
+  objectTypeId      String                  @map("object_type_id") @db.Uuid
+  data              Json                    @default("{}")
+  displayName       String                  @default("") @map("display_name")
+  ownerType         ActorType?              @map("owner_type")
+  ownerId           String?                 @map("owner_id")
   // Per-record visibility (DATA, not policy — deepsignal policy-asks §1):
   // team (default) = tenant policy applies; users = only the humans in
   // record_visibility_grants (plus the creator); private = the creating
   // on_behalf_of human only. Evaluated BEFORE policy on every read and write;
   // unlisted principals get NOT_FOUND. Admins are NOT exempt — the one
   // recovery path is an owner-only, approval-gated visibility change.
-  visibility     Visibility @default(team)
-  createdOnBehalfOf String? @map("created_on_behalf_of")
+  visibility        Visibility              @default(team)
+  createdOnBehalfOf String?                 @map("created_on_behalf_of")
   // Declared origin class of the data (set-once, caller-supplied); checked
   // against Team.rejectedOrigins at write.
-  origin         String?
+  origin            String?
   // Set by crm_record_erase: data scrubbed, tombstone retained (§4d).
-  erasedAt       DateTime?  @map("erased_at")
-  version        Int        @default(1)
-  lastActivityAt DateTime?  @map("last_activity_at")
+  erasedAt          DateTime?               @map("erased_at")
+  version           Int                     @default(1)
+  lastActivityAt    DateTime?               @map("last_activity_at")
   // Transitive redirect pointer: merging B into C re-points every row whose
   // merged_into_id = B to C, so reads stay one hop (review M4). Deliberately
   // no FK: the survivor may be hard-deleted by retention after the loser.
-  mergedIntoId   String?    @map("merged_into_id") @db.Uuid
-  deletedAt      DateTime?  @map("deleted_at")
-  createdByType  ActorType  @map("created_by_type")
-  createdById    String     @map("created_by_id")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  updatedAt      DateTime   @updatedAt @map("updated_at")
-  objectType     ObjectType @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
-  linksFrom      RecordLink[] @relation("LinkFrom")
-  linksTo        RecordLink[] @relation("LinkTo")
-  changes        RecordChange[]
-  uniqueKeys     RecordUniqueKey[]
-  search         RecordSearch?
-  matchKeys      RecordMatchKey[]
-  visibilityGrants RecordVisibilityGrant[]
-  listEntries    ListEntry[]
+  mergedIntoId      String?                 @map("merged_into_id") @db.Uuid
+  deletedAt         DateTime?               @map("deleted_at")
+  createdByType     ActorType               @map("created_by_type")
+  createdById       String                  @map("created_by_id")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+  objectType        ObjectType              @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  linksFrom         RecordLink[]            @relation("LinkFrom")
+  linksTo           RecordLink[]            @relation("LinkTo")
+  changes           RecordChange[]
+  uniqueKeys        RecordUniqueKey[]
+  search            RecordSearch?
+  matchKeys         RecordMatchKey[]
+  matchLookupKeys   RecordMatchLookupKey[]
+  visibilityGrants  RecordVisibilityGrant[]
+  listEntries       ListEntry[]
 
   @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
   @@index([organizationId, teamId, objectTypeId, lastActivityAt])
   @@index([mergedIntoId])
   @@map("records")
 }
+
 // Added by raw SQL in the same migration (Prisma cannot express them):
 //   CREATE INDEX records_data_gin ON records USING gin (data jsonb_path_ops);
 //   CREATE INDEX records_display_name_trgm ON records USING gin (display_name gin_trgm_ops);
@@ -418,6 +460,7 @@ model RecordLink {
   @@index([organizationId, teamId, relationTypeId])
   @@map("record_links")
 }
+
 // Raw SQL: CREATE UNIQUE INDEX record_links_active_unique
 //   ON record_links (relation_type_id, from_record_id, to_record_id) WHERE active_until IS NULL;
 // Raw SQL: CREATE UNIQUE INDEX record_links_active_position_unique
@@ -450,18 +493,37 @@ model RecordUniqueKey {
 /// not a shadow key inside records.data — is where normalized matching state
 /// lives, so redaction of `data` can never leak it (review S5.2).
 model RecordMatchKey {
-  id             String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  teamId         String @map("team_id") @db.Uuid
-  objectTypeId   String @map("object_type_id") @db.Uuid
-  rulePosition   Int    @map("rule_position")
-  normalizedHash String @map("normalized_hash")
-  recordId       String @map("record_id") @db.Uuid
-  record         Record @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  matchingRuleId String       @map("matching_rule_id") @db.Uuid
+  normalizedHash String       @map("normalized_hash")
+  recordId       String       @map("record_id") @db.Uuid
+  matchingRule   MatchingRule @relation(fields: [matchingRuleId], references: [id], onDelete: Cascade)
+  record         Record       @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
-  @@unique([objectTypeId, rulePosition, normalizedHash])
+  @@unique([matchingRuleId, normalizedHash])
+  @@index([matchingRuleId, recordId])
   @@index([recordId])
+  @@index([organizationId, teamId])
   @@map("record_match_keys")
+}
+
+model RecordMatchLookupKey {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  matchingRuleId String       @map("matching_rule_id") @db.Uuid
+  normalizedHash String       @map("normalized_hash")
+  recordId       String       @map("record_id") @db.Uuid
+  matchingRule   MatchingRule @relation(fields: [matchingRuleId], references: [id], onDelete: Cascade)
+  record         Record       @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([matchingRuleId, normalizedHash, recordId])
+  @@index([matchingRuleId, normalizedHash])
+  @@index([recordId])
+  @@index([organizationId, teamId])
+  @@map("record_match_lookup_keys")
 }
 
 /// Explicit principal list for visibility = users. Grants name HUMANS (UOA
@@ -483,9 +545,9 @@ model RecordVisibilityGrant {
 /// that a person objected (deepsignal policy-asks §3). Rows hold NO readable
 /// personal data — only sha-256 hashes of normalized structural facts.
 model SuppressionEntry {
-  id             String            @id @default(uuid()) @db.Uuid
-  organizationId String            @map("organization_id") @db.Uuid
-  teamId         String            @map("team_id") @db.Uuid
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  teamId         String             @map("team_id") @db.Uuid
   kind           SuppressionKind
   // PECR routing is per channel: an address lawful for post may be suppressed
   // for email. 'all' suppresses every channel (R7).
@@ -493,21 +555,21 @@ model SuppressionEntry {
   // sha256hex(kind + '\x1f' + normalized value). Normalisations are pinned
   // byte-exactly in §4d — clients pre-filtering against crm_suppression_list
   // hashes must reproduce them.
-  keyHash        String            @map("key_hash")
+  keyHash        String             @map("key_hash")
   reason         SuppressionReason
   // Queryable refinement (opt_out, not_interested, complaint, existing_client…);
   // `note` is prose and not queryable.
-  subReason      String?           @map("sub_reason")
+  subReason      String?            @map("sub_reason")
   // Time-boxed suppression ("not interested" ⇒ 12 months). NEVER allowed on
   // reason objection|erasure — those are permanent. Expired entries answer
   // suppressed:false and are pruned by retention.
-  expiresAt      DateTime?         @map("expires_at")
+  expiresAt      DateTime?          @map("expires_at")
   note           String?
-  sourceRecordId String?           @map("source_record_id") @db.Uuid
-  createdByType  ActorType         @map("created_by_type")
-  createdById    String            @map("created_by_id")
-  onBehalfOf     String?           @map("on_behalf_of")
-  createdAt      DateTime          @default(now()) @map("created_at")
+  sourceRecordId String?            @map("source_record_id") @db.Uuid
+  createdByType  ActorType          @map("created_by_type")
+  createdById    String             @map("created_by_id")
+  onBehalfOf     String?            @map("on_behalf_of")
+  createdAt      DateTime           @default(now()) @map("created_at")
 
   @@unique([teamId, kind, keyHash, channel])
   @@index([organizationId, teamId])
@@ -515,29 +577,29 @@ model SuppressionEntry {
 }
 
 model RecordChange {
-  id             String     @id @default(uuid()) @db.Uuid
-  organizationId String     @map("organization_id") @db.Uuid
-  teamId         String     @map("team_id") @db.Uuid
+  id               String     @id @default(uuid()) @db.Uuid
+  organizationId   String     @map("organization_id") @db.Uuid
+  teamId           String     @map("team_id") @db.Uuid
   // Null exactly when kind = schema_change (enforced by a raw-SQL check
   // constraint). Link/unlink ops write ONE ROW PER ENDPOINT sharing group_id,
   // so both records' timelines and object-type-filtered feeds see the event
   // (review M2/M3).
-  recordId       String?    @map("record_id") @db.Uuid
-  groupId        String?    @map("group_id") @db.Uuid
-  kind           ChangeKind
-  attributeSlug  String?    @map("attribute_slug")
-  relationTypeId String?    @map("relation_type_id") @db.Uuid
-  linkId         String?    @map("link_id") @db.Uuid
-  oldValue       Json?      @map("old_value")
-  newValue       Json?      @map("new_value")
-  snapshot       Json?                                   // full pre-image for merge/delete
-  actorType      ActorType  @map("actor_type")
-  actorId        String     @map("actor_id")
-  onBehalfOf     String?    @map("on_behalf_of")          // UOA user id
-  runId          String?    @map("run_id")
-  toolCallId     String?    @map("tool_call_id")
-  requestId      String     @map("request_id")
-  reason         String?
+  recordId         String?    @map("record_id") @db.Uuid
+  groupId          String?    @map("group_id") @db.Uuid
+  kind             ChangeKind
+  attributeSlug    String?    @map("attribute_slug")
+  relationTypeId   String?    @map("relation_type_id") @db.Uuid
+  linkId           String?    @map("link_id") @db.Uuid
+  oldValue         Json?      @map("old_value")
+  newValue         Json?      @map("new_value")
+  snapshot         Json? // full pre-image for merge/delete
+  actorType        ActorType  @map("actor_type")
+  actorId          String     @map("actor_id")
+  onBehalfOf       String?    @map("on_behalf_of") // UOA user id
+  runId            String?    @map("run_id")
+  toolCallId       String?    @map("tool_call_id")
+  requestId        String     @map("request_id")
+  reason           String?
   // The record's version immediately after this change applied — the field
   // crm_record_at derives `version_at` from. Non-null on EVERY row: record
   // rows carry the record's post-write version (paired link/unlink rows each
@@ -545,15 +607,15 @@ model RecordChange {
   // carry the tenant's current schema version (teams.schema_version) — never
   // a null or sentinel. Set at change-intent formation, before seq
   // allocation (§4 step 12).
-  resultingVersion Int      @map("resulting_version")
+  resultingVersion Int        @map("resulting_version")
   // Allocated from teams.feed_seq (commit-ordered, per tenant) as a block
   // BEFORE these rows are inserted, so change rows are written with a final
   // non-null seq in one insert — never allocated at insert time (see Team).
-  seq            BigInt
-  occurredAt     DateTime   @default(now()) @map("occurred_at")
+  seq              BigInt
+  occurredAt       DateTime   @default(now()) @map("occurred_at")
   // Cascade means retention hard-delete of a record removes its change rows;
   // the feed durability bound this implies is documented in events.md §2.
-  record         Record?    @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  record           Record?    @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
   @@unique([teamId, seq])
   @@index([recordId, occurredAt(sort: Desc)])
@@ -561,23 +623,25 @@ model RecordChange {
   @@index([organizationId, teamId, attributeSlug, occurredAt])
   @@map("record_changes")
 }
+
 // Raw SQL: ALTER TABLE record_changes ADD CONSTRAINT record_changes_schema_kind
 //   CHECK ((kind = 'schema') = (record_id IS NULL));
 
 model RecordSearch {
-  recordId       String                      @id @map("record_id") @db.Uuid
-  organizationId String                      @map("organization_id") @db.Uuid
-  teamId         String                      @map("team_id") @db.Uuid
-  objectTypeId   String                      @map("object_type_id") @db.Uuid
+  recordId       String                       @id @map("record_id") @db.Uuid
+  organizationId String                       @map("organization_id") @db.Uuid
+  teamId         String                       @map("team_id") @db.Uuid
+  objectTypeId   String                       @map("object_type_id") @db.Uuid
   content        String
   embedding      Unsupported("vector(1024)")?
-  embeddingModel String?                     @map("embedding_model")
-  indexedAt      DateTime                    @default(now()) @map("indexed_at")
-  record         Record                      @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  embeddingModel String?                      @map("embedding_model")
+  indexedAt      DateTime                     @default(now()) @map("indexed_at")
+  record         Record                       @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, teamId, objectTypeId])
   @@map("record_search")
 }
+
 // Raw SQL:
 //   ALTER TABLE record_search ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
 //   CREATE INDEX record_search_tsv ON record_search USING gin (tsv);
@@ -594,7 +658,7 @@ model List {
   slug           String
   name           String
   description    String      @default("")
-  objectTypeId   String?     @map("object_type_id") @db.Uuid   // null = mixed
+  objectTypeId   String?     @map("object_type_id") @db.Uuid // null = mixed
   createdByType  ActorType   @map("created_by_type")
   createdById    String      @map("created_by_id")
   createdAt      DateTime    @default(now()) @map("created_at")
@@ -644,20 +708,20 @@ model View {
 // ───────────────────────── policy, approvals, audit ─────────────────────────
 
 model PolicyRule {
-  id             String             @id @default(uuid()) @db.Uuid
-  organizationId String             @map("organization_id") @db.Uuid
-  teamId         String             @map("team_id") @db.Uuid
-  scope          PolicyScope
-  scopeId        String             @map("scope_id")
-  resourceType   PolicyResourceType @map("resource_type")
-  action         PolicyAction
-  effect         PolicyEffect
-  priority       Int                @default(0)
-  conditions     Json?
-  requiresApproval Boolean          @default(false) @map("requires_approval")
-  createdById    String             @map("created_by_id")
-  createdAt      DateTime           @default(now()) @map("created_at")
-  bindings       PolicyBinding[]
+  id               String             @id @default(uuid()) @db.Uuid
+  organizationId   String             @map("organization_id") @db.Uuid
+  teamId           String             @map("team_id") @db.Uuid
+  scope            PolicyScope
+  scopeId          String             @map("scope_id")
+  resourceType     PolicyResourceType @map("resource_type")
+  action           PolicyAction
+  effect           PolicyEffect
+  priority         Int                @default(0)
+  conditions       Json?
+  requiresApproval Boolean            @default(false) @map("requires_approval")
+  createdById      String             @map("created_by_id")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  bindings         PolicyBinding[]
 
   @@index([organizationId, teamId, resourceType, action, scopeId, priority])
   @@map("policy_rules")
@@ -666,7 +730,7 @@ model PolicyRule {
 model PolicyBinding {
   id           String     @id @default(uuid()) @db.Uuid
   policyRuleId String     @map("policy_rule_id") @db.Uuid
-  actorType    String     @map("actor_type")   // human | agent | role
+  actorType    String     @map("actor_type") // human | agent | role
   actorId      String     @map("actor_id")
   policyRule   PolicyRule @relation(fields: [policyRuleId], references: [id], onDelete: Cascade)
 
@@ -676,27 +740,27 @@ model PolicyBinding {
 }
 
 model ApprovalRequest {
-  id                String         @id @default(uuid()) @db.Uuid
-  organizationId    String         @map("organization_id") @db.Uuid
-  teamId            String         @map("team_id") @db.Uuid
-  action            String                      // tool name; consumption is bound to it
-  resourceType      String         @map("resource_type")
-  resourceId        String?        @map("resource_id")
-  argumentsHash     String         @map("arguments_hash")
-  argumentsSnapshot Json           @map("arguments_snapshot")
-  requesterType     ActorType      @map("requester_type")
-  requesterId       String         @map("requester_id")
-  onBehalfOf        String         @map("on_behalf_of")
-  reason            String
-  status            ApprovalStatus @default(pending)
+  id                    String         @id @default(uuid()) @db.Uuid
+  organizationId        String         @map("organization_id") @db.Uuid
+  teamId                String         @map("team_id") @db.Uuid
+  action                String // tool name; consumption is bound to it
+  resourceType          String         @map("resource_type")
+  resourceId            String?        @map("resource_id")
+  argumentsHash         String         @map("arguments_hash")
+  argumentsSnapshot     Json           @map("arguments_snapshot")
+  requesterType         ActorType      @map("requester_type")
+  requesterId           String         @map("requester_id")
+  onBehalfOf            String         @map("on_behalf_of")
+  reason                String
+  status                ApprovalStatus @default(pending)
   // sha-256 of the bearer token (>= 128-bit CSPRNG, prefixed apr_); the raw
   // value is returned once inside requestState and never stored.
-  continuationTokenHash String     @unique @map("continuation_token_hash")
-  resolverUoaUserId String?        @map("resolver_uoa_user_id")
-  resolvedAt        DateTime?      @map("resolved_at")
-  resolutionNote    String?        @map("resolution_note")
-  expiresAt         DateTime       @map("expires_at")
-  createdAt         DateTime       @default(now()) @map("created_at")
+  continuationTokenHash String         @unique @map("continuation_token_hash")
+  resolverUoaUserId     String?        @map("resolver_uoa_user_id")
+  resolvedAt            DateTime?      @map("resolved_at")
+  resolutionNote        String?        @map("resolution_note")
+  expiresAt             DateTime       @map("expires_at")
+  createdAt             DateTime       @default(now()) @map("created_at")
 
   @@index([organizationId, teamId, status])
   @@map("approval_requests")
@@ -762,22 +826,22 @@ model QueueJob {
 }
 
 model Webhook {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @map("organization_id") @db.Uuid
-  teamId         String    @map("team_id") @db.Uuid
+  id                   String   @id @default(uuid()) @db.Uuid
+  organizationId       String   @map("organization_id") @db.Uuid
+  teamId               String   @map("team_id") @db.Uuid
   // The human who registered it: events are visibility-filtered as this
   // principal (events.md §1). Deliveries pause when this principal has not
   // been seen (principal_last_seen) within DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS
   // and resume on their next authenticated call (R11).
-  subscribingUoaUserId String @map("subscribing_uoa_user_id")
-  url            String
-  events         String[]
-  secretCiphertext String  @map("secret_ciphertext")
-  active         Boolean   @default(true)
-  lastDeliveredSeq BigInt  @default(0) @map("last_delivered_seq")
-  lastError      String?   @map("last_error")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  subscribingUoaUserId String   @map("subscribing_uoa_user_id")
+  url                  String
+  events               String[]
+  secretCiphertext     String   @map("secret_ciphertext")
+  active               Boolean  @default(true)
+  lastDeliveredSeq     BigInt   @default(0) @map("last_delivered_seq")
+  lastError            String?  @map("last_error")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@unique([organizationId, teamId, url])
   @@map("webhooks")

@@ -1,6 +1,6 @@
 import { createDb, seedTenant } from '@deepcrm/db'
 import { afterAll, expect, it } from 'vitest'
-import { claimNext, complete, enqueue, fail } from '../../src/index.js'
+import { cancel, claimNext, complete, enqueue, fail } from '../../src/index.js'
 
 const url = process.env.DATABASE_URL
 if (url === undefined) throw new Error('DATABASE_URL is required')
@@ -31,6 +31,35 @@ it('enqueues through a transaction client with tenant payload and idempotency', 
   expect(duplicate).toEqual({ id: first.id, created: false })
   const row = await db.queueJob.findUniqueOrThrow({ where: { id: first.id } })
   expect(row).toMatchObject({ organizationId: tenant.organizationId, teamId: tenant.teamId, payload: input.payload })
+  await db.organization.delete({ where: { id: tenant.organizationId } })
+})
+
+it('completes and cancels through transaction clients', async () => {
+  const tenant = await seedTenant(db)
+  const completed = await enqueue(db, {
+    type: 'transaction_complete', payload: {},
+    organizationId: tenant.organizationId, teamId: tenant.teamId,
+  })
+  const claimed = await claimNext(db, 'worker', ['transaction_complete'])
+  expect(claimed?.id).toBe(completed.id)
+  await expect(db.$transaction((tx) => (
+    complete(tx, completed.id, 'worker', { terminal: true })
+  ))).resolves.toBe(true)
+
+  const cancelled = await enqueue(db, {
+    type: 'transaction_cancel', payload: {},
+    organizationId: tenant.organizationId, teamId: tenant.teamId,
+  })
+  await expect(db.$transaction((tx) => cancel(tx, cancelled.id, tenant))).resolves.toBe(true)
+  const rows = await db.queueJob.findMany({
+    where: { id: { in: [completed.id, cancelled.id] } },
+  })
+  expect(rows.find((row) => row.id === completed.id)).toMatchObject({
+    status: 'completed', result: { terminal: true },
+  })
+  expect(rows.find((row) => row.id === cancelled.id)).toMatchObject({
+    status: 'cancelled', result: null,
+  })
   await db.organization.delete({ where: { id: tenant.organizationId } })
 })
 

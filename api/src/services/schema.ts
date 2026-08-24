@@ -7,12 +7,15 @@ import {
   defineObjectType,
   defineRelationType,
   loadSchema,
+  cancelMatchingRules,
+  retryMatchingRules,
   setMatchingRules,
   updateAttribute,
   updateObjectType,
   updateRelationType,
   type LoadedObjectType,
   type LoadedSchema,
+  type MatchingBackfillIdentity,
   type SchemaTx,
 } from '@deepcrm/schema-engine'
 import type { AppDeps } from '../deps.js'
@@ -64,6 +67,18 @@ function actor(ctx: ActorContext) {
     id: ctx.actor.id,
     onBehalfOf: ctx.onBehalfOf.uoaUserId,
     requestId: ctx.requestId,
+  }
+}
+
+function matchingIdentity(ctx: ActorContext): MatchingBackfillIdentity {
+  if (ctx.provenance === null) {
+    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Matching rule arguments are invalid', {
+      issues: [{ path: 'provenance', message: 'runId, toolCallId and requestId are required' }],
+    })
+  }
+  return {
+    onBehalfOf: ctx.onBehalfOf,
+    auditMetadata: { app: ctx.app, actChain: ctx.actChain, provenance: ctx.provenance },
   }
 }
 
@@ -149,11 +164,31 @@ export const replaceSchemaMatchingRules = (
   deps: AppDeps,
   ctx: ActorContext,
   objectSlug: string,
-  rules: Parameters<typeof setMatchingRules>[4],
+  input: Parameters<typeof setMatchingRules>[4],
 ) => runSchemaDefine(
   deps,
   ctx,
-  (tx, author) => setMatchingRules(tx, ctx.tenant, author, objectSlug, rules),
+  (tx, author) => setMatchingRules(tx, ctx.tenant, author, objectSlug, input, matchingIdentity(ctx)),
+)
+
+export const retrySchemaMatchingRules = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  generationId: string,
+) => runSchemaDefine(
+  deps,
+  ctx,
+  (tx, author) => retryMatchingRules(tx, ctx.tenant, author, generationId, matchingIdentity(ctx)),
+)
+
+export const cancelSchemaMatchingRules = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  generationId: string,
+) => runSchemaDefine(
+  deps,
+  ctx,
+  (tx, author) => cancelMatchingRules(tx, ctx.tenant, author, generationId),
 )
 
 export function inSchemaTransaction<T>(

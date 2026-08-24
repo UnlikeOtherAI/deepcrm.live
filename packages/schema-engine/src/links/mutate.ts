@@ -4,15 +4,14 @@ import { attributeTypes } from "../attribute-types/index.js";
 import type { ChangeIntent } from "../records/changes.js";
 import { canonicalJsonValue, type JsonValue } from "../records/json.js";
 import { lockLinkTopology, lockRecords } from "../records/locks.js";
+import { refreshMatchingRecords } from "../matching/index.js";
 import type { LoadedRelationType, LoadedSchema } from "../schema/load.js";
 import type { RecordTx } from "../schema/tx.js";
-import type { LinkInput, LinkOperationResult } from "./types.js";
-import type { ResolvedLinkOperationHandler } from "./types.js";
+import type { LinkInput, LinkOperationResult, ResolvedLinkOperationHandler } from "./types.js";
 type ActiveRecord = {
   id: string; objectTypeId: string; version: number; deletedAt: Date | null; mergedIntoId: string | null
 };
 type ActiveLink = { id: string; fromRecordId: string; toRecordId: string; position: number | null; data: unknown }
-
 function relation(schema: LoadedSchema, slug: string): LoadedRelationType {
   const found = schema.relationTypesBySlug.get(slug);
   if (found === undefined || found.archivedAt !== null)
@@ -406,6 +405,7 @@ export async function linkRecords(
   const toVersion = versions.get(to.id);
   if (fromVersion === undefined || toVersion === undefined)
     throw new ServiceError(ErrorCode.INTERNAL, "Endpoint version is missing");
+  await refreshMatchingRecords(tx, ctx.tenant, schema, endpoints);
   return {
     link: {
       id: created.id,
@@ -485,6 +485,7 @@ export async function unlinkRecords(
   const first = links[0];
   if (first === undefined)
     throw new ServiceError(ErrorCode.INTERNAL, "Active link is missing");
+  await refreshMatchingRecords(tx, ctx.tenant, schema, endpoints);
   return {
     link: {
       id: first.id,

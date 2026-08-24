@@ -144,7 +144,7 @@ describe('schema service transaction and policy seam', () => {
       () => archiveSchemaAttribute(deps, ctx, 'account', 'name'),
       () => updateSchemaRelation(deps, ctx, 'account_contact', { description: 'Updated' }),
       () => archiveSchemaRelation(deps, ctx, 'account_contact'),
-      () => replaceSchemaMatchingRules(deps, ctx, 'account', []),
+      () => replaceSchemaMatchingRules(deps, ctx, 'account', { rules: [] }),
     ]
 
     for (const operation of operations) {

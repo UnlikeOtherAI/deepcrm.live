@@ -289,16 +289,18 @@ describe('schema metadata', () => {
       await defineObjectType(tx, value, actor(), objectInput('company'))
       await defineAttribute(tx, value, actor(), attributeInput('company', 'name'))
       await defineAttribute(tx, value, actor(), attributeInput('company', 'payload', 'json'))
-      await setMatchingRules(tx, value, actor(), 'company', [{ attributes: ['name'], method: 'exact', action: 'warn' }])
+      await setMatchingRules(tx, value, actor(), 'company', {
+        rules: [{ attributes: ['name'], method: 'exact', action: 'warn' }],
+      })
     })
-    await expect(db.$transaction((tx) => setMatchingRules(tx, value, actor(), 'company', [
-      { attributes: ['missing'], method: 'exact', action: 'warn' },
-    ]))).rejects.toBeDefined()
+    await expect(db.$transaction((tx) => setMatchingRules(tx, value, actor(), 'company', {
+      rules: [{ attributes: ['missing'], method: 'exact', action: 'warn' }],
+    }))).rejects.toBeDefined()
     const rules = await db.matchingRule.findMany({ where: { organizationId: value.organizationId, teamId: value.teamId } })
     expect(rules).toHaveLength(1)
     expect(rules[0]?.attributeSlugs).toEqual(['name'])
-    await expect(db.$transaction((tx) => setMatchingRules(tx, value, actor(), 'company', [
-      { attributes: ['payload'], method: 'normalized', action: 'block' },
-    ]))).rejects.toBeDefined()
+    await expect(db.$transaction((tx) => setMatchingRules(tx, value, actor(), 'company', {
+      rules: [{ attributes: ['payload'], method: 'normalized', action: 'block' }],
+    }))).rejects.toBeDefined()
   })
 })

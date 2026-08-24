@@ -1,19 +1,9 @@
 import { z } from 'zod'
 import { SlugSchema, UuidSchema } from './ids.js'
+import { Candidate } from './matching.js'
 
 const Slug = SlugSchema
 const Uuid = UuidSchema
-
-const Candidate = z.object({
-  record: z.object({ id: Uuid, object_type: Slug, display_name: z.string() }),
-  rule_position: z.number().int().nullable(),
-  evidence: z.array(z.object({
-    kind: z.enum(['unique', 'exact', 'normalized', 'fuzzy', 'semantic']),
-    attribute: Slug.nullable(),
-    value: z.unknown(),
-    score: z.number().optional(),
-  })),
-})
 
 export const ErrorCode = {
   POLICY_DENIED: 'POLICY_DENIED', APPROVAL_REQUIRED: 'APPROVAL_REQUIRED',

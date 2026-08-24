@@ -4,8 +4,8 @@ import { join } from 'node:path'
 const roots = ['api/src', 'worker/src', 'packages/schema-engine/src']
 
 const callPattern = new RegExp(
-  'prisma\\.(record|recordLink|recordChange|recordUniqueKey|recordMatchKey|recordSearch|objectType|' +
-    'attribute|relationType|matchingRule|list|listEntry|view|policyRule|policyBinding|approvalRequest|' +
+  'prisma\\.(record|recordLink|recordChange|recordUniqueKey|recordMatchKey|recordMatchLookupKey|recordSearch|objectType|' +
+    'attribute|relationType|matchingRule|matchingRuleGeneration|list|listEntry|view|policyRule|policyBinding|approvalRequest|' +
     'webhook|idempotencyReplay)\\.(findMany|findFirst|findUnique|count|aggregate|updateMany|deleteMany)\\(',
 )
 

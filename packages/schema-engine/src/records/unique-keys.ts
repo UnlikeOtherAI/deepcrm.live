@@ -18,14 +18,6 @@ export function normalizedAttributeValue(attribute: LoadedAttribute, value: Json
   return type.normalize(value, attribute.config) ?? canonicalJson(value)
 }
 
-function normalizedStoredValue(attribute: LoadedAttribute, value: JsonValue): string {
-  if (!attribute.isMulti) return normalizedAttributeValue(attribute, value)
-  if (!Array.isArray(value)) {
-    throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Stored multi attribute is not an array')
-  }
-  return canonicalJson(value.map((item) => normalizedAttributeValue(attribute, item)))
-}
-
 function normalizedValues(
   value: JsonValue | undefined, multi: boolean, normalize: (value: unknown) => string | null,
 ): string[] {
@@ -117,65 +109,5 @@ export async function syncUniqueKeys(
       if (conflict !== null) throw duplicate(key.attributeSlug, conflict)
     }
     throw error
-  }
-}
-
-export async function syncMatchKeys(
-  tx: RecordTx,
-  schema: LoadedSchema,
-  objectType: LoadedObjectType,
-  recordId: string,
-  data: Record<string, JsonValue>,
-): Promise<void> {
-  await tx.recordMatchKey.deleteMany({
-    where: { organizationId: objectType.organizationId, teamId: schema.teamId, recordId },
-  })
-  for (const rule of schema.matchingRulesByObjectTypeId.get(objectType.id) ?? []) {
-    if (rule.action !== 'block') continue
-    const rawValues = rule.attributeSlugs.map((slug) => data[slug])
-    if (rawValues.some((value) => value === undefined)) continue
-    const values = rawValues.map((value, index) => {
-      const slug = rule.attributeSlugs[index]
-      const attribute = slug === undefined ? undefined : schema.attributesByObjectTypeId.get(objectType.id)?.get(slug)
-      if (attribute === undefined || value === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema metadata is inconsistent')
-      return normalizedStoredValue(attribute, value)
-    })
-    const normalizedHash = keyHash(values.join('\x1f'))
-    await lockKeys(tx, schema.teamId, [`match:${rule.position}:${normalizedHash}`])
-    await tx.$executeRaw`SAVEPOINT match_key_insert`
-    try {
-      await tx.recordMatchKey.create({
-        data: {
-          organizationId: objectType.organizationId,
-          teamId: schema.teamId,
-          objectTypeId: objectType.id,
-          rulePosition: rule.position,
-          normalizedHash,
-          recordId,
-        },
-      })
-      await tx.$executeRaw`RELEASE SAVEPOINT match_key_insert`
-    } catch (error) {
-      await tx.$executeRaw`ROLLBACK TO SAVEPOINT match_key_insert`
-      if (!uniqueViolation(error)) throw error
-      const attribute = rule.attributeSlugs[0]
-      if (attribute === undefined) {
-        throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Matching rule has no attribute descriptor')
-      }
-      const conflict = await tx.recordMatchKey.findFirst({
-        where: {
-          organizationId: objectType.organizationId,
-          teamId: schema.teamId,
-          objectTypeId: objectType.id,
-          rulePosition: rule.position,
-          normalizedHash,
-        },
-        select: { recordId: true },
-      })
-      if (conflict === null) throw new ServiceError(ErrorCode.INTERNAL, 'Matching key conflict has no winner')
-      throw new ServiceError(ErrorCode.DUPLICATE_FOUND, 'A matching record already exists', {
-        attribute, record_id: conflict.recordId,
-      })
-    }
   }
 }

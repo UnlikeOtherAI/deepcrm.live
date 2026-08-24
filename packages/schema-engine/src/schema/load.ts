@@ -3,6 +3,7 @@ import {
   type Attribute,
   type Db,
   type MatchingRule,
+  type MatchingRuleGeneration,
   type ObjectType,
   type RelationType,
   type TenantRef,
@@ -14,7 +15,9 @@ export type LoadedObjectType = Readonly<ObjectType & {
   attributes: readonly LoadedAttribute[]
 }>
 export type LoadedRelationType = Readonly<RelationType>
-export type LoadedMatchingRule = Readonly<MatchingRule>
+export type LoadedMatchingRule = Readonly<MatchingRule & {
+  generation: Pick<MatchingRuleGeneration, 'id' | 'state' | 'keysReadyAt' | 'backfillAttempt' | 'backfillJobId'>
+}>
 
 export type LoadedSchema = Readonly<{
   teamId: string
@@ -22,6 +25,7 @@ export type LoadedSchema = Readonly<{
   objectTypes: readonly LoadedObjectType[]
   relationTypes: readonly LoadedRelationType[]
   matchingRules: readonly LoadedMatchingRule[]
+  replacementMatchingRules: readonly LoadedMatchingRule[]
   objectTypesBySlug: ReadonlyMap<string, LoadedObjectType>
   objectTypesById: ReadonlyMap<string, LoadedObjectType>
   attributesById: ReadonlyMap<string, LoadedAttribute>
@@ -30,6 +34,7 @@ export type LoadedSchema = Readonly<{
   relationTypesBySlug: ReadonlyMap<string, LoadedRelationType>
   relationTypesById: ReadonlyMap<string, LoadedRelationType>
   matchingRulesByObjectTypeId: ReadonlyMap<string, readonly LoadedMatchingRule[]>
+  replacementMatchingRulesByObjectTypeId: ReadonlyMap<string, readonly LoadedMatchingRule[]>
   backingRelationsByAttributeId: ReadonlyMap<string, LoadedRelationType>
   resolveBackingRelation: (
     objectTypeSlug: string,
@@ -41,7 +46,7 @@ type TeamVersion = { id: string; schemaVersion: number }
 type MetadataRows = {
   objectTypes: Array<ObjectType & { attributes: Attribute[] }>
   relationTypes: RelationType[]
-  matchingRules: MatchingRule[]
+  matchingRules: Array<MatchingRule & { generation: MatchingRuleGeneration }>
 }
 export type SchemaLoadSource = {
   readVersion: (tenant: TenantRef) => Promise<TeamVersion | null>
@@ -189,7 +194,11 @@ function tenantError(): ServiceError {
   return new ServiceError(ErrorCode.TENANT_MISMATCH, 'Tenant does not exist')
 }
 
-function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
+function buildSchema(
+  team: TeamVersion,
+  rows: MetadataRows,
+  bootstrapGenerationId: string | undefined = undefined,
+): LoadedSchema {
   const copied = structuredClone(rows)
   freezeDeep(copied)
   const objectTypes: readonly LoadedObjectType[] = Object.freeze(copied.objectTypes.map(
@@ -199,7 +208,30 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
     }),
   ))
   const relationTypes: readonly LoadedRelationType[] = copied.relationTypes
-  const matchingRules: readonly LoadedMatchingRule[] = copied.matchingRules
+  const allMatchingRules: readonly LoadedMatchingRule[] = copied.matchingRules
+  const matchingRules = Object.freeze(allMatchingRules.filter((rule) => rule.generation.state === 'active'))
+  const replacementMatchingRules = Object.freeze(allMatchingRules.filter((rule) => (
+    rule.generation.state === 'pending_backfill' || rule.generation.state === 'collision_blocked'
+  )))
+  if (
+    bootstrapGenerationId !== undefined
+    && !matchingRules.some((rule) => rule.generation.id === bootstrapGenerationId)
+  ) {
+    throw schemaConflict('matching_bootstrap_generation_not_active')
+  }
+  for (const rule of matchingRules) {
+    const trustedBootstrapRule = (
+      rule.generation.id === bootstrapGenerationId
+      && rule.generation.state === 'active'
+    )
+    if (
+      (rule.method === 'exact' || rule.method === 'normalized')
+      && rule.generation.keysReadyAt === null
+      && !trustedBootstrapRule
+    ) {
+      throw schemaConflict('matching_keys_not_ready')
+    }
+  }
   const objectTypesBySlug = new ImmutableMap(objectTypes.map(
     (objectType) => pair(objectType.slug, objectType),
   ))
@@ -228,6 +260,10 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
   const matchingRulesByObjectTypeId = new ImmutableMap(objectTypes.map((objectType) => pair(
     objectType.id,
     Object.freeze(matchingRules.filter((rule) => rule.objectTypeId === objectType.id)),
+  )))
+  const replacementMatchingRulesByObjectTypeId = new ImmutableMap(objectTypes.map((objectType) => pair(
+    objectType.id,
+    Object.freeze(replacementMatchingRules.filter((rule) => rule.objectTypeId === objectType.id)),
   )))
   const projections = new Map<string, LoadedRelationType>()
   for (const relationType of relationTypes) {
@@ -262,6 +298,7 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
     objectTypes,
     relationTypes,
     matchingRules,
+    replacementMatchingRules,
     objectTypesBySlug,
     objectTypesById,
     attributesById,
@@ -270,6 +307,7 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
     relationTypesBySlug,
     relationTypesById,
     matchingRulesByObjectTypeId,
+    replacementMatchingRulesByObjectTypeId,
     backingRelationsByAttributeId,
     resolveBackingRelation,
   }
@@ -279,19 +317,20 @@ function buildSchema(team: TeamVersion, rows: MetadataRows): LoadedSchema {
 export async function loadSchemaFromSource(
   source: SchemaLoadSource,
   tenant: TenantRef,
+  options: { bootstrapGenerationId?: string; useCache?: boolean } = {},
 ): Promise<LoadedSchema> {
   for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt += 1) {
     const before = await source.readVersion(tenant)
     if (before === null) throw tenantError()
     const key = cacheKey(before.id, before.schemaVersion)
-    const existing = cache.get(key)
+    const existing = options.useCache === false ? undefined : cache.get(key)
     if (existing !== undefined) return touchCached(key, existing)
     const rows = await source.readMetadata(tenant)
     const after = await source.readVersion(tenant)
     if (after === null) throw tenantError()
     if (after.id !== before.id || after.schemaVersion !== before.schemaVersion) continue
-    const loaded = buildSchema(before, rows)
-    cacheSchema(key, loaded)
+    const loaded = buildSchema(before, rows, options.bootstrapGenerationId)
+    if (options.useCache !== false) cacheSchema(key, loaded)
     return loaded
   }
   throw schemaConflict('schema_version_changed_during_load')
@@ -319,6 +358,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
         db.matchingRule.findMany({
           where: tenantWhere(target),
+          include: { generation: true },
           orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
         }),
       ])
@@ -326,4 +366,34 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
     },
   }
   return loadSchemaFromSource(source, tenant)
+}
+
+export async function loadSchemaForMatchingBootstrap(
+  db: Db,
+  tenant: TenantRef,
+  generationId: string,
+): Promise<LoadedSchema> {
+  const source: SchemaLoadSource = {
+    readVersion: (target) => db.team.findFirst({
+      where: { id: target.teamId, organizationId: target.organizationId },
+      select: { id: true, schemaVersion: true },
+    }),
+    readMetadata: async (target) => {
+      const activeWhere = { ...tenantWhere(target), archivedAt: null }
+      const [objectTypes, relationTypes, matchingRules] = await Promise.all([
+        db.objectType.findMany({
+          where: activeWhere,
+          include: { attributes: { where: tenantWhere(target), orderBy: { position: 'asc' } } },
+          orderBy: { slug: 'asc' },
+        }),
+        db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
+        db.matchingRule.findMany({
+          where: tenantWhere(target), include: { generation: true },
+          orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
+        }),
+      ])
+      return { objectTypes, relationTypes, matchingRules }
+    },
+  }
+  return loadSchemaFromSource(source, tenant, { bootstrapGenerationId: generationId, useCache: false })
 }
