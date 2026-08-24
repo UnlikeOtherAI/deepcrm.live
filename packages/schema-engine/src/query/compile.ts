@@ -44,6 +44,13 @@ function relation(schema: LoadedSchema, slug: string): LoadedRelationType {
 }
 function jsonParam(value: JsonValue): Prisma.Sql { return Prisma.sql`${canonicalJson(value)}::jsonb` }
 function parsed(attribute: LoadedAttribute, value: unknown): JsonValue {
+  if (attribute.type === 'select' || attribute.type === 'status') {
+    try {
+      return canonicalJsonValue(getAttributeType(attribute.type).normalize(value, attribute.config))
+    } catch {
+      failure('invalid_value')
+    }
+  }
   const result = getAttributeType(attribute.type).valueSchema(attribute.config).safeParse(value)
   if (!result.success) failure('invalid_value')
   return canonicalJsonValue(result.data)

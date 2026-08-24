@@ -9,25 +9,22 @@ import {
   setMatchingRules,
   setMatchingRulesBatch,
 } from './matching-rules.js'
-import type { AttributeInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
+import { enqueueAttributeEvolutionJobs, prepareAttributeEvolution } from './evolution.js'
+import type { AttributeInput, AttributeUpdateInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
 import type { SchemaTx } from './tx.js'
 type Tx = SchemaTx
 export type { AttributeInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
 type RelationUpdateInput = Partial<Omit<RelationInput, 'slug' | 'fromObjectType' | 'toObjectType'>>
 type StoredJsonValue = Prisma.InputJsonValue | typeof Prisma.JsonNull
-
 function schemaConflict(detail: string): ServiceError {
   return new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema conflicts with existing metadata', { detail })
 }
-
 function unknownObjectType(slug: string): ServiceError {
   return new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Object type is not active in this tenant', { slug })
 }
-
 function unknownAttribute(slug: string): ServiceError {
   return new ServiceError(ErrorCode.UNKNOWN_ATTRIBUTE, 'Attribute is not active in this tenant', { slug })
 }
-
 function isUniqueConstraint(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002'
 }
@@ -58,7 +55,6 @@ function audit(
     userAgent: null,
   })
 }
-
 export async function bumpSchemaVersion(tx: Tx, tenant: TenantRef): Promise<void> {
   const result = await tx.team.updateMany({
     where: { id: tenant.teamId, organizationId: tenant.organizationId },
@@ -66,7 +62,6 @@ export async function bumpSchemaVersion(tx: Tx, tenant: TenantRef): Promise<void
   })
   if (result.count !== 1) throw schemaConflict('tenant_not_found')
 }
-
 async function object(tx: Tx, tenant: TenantRef, slug: string) {
   const value = await tx.objectType.findFirst({ where: { ...tenantWhere(tenant), slug, archivedAt: null } })
   if (value === null) throw unknownObjectType(slug)
@@ -331,7 +326,7 @@ export async function updateAttribute(
   actor: AuditActor,
   objectSlug: string,
   slug: string,
-  input: Partial<AttributeInput>,
+  input: AttributeUpdateInput,
 ) {
   const objectType = await object(tx, tenant, objectSlug)
   const target = await tx.attribute.findFirst({
@@ -352,12 +347,21 @@ export async function updateAttribute(
     default_value: input.default_value,
   })
   const values = validateAttributeValue(merged)
+  const evolutionTarget = {
+    id: target.id,
+    slug: target.slug,
+    type: target.type,
+    config: target.config,
+    sensitivity: target.sensitivity,
+    objectTypeId: objectType.id,
+  }
+  const evolution = await prepareAttributeEvolution(tx, tenant, evolutionTarget, input, values.config)
   const updated = await tx.attribute.update({
     where: { id: target.id },
     data: {
       name: input.name,
       description: input.description,
-      config: values.config,
+      config: evolution.config,
       isRequired: input.is_required,
       isUnique: input.is_unique,
       isIndexed: input.is_indexed,
@@ -365,6 +369,7 @@ export async function updateAttribute(
       defaultValue: values.defaultValue,
     },
   })
+  await enqueueAttributeEvolutionJobs(tx, tenant, evolutionTarget, actor, 'update', evolution)
   await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'define', 'attribute', updated.id)
   return updated
@@ -384,6 +389,14 @@ export async function archiveAttribute(
   })
   if (target === null) throw unknownAttribute(slug)
   const archived = await tx.attribute.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
+  await enqueueAttributeEvolutionJobs(tx, tenant, {
+    id: target.id,
+    slug: target.slug,
+    type: target.type,
+    config: target.config,
+    sensitivity: target.sensitivity,
+    objectTypeId: objectType.id,
+  }, actor, 'archive', { keyRecompute: false, reindex: true })
   await bumpSchemaVersion(tx, tenant)
   await audit(tx, tenant, actor, 'archive', 'attribute', archived.id, reason ?? null)
   return archived

@@ -36,6 +36,8 @@ export const SelectOption = z.object({
   id: Slug,
   label: z.string().min(1).max(120),
   color: z.string().min(1).max(32).optional(),
+  archived: z.boolean().optional()
+    .describe('archived options remain readable/filterable for existing values but cannot be newly written'),
 })
 export const StatusOption = SelectOption.extend({
   category: z.enum(['open', 'won', 'lost', 'neutral']).describe('pipeline semantics of this stage'),

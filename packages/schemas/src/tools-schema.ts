@@ -74,6 +74,8 @@ export const CrmAttributeUpdate = {
     is_indexed: z.boolean().optional().describe('whether filtering and sorting are indexed'),
     sensitivity: Sensitivity.optional().describe('replacement data sensitivity'),
     default_value: z.unknown().optional().describe('replacement default value'),
+    recompute_keys: z.boolean().optional()
+      .describe('set true to enqueue the required key-recompute backfill for normalization-affecting config changes'),
   }),
   out: AttributeDetail,
 }

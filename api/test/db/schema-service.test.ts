@@ -1,4 +1,12 @@
-import { createDb, dropTenant, seedTenant, writeAudit, type PolicyAction, type PolicyEffect } from '@deepcrm/db'
+import {
+  createDb,
+  dropTenant,
+  seedTenant,
+  writeAudit,
+  type PolicyAction,
+  type PolicyEffect,
+  type PolicyResourceType,
+} from '@deepcrm/db'
 import { createProjectionLinkWriter, defineObjectType, FakeEmbedder } from '@deepcrm/schema-engine'
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -20,6 +28,8 @@ import {
   updateSchemaObject,
   updateSchemaRelation,
 } from '../../src/services/schema.js'
+import { createRecord, updateRecord } from '../../src/services/records.js'
+import { queryRecords } from '../../src/services/record-query.js'
 
 const databaseUrl = process.env.DATABASE_URL
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for schema service tests')
@@ -81,6 +91,27 @@ async function addSchemaRule(
       requiresApproval,
       createdById: 'test',
       bindings: { create: [{ actorType: 'role', actorId: 'member' }] },
+    },
+  })
+}
+
+async function addRule(
+  target: Tenant,
+  resourceType: PolicyResourceType,
+  action: PolicyAction,
+): Promise<void> {
+  await db.policyRule.create({
+    data: {
+      organizationId: target.organizationId,
+      teamId: target.teamId,
+      scope: 'team',
+      scopeId: target.teamId,
+      resourceType,
+      action,
+      effect: 'allow',
+      priority: 0,
+      bindings: { create: [{ actorType: 'role', actorId: 'member' }] },
+      createdById: 'test',
     },
   })
 }
@@ -378,5 +409,167 @@ describe('schema service transaction and policy seam', () => {
     await expect(getSchema(deps, ctx, 'missing')).rejects.toMatchObject({
       code: 'UNKNOWN_OBJECT_TYPE',
     })
+  })
+
+  it('archives referenced select options, rejects new writes, and keeps archived options filterable', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await addRule(target, 'schema', 'define')
+    await addRule(target, 'record', 'create')
+    await addRule(target, 'record', 'edit')
+    await addRule(target, 'record', 'view')
+    await addRule(target, 'attribute', 'view')
+    const objectType = await createFixtureObject(target, 'deal')
+    await db.attribute.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: objectType.id,
+        slug: 'stage',
+        name: 'Stage',
+        description: 'Deal stage',
+        type: 'select',
+        config: { options: [{ id: 'old', label: 'Old' }, { id: 'open', label: 'Open' }] },
+        isUnique: true,
+        isIndexed: true,
+        sensitivity: 'internal',
+        position: 0,
+      },
+    })
+    const created = await createRecord(deps, ctx, {
+      objectType: 'deal',
+      data: { stage: 'old' },
+      idempotencyKey: 'schema-select-old',
+    })
+
+    await expect(updateSchemaAttribute(deps, ctx, 'deal', 'stage', {
+      config: { options: [{ id: 'open', label: 'Open' }, { id: 'new', label: 'New' }] },
+    })).rejects.toMatchObject({ code: 'SCHEMA_CONFLICT', details: { detail: 'key_recompute_required' } })
+    await updateSchemaAttribute(deps, ctx, 'deal', 'stage', {
+      config: { options: [{ id: 'open', label: 'Open' }, { id: 'new', label: 'New' }] },
+      recomputeKeys: true,
+    })
+    await expect(db.attribute.findFirstOrThrow({
+      where: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: objectType.id,
+        slug: 'stage',
+      },
+    })).resolves.toMatchObject({
+      config: { options: expect.arrayContaining([{ id: 'old', label: 'Old', archived: true }]) },
+    })
+    await expect(updateRecord(deps, ctx, {
+      recordId: created.record.id,
+      data: { stage: 'old' },
+      idempotencyKey: 'schema-select-archived-write',
+    })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
+    await expect(queryRecords(deps, ctx, {
+      objectType: 'deal',
+      filter: { attribute: 'stage', op: 'eq', value: 'old' },
+      attributes: ['stage'],
+      limit: 10,
+    })).resolves.toMatchObject({
+      records: [expect.objectContaining({ id: created.record.id, data: { stage: 'old' } })],
+    })
+    await expect(db.queueJob.findFirst({
+      where: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        type: 'schema.key_recompute',
+      },
+    })).resolves.toMatchObject({ status: 'queued' })
+  })
+
+  it('grandfathers tightened text bounds until the attribute is touched', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await addRule(target, 'schema', 'define')
+    await addRule(target, 'record', 'create')
+    await addRule(target, 'record', 'edit')
+    const objectType = await createFixtureObject(target, 'note')
+    await db.attribute.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: objectType.id,
+        slug: 'body',
+        name: 'Body',
+        description: 'Note body',
+        type: 'text',
+        config: { maxLength: 20 },
+        sensitivity: 'internal',
+        position: 0,
+      },
+    })
+    await db.attribute.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: objectType.id,
+        slug: 'tag',
+        name: 'Tag',
+        description: 'Short tag',
+        type: 'text',
+        config: { maxLength: 20 },
+        sensitivity: 'internal',
+        position: 1,
+      },
+    })
+    const created = await createRecord(deps, ctx, {
+      objectType: 'note',
+      data: { body: 'grandfathered value', tag: 'old' },
+      idempotencyKey: 'schema-tighten-create',
+    })
+    await updateSchemaAttribute(deps, ctx, 'note', 'body', { config: { maxLength: 5 } })
+
+    await expect(updateRecord(deps, ctx, {
+      recordId: created.record.id,
+      data: { tag: 'new' },
+      idempotencyKey: 'schema-tighten-other',
+    })).resolves.toMatchObject({ record: { data: { body: 'grandfathered value', tag: 'new' } } })
+    await expect(updateRecord(deps, ctx, {
+      recordId: created.record.id,
+      data: { body: 'too long' },
+      idempotencyKey: 'schema-tighten-touch',
+    })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
+  })
+
+  it('queues reindex jobs when sensitivity is raised or an attribute with values is archived', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await addRule(target, 'schema', 'define')
+    await addRule(target, 'record', 'create')
+    const objectType = await createFixtureObject(target, 'contact')
+    await db.attribute.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        objectTypeId: objectType.id,
+        slug: 'note',
+        name: 'Note',
+        description: 'Searchable note',
+        type: 'text',
+        config: { maxLength: 100 },
+        sensitivity: 'internal',
+        position: 0,
+      },
+    })
+    await createRecord(deps, ctx, {
+      objectType: 'contact',
+      data: { note: 'search me' },
+      idempotencyKey: 'schema-reindex-create',
+    })
+    await updateSchemaAttribute(deps, ctx, 'contact', 'note', { sensitivity: 'confidential' })
+    await archiveSchemaAttribute(deps, ctx, 'contact', 'note')
+
+    await expect(db.queueJob.count({
+      where: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        type: 'record.reindex',
+        idempotencyKey: { startsWith: 'schema-reindex:' },
+      },
+    })).resolves.toBe(2)
   })
 })

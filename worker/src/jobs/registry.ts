@@ -7,6 +7,7 @@ import { BULK_ASSERT_JOB, createBulkAssertHandler } from './bulk-assert.js'
 import { BULK_EXPORT_JOB, createBulkExportHandler, type BulkExportConfig } from './bulk-export.js'
 import { CHANGE_DELIVER_JOB, createChangeDeliverHandler } from './change-deliver.js'
 import { MATCH_KEY_BACKFILL_JOB, matchKeyBackfillHandler } from './match-key-backfill.js'
+import { KEY_RECOMPUTE_JOB, keyRecomputeHandler } from './key-recompute.js'
 import { noop } from './noop.js'
 import {
   createRecordReindexHandler,
@@ -25,6 +26,7 @@ export type WorkerJobConfig = BulkExportConfig & RetentionConfig & {
 export const handlers: Record<string, JobHandler> = {
   noop,
   [MATCH_KEY_BACKFILL_JOB]: matchKeyBackfillHandler,
+  [KEY_RECOMPUTE_JOB]: keyRecomputeHandler,
 }
 
 export function createHandlers(

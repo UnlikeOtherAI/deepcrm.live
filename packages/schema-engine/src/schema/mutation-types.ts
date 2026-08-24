@@ -18,6 +18,7 @@ export type ObjectInput = {
 }
 
 export type AttributeInput = AttributeSpec & { objectType: string; isSystem?: boolean }
+export type AttributeUpdateInput = Partial<AttributeInput> & { recomputeKeys?: boolean }
 
 export type RelationInput = {
   slug: string

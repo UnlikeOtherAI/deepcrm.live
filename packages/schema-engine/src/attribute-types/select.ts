@@ -7,6 +7,7 @@ const optionSchema = z.object({
   id: slug,
   label: z.string().min(1).max(120),
   color: z.string().min(1).max(32).optional(),
+  archived: z.boolean().optional(),
 }).strict()
 
 const configSchema = z.object({
@@ -21,19 +22,21 @@ const configSchema = z.object({
   }
 })
 
-function selectedValue(config: unknown) {
+function selectedValue(config: unknown, includeArchived: boolean) {
   const parsedConfig = configSchema.parse(config)
-  const ids = new Set(parsedConfig.options.map((option) => option.id))
+  const ids = new Set(parsedConfig.options
+    .filter((option) => includeArchived || option.archived !== true)
+    .map((option) => option.id))
   return z.string().refine((value) => ids.has(value), 'must be a configured option id')
 }
 
 export const select: AttributeTypeDef = {
   type: 'select',
   configSchema,
-  valueSchema: selectedValue,
-  normalize: (value, config) => selectedValue(config).parse(value),
+  valueSchema: (config) => selectedValue(config, false),
+  normalize: (value, config) => selectedValue(config, true).parse(value),
   toSearchText: (value, config) => {
-    const id = selectedValue(config).parse(value)
+    const id = selectedValue(config, true).parse(value)
     const option = configSchema.parse(config).options.find((candidate) => candidate.id === id)
     return option?.label ?? id
   },

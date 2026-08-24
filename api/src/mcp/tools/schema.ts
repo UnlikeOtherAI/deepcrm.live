@@ -240,6 +240,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         is_indexed: args.is_indexed,
         sensitivity: args.sensitivity,
         default_value: args.default_value,
+        recomputeKeys: args.recompute_keys,
       })
       return jsonResult(presentAttribute(await latestSchema(deps, ctx), args.object_type, args.attribute))
     },
