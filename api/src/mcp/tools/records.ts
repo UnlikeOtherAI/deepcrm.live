@@ -1,13 +1,14 @@
 import {
   CrmRecordAssert, CrmRecordAt, CrmRecordCreate, CrmRecordDelete, CrmRecordGetInput,
   CrmRecordHistory, CrmRecordRestore, CrmRecordsQueryToolInput, CrmRecordUpdate, Filter,
-  CrmRecordsBulkAssert,
+  CrmRecordsBulkAssert, CrmRecordsCountToolInput, CrmRecordsGetMany,
   type ActorContext,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
+import { getManyRecords } from '../../services/record-collection.js'
 import { getRecord } from '../../services/record-read.js'
-import { queryRecords } from '../../services/record-query.js'
+import { countRecords, queryRecords } from '../../services/record-query.js'
 import { enqueueBulkAssert } from '../../services/bulk-assert.js'
 import {
   assertRecord, createRecord, deleteRecord, recordAt, recordHistory, restoreRecord, updateRecord,
@@ -98,6 +99,21 @@ export function registerRecordTools(
       sort: args.sort, attributes: args.attributes, includeTotal: args.include_total,
       cursor: args.cursor, limit: args.limit,
     })),
+  })
+  defineTool(server, {
+    name: 'crm_records_count',
+    description: 'Count visible records matching an exact structured filter. This shares crm_records_query policy and visibility rules and avoids pagination.',
+    input: CrmRecordsCountToolInput.shape,
+    handler: async (args) => jsonResult(await countRecords(deps, ctx, {
+      objectType: args.object_type,
+      filter: args.filter === undefined ? undefined : Filter.parse(args.filter),
+    })),
+  })
+  defineTool(server, {
+    name: 'crm_records_get_many',
+    description: 'Fetch up to 100 visible records by id in input order. Hidden, unavailable, and foreign-tenant ids are reported only as missing.',
+    input: CrmRecordsGetMany.in.shape,
+    handler: async (args) => jsonResult(await getManyRecords(deps, ctx, args.ids)),
   })
   defineTool(server, {
     name: 'crm_records_bulk_assert',

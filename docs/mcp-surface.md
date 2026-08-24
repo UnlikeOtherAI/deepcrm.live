@@ -80,7 +80,7 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 <!-- tools:start:2 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_schema_get` | Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by schema_version. | `{ object_type?: string }` | `crm://schema` body or one `ObjectTypeDetail` |
+| `crm_schema_get` | Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail. | `{ object_type?: string }` | `crm://schema` body or one `ObjectTypeDetail` |
 | `crm_object_type_define` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with crm_attribute_define. | `{ slug: string, singular_name: string, plural_name: string, description: string, icon?: string, attributes?: array, primary_attribute?: string }` | `ObjectTypeDetail` |
 | `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type: string, singular_name?: string, plural_name?: string, description?: string, icon?: string, primary_attribute?: string }` | `ObjectTypeDetail` |
 | `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type: string, reason?: string }` | `{ archived: true, records: n }` |
@@ -105,8 +105,8 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_record_assert` | Create or patch by a unique attribute for sync/import writes. Multiple multi-value matches return DUPLICATE_FOUND. Inline links are atomic. | `{ object_type: string, match_attribute: string, data: object, links?: array, owner?: object, reason?: string, idempotency_key?: string }` | `{ record, created: boolean, duplicates?: Candidate[] }` |
 | `crm_record_get` | Fetch one visible record by id or a unique attribute. include_links groups active related records; include_timeline returns recent activity. | `{ id?: string, object_type?: string, match_attribute?: string, value?: unknown, include_links?: boolean, include_timeline?: integer }` | `{ record, links?, timeline? }` |
 | `crm_records_query` | List visible records with exact structured filters, sort and opaque cursor. Use crm_record_get for a known record and crm_search for fuzzy text. | `{ object_type: string, filter?: object, sort?: array, attributes?: array, include_total?: boolean, cursor?: string, limit?: integer }` | `{ records, next_cursor, total? }` |
-| `crm_records_count` | Count records matching a filter — cheap and exact; use instead of paginating to count. | `{ object_type, filter? }` | `{ count }` |
-| `crm_records_get_many` | Fetch up to 100 records by id in one call. | `{ ids: [uuid] }` | `{ records, missing: [uuid] }` |
+| `crm_records_count` | Count visible records matching an exact structured filter. This shares crm_records_query policy and visibility rules and avoids pagination. | `{ object_type: string, filter?: object }` | `{ count }` |
+| `crm_records_get_many` | Fetch up to 100 visible records by id in input order. Hidden, unavailable, and foreign-tenant ids are reported only as missing. | `{ ids: array }` | `{ records, missing: [uuid] }` |
 | `crm_records_bulk_assert` | Queue 1–10,000 sync-safe record upserts by one unique attribute. Returns a Task immediately; poll tasks/get, then read tasks/result. Each row is independently reported. | `{ object_type: string, match_attribute: string, rows: array, reason?: string, idempotency_key?: string }` | `{ task: { taskId, status, ttl, createdAt, lastUpdatedAt, pollInterval?, statusMessage? } }`; `tasks/result` returns `{ created, updated, failed: [{ index, code, message }] }` in the original tool result |
 | `crm_record_delete` | Soft-delete a visible record and end links according to relation policy. Requires delete entitlement or approval. | `{ id: string, expected_version?: integer, reason?: string }` | `{ deleted: true }` |
 | `crm_record_restore` | Restore a soft-deleted record and recoverable links. Restore conflicts identify a current unique-key holder. | `{ id: string }` | `{ record }` |
@@ -129,13 +129,13 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 <!-- tools:start:5 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_list_create` | Create a curated list of records (any object type, or mixed) with optional per-entry attributes — e.g. "Q4 target accounts" with a `priority` per entry. | `{ slug, name, description?, object_type?, attributes?: AttributeSpec[] }` | `ListDetail` |
-| `crm_list_add` | Add records to a list with optional entry data. | `{ list, entries: [{ record_id, data? }] }` | `{ added: n }` |
-| `crm_list_remove` | Remove records from a list. | `{ list, record_ids }` | `{ removed: n }` |
-| `crm_list_entries` | Entries of a list with their records. | `{ list, cursor?, limit? }` | `{ entries: [{ entry, record }], next_cursor }` |
-| `crm_view_save` | Save a reusable query (filter + sort + attributes) for an object type. | `{ slug, name, object_type, filter, sort?, attributes?, description? }` | `ViewDetail` |
-| `crm_view_run` | Run a saved view. | `{ view, cursor?, limit? }` | same as `crm_records_query` |
-| `crm_view_delete` | Delete a saved view. | `{ view }` | `{ deleted: true }` |
+| `crm_list_create` | Create a curated single-object or mixed-record list with optional typed entry attributes. Entry metadata uses the same validation rules as record data. Errors: policy denial, unknown object type, or schema conflict. | `{ slug: string, name: string, description?: string, object_type?: string, attributes?: array }` | `ListDetail` |
+| `crm_list_add` | Add visible live records to a curated list. Data is validated against list attributes; existing memberships are unchanged and excluded from added. Errors: policy denial, NOT_FOUND, or invalid object type/data. | `{ list: string, entries: array }` | `{ added: n }` |
+| `crm_list_remove` | Remove visible record memberships from a curated list. Missing memberships are ignored. Errors: policy denial or NOT_FOUND for the list or a hidden/foreign record. | `{ list: string, record_ids: array }` | `{ removed: n }` |
+| `crm_list_entries` | Read a cursor page of list entries joined to visible, policy-permitted live records. Entry attributes and record data are redacted independently. Errors: policy denial, NOT_FOUND, or cursor mismatch. | `{ list: string, cursor?: string, limit?: integer }` | `{ entries: [{ entry, record }], next_cursor }` |
+| `crm_view_save` | Create or replace a reusable structured record query. Filters, sort keys and projected attributes are validated against the active schema. Exact replays are no-ops. Errors: policy denial or invalid query metadata. | `{ slug: string, name: string, object_type: string, filter: object, sort?: array, attributes?: array, description?: string }` | `ViewDetail` |
+| `crm_view_run` | Run a saved view with current row visibility, policy and attribute redaction. The opaque cursor is bound to the saved definition. Use crm_records_query for an ad hoc filter. Errors: policy denial, NOT_FOUND, or cursor mismatch. | `{ view: string, cursor?: string, limit?: integer }` | same as `crm_records_query` |
+| `crm_view_delete` | Delete a saved view by slug and invalidate the schema resource version. This does not delete records. Errors: policy denial or NOT_FOUND. | `{ view: string }` | `{ deleted: true }` |
 <!-- tools:end -->
 
 ## 6. Activities, timeline, tasks, pipeline

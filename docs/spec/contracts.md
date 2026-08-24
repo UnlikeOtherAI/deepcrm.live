@@ -155,6 +155,9 @@ export const MatchingRule = z.object({
   threshold: z.number().min(0.5).max(1).optional().describe('fuzzy only; trigram similarity'),
   action: z.enum(['block','warn']),
 })
+export const ViewSummary = z.object({
+  slug: Slug, name: z.string(), object_type: Slug,
+})
 export const SchemaSnapshot = z.object({
   schema_version: z.number().int(),
   object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true,
@@ -162,6 +165,7 @@ export const SchemaSnapshot = z.object({
     .extend({ attribute_count: z.number().int() })),
   relation_types: z.array(RelationTypeDetail),
   matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'),
+  views: z.array(ViewSummary),
 })
 ```
 

@@ -2,11 +2,13 @@ import {
   tenantWhere,
   type Attribute,
   type Db,
+  type List,
   type MatchingRule,
   type MatchingRuleGeneration,
   type ObjectType,
   type RelationType,
   type TenantRef,
+  type View,
 } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
@@ -15,6 +17,10 @@ export type LoadedObjectType = Readonly<ObjectType & {
   attributes: readonly LoadedAttribute[]
 }>
 export type LoadedRelationType = Readonly<RelationType>
+export type LoadedList = Readonly<List & {
+  attributes: readonly LoadedAttribute[]
+}>
+export type LoadedView = Readonly<View>
 export type LoadedMatchingRule = Readonly<MatchingRule & {
   generation: Pick<MatchingRuleGeneration, 'id' | 'state' | 'keysReadyAt' | 'backfillAttempt' | 'backfillJobId'>
 }>
@@ -24,6 +30,8 @@ export type LoadedSchema = Readonly<{
   schemaVersion: number
   objectTypes: readonly LoadedObjectType[]
   relationTypes: readonly LoadedRelationType[]
+  lists: readonly LoadedList[]
+  views: readonly LoadedView[]
   matchingRules: readonly LoadedMatchingRule[]
   replacementMatchingRules: readonly LoadedMatchingRule[]
   objectTypesBySlug: ReadonlyMap<string, LoadedObjectType>
@@ -33,6 +41,11 @@ export type LoadedSchema = Readonly<{
   archivedAttributeSlugsByObjectTypeId: ReadonlyMap<string, ReadonlySet<string>>
   relationTypesBySlug: ReadonlyMap<string, LoadedRelationType>
   relationTypesById: ReadonlyMap<string, LoadedRelationType>
+  listsBySlug: ReadonlyMap<string, LoadedList>
+  listsById: ReadonlyMap<string, LoadedList>
+  attributesByListId: ReadonlyMap<string, ReadonlyMap<string, LoadedAttribute>>
+  viewsBySlug: ReadonlyMap<string, LoadedView>
+  viewsById: ReadonlyMap<string, LoadedView>
   matchingRulesByObjectTypeId: ReadonlyMap<string, readonly LoadedMatchingRule[]>
   replacementMatchingRulesByObjectTypeId: ReadonlyMap<string, readonly LoadedMatchingRule[]>
   backingRelationsByAttributeId: ReadonlyMap<string, LoadedRelationType>
@@ -46,6 +59,8 @@ type TeamVersion = { id: string; schemaVersion: number }
 type MetadataRows = {
   objectTypes: Array<ObjectType & { attributes: Attribute[] }>
   relationTypes: RelationType[]
+  lists: Array<List & { attributes: Attribute[] }>
+  views: View[]
   matchingRules: Array<MatchingRule & { generation: MatchingRuleGeneration }>
 }
 export type SchemaLoadSource = {
@@ -208,6 +223,14 @@ function buildSchema(
     }),
   ))
   const relationTypes: readonly LoadedRelationType[] = copied.relationTypes
+  const lists: readonly LoadedList[] = Object.freeze(copied.lists.map((list) => Object.freeze({
+    ...list,
+    attributes: Object.freeze(list.attributes.filter((attribute) => attribute.archivedAt === null)),
+  })))
+  const activeObjectTypeIds = new Set(objectTypes.map((objectType) => objectType.id))
+  const views: readonly LoadedView[] = Object.freeze(copied.views.filter((view) => (
+    activeObjectTypeIds.has(view.objectTypeId)
+  )))
   const allMatchingRules: readonly LoadedMatchingRule[] = copied.matchingRules
   const matchingRules = Object.freeze(allMatchingRules.filter((rule) => rule.generation.state === 'active'))
   const replacementMatchingRules = Object.freeze(allMatchingRules.filter((rule) => (
@@ -257,6 +280,14 @@ function buildSchema(
   const relationTypesById = new ImmutableMap(relationTypes.map(
     (relationType) => pair(relationType.id, relationType),
   ))
+  const listsBySlug = new ImmutableMap(lists.map((list) => pair(list.slug, list)))
+  const listsById = new ImmutableMap(lists.map((list) => pair(list.id, list)))
+  const attributesByListId = new ImmutableMap(lists.map((list) => pair(
+    list.id,
+    new ImmutableMap(list.attributes.map((attribute) => pair(attribute.slug, attribute))),
+  )))
+  const viewsBySlug = new ImmutableMap(views.map((view) => pair(view.slug, view)))
+  const viewsById = new ImmutableMap(views.map((view) => pair(view.id, view)))
   const matchingRulesByObjectTypeId = new ImmutableMap(objectTypes.map((objectType) => pair(
     objectType.id,
     Object.freeze(matchingRules.filter((rule) => rule.objectTypeId === objectType.id)),
@@ -297,6 +328,8 @@ function buildSchema(
     schemaVersion: team.schemaVersion,
     objectTypes,
     relationTypes,
+    lists,
+    views,
     matchingRules,
     replacementMatchingRules,
     objectTypesBySlug,
@@ -306,6 +339,11 @@ function buildSchema(
     archivedAttributeSlugsByObjectTypeId,
     relationTypesBySlug,
     relationTypesById,
+    listsBySlug,
+    listsById,
+    attributesByListId,
+    viewsBySlug,
+    viewsById,
     matchingRulesByObjectTypeId,
     replacementMatchingRulesByObjectTypeId,
     backingRelationsByAttributeId,
@@ -344,7 +382,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
     }),
     readMetadata: async (target) => {
       const activeWhere = { ...tenantWhere(target), archivedAt: null }
-      const [objectTypes, relationTypes, matchingRules] = await Promise.all([
+      const [objectTypes, relationTypes, lists, views, matchingRules] = await Promise.all([
         db.objectType.findMany({
           where: activeWhere,
           include: {
@@ -356,13 +394,24 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
           orderBy: { slug: 'asc' },
         }),
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
+        db.list.findMany({
+          where: tenantWhere(target),
+          include: {
+            attributes: {
+              where: { ...tenantWhere(target), archivedAt: null },
+              orderBy: { position: 'asc' },
+            },
+          },
+          orderBy: { slug: 'asc' },
+        }),
+        db.view.findMany({ where: tenantWhere(target), orderBy: { slug: 'asc' } }),
         db.matchingRule.findMany({
           where: tenantWhere(target),
           include: { generation: true },
           orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
         }),
       ])
-      return { objectTypes, relationTypes, matchingRules }
+      return { objectTypes, relationTypes, lists, views, matchingRules }
     },
   }
   return loadSchemaFromSource(source, tenant)
@@ -380,19 +429,30 @@ export async function loadSchemaForMatchingBootstrap(
     }),
     readMetadata: async (target) => {
       const activeWhere = { ...tenantWhere(target), archivedAt: null }
-      const [objectTypes, relationTypes, matchingRules] = await Promise.all([
+      const [objectTypes, relationTypes, lists, views, matchingRules] = await Promise.all([
         db.objectType.findMany({
           where: activeWhere,
           include: { attributes: { where: tenantWhere(target), orderBy: { position: 'asc' } } },
           orderBy: { slug: 'asc' },
         }),
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
+        db.list.findMany({
+          where: tenantWhere(target),
+          include: {
+            attributes: {
+              where: { ...tenantWhere(target), archivedAt: null },
+              orderBy: { position: 'asc' },
+            },
+          },
+          orderBy: { slug: 'asc' },
+        }),
+        db.view.findMany({ where: tenantWhere(target), orderBy: { slug: 'asc' } }),
         db.matchingRule.findMany({
           where: tenantWhere(target), include: { generation: true },
           orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
         }),
       ])
-      return { objectTypes, relationTypes, matchingRules }
+      return { objectTypes, relationTypes, lists, views, matchingRules }
     },
   }
   return loadSchemaFromSource(source, tenant, { bootstrapGenerationId: generationId, useCache: false })

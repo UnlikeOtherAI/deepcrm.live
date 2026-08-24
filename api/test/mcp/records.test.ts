@@ -118,7 +118,7 @@ describe('record MCP tools', () => {
     const assertMismatch = await call('crm_record_assert', { object_type: 'person', match_attribute: 'emails', data: { name: { full: 'Changed Anna' }, emails: ['anna@asahi.eu'] }, idempotency_key: `records-test-assert-${runKey}` })
     expect(ToolResult.parse(assertMismatch).structuredContent).toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
     const deal = structured(await call('crm_record_create', {
-      object_type: 'deal', data: { name: 'Asahi pilot', stage: 'qualified', close_date: '2026-09-01' },
+      object_type: 'deal', data: { name: `Asahi pilot ${runKey}`, stage: 'qualified', close_date: '2026-09-01' },
     }))
     const dealId = z.object({ record: z.object({ id: z.string().uuid() }) }).parse(deal).record.id
     const deals = structured(await call('crm_records_query', {
@@ -133,6 +133,79 @@ describe('record MCP tools', () => {
     expect(z.object({ records: z.array(z.object({ id: z.string() })) }).parse(deals).records.map((record) => record.id)).toContain(dealId)
     const page = structured(await call('crm_records_query', { object_type: 'company', filter: { attribute: 'domains', op: 'contains', value: 'asahi.eu' }, attributes: ['name'] }))
     expect(z.object({ records: z.array(z.object({ id: z.string() })) }).parse(page).records.map((record) => record.id)).toContain(companyId)
+    expect(structured(await call('crm_records_count', {
+      object_type: 'deal', filter: { attribute: 'name', op: 'eq', value: `Asahi pilot ${runKey}` },
+    }))).toEqual({ count: 1 })
+
+    const companyType = await db.objectType.findFirstOrThrow({
+      where: { organizationId, teamId, slug: 'company' }, select: { id: true },
+    })
+    const hidden = await db.record.create({
+      data: {
+        organizationId, teamId, objectTypeId: companyType.id,
+        data: { name: `Hidden ${runKey}` }, displayName: `Hidden ${runKey}`,
+        visibility: 'private', createdOnBehalfOf: `another-user-${runKey}`,
+        createdByType: 'system', createdById: 'records-mcp',
+      },
+      select: { id: true },
+    })
+    const foreignOrganization = await db.organization.create({
+      data: { externalOrgId: `foreign-org-${runKey}`, name: 'Foreign records MCP fixture' },
+    })
+    const foreignTeam = await db.team.create({
+      data: {
+        organizationId: foreignOrganization.id,
+        externalTeamId: `foreign-team-${runKey}`,
+        name: 'Foreign records MCP fixture',
+      },
+    })
+    const foreignType = await db.objectType.create({
+      data: {
+        organizationId: foreignOrganization.id, teamId: foreignTeam.id,
+        slug: 'foreign_record', singularName: 'Foreign record', pluralName: 'Foreign records',
+        description: 'Tenant-isolation fixture.', kind: 'custom', createdByType: 'system',
+        createdById: 'records-mcp',
+      },
+    })
+    const foreign = await db.record.create({
+      data: {
+        organizationId: foreignOrganization.id, teamId: foreignTeam.id, objectTypeId: foreignType.id,
+        data: {}, displayName: 'Foreign record', createdByType: 'system', createdById: 'records-mcp',
+      },
+      select: { id: true },
+    })
+    const policyHidden = await db.policyRule.create({
+      data: {
+        organizationId, teamId, scope: 'record', scopeId: secondCompanyId,
+        resourceType: 'record', action: 'view', effect: 'deny', priority: 200,
+        requiresApproval: false, createdById: 'records-mcp',
+        bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }] },
+      },
+    })
+    const unknownId = randomUUID()
+    try {
+      expect(structured(await call('crm_records_count', {
+        object_type: 'company', filter: { attribute: 'name', op: 'eq', value: `Hidden ${runKey}` },
+      }))).toEqual({ count: 0 })
+      expect(structured(await call('crm_records_count', {
+        object_type: 'company', filter: { attribute: 'name', op: 'eq', value: 'Kirin' },
+      }))).toEqual({ count: 0 })
+      const many = z.object({
+        records: z.array(z.object({ id: z.string().uuid(), data: z.record(z.unknown()) })),
+        missing: z.array(z.string().uuid()),
+      }).parse(structured(await call('crm_records_get_many', {
+        ids: [dealId, hidden.id, personId, foreign.id, unknownId, secondCompanyId, companyId],
+      })))
+      expect(many.records.map((record) => record.id)).toEqual([dealId, personId, companyId])
+      expect(many.records.find((record) => record.id === personId)?.data['company']).toBe(companyId)
+      expect(many.missing).toEqual([hidden.id, foreign.id, unknownId, secondCompanyId])
+    } finally {
+      await db.policyRule.delete({ where: { id: policyHidden.id } })
+      await db.record.delete({ where: { id: foreign.id } })
+      await db.objectType.delete({ where: { id: foreignType.id } })
+      await db.team.delete({ where: { id: foreignTeam.id } })
+      await db.organization.delete({ where: { id: foreignOrganization.id } })
+    }
     const history = structured(await call('crm_record_history', { id: personId }))
     expect(z.object({ changes: z.array(z.unknown()) }).parse(history).changes.length).toBeGreaterThan(0)
     const at = structured(await call('crm_record_at', { id: personId, at: new Date().toISOString() }))

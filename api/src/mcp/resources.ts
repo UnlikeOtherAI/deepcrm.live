@@ -1,10 +1,11 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, Slug, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
+import { getView, listViews } from '../services/lists.js'
 import { getSchema, listSchemaTemplates } from '../services/schema.js'
 import { presentObjectType, presentSchema } from './schema-presenters.js'
 
-function jsonResource(uri: URL, value: Record<string, unknown>) {
+function jsonResource(uri: URL, value: unknown) {
   return {
     contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(value) }],
   }
@@ -73,7 +74,10 @@ export function registerResources(server: McpServer, ctx: ActorContext, deps: Ap
     title: 'Workspace schema',
     description: 'Current object types, relation types, and matching rules for this workspace.',
     mimeType: 'application/json',
-  }, async (uri) => jsonResource(uri, presentSchema(await getSchema(deps, ctx))))
+  }, async (uri) => {
+    const [schema, views] = await Promise.all([getSchema(deps, ctx), listViews(deps, ctx)])
+    return jsonResource(uri, presentSchema(schema, views))
+  })
 
   server.registerResource('schema-object', new ResourceTemplate('crm://schema/{object_type}', {
     list: undefined,
@@ -90,6 +94,26 @@ export function registerResources(server: McpServer, ctx: ActorContext, deps: Ap
     const selected = schema.objectTypesBySlug.get(objectType)
     if (selected === undefined) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type')
     return jsonResource(uri, presentObjectType(schema, selected))
+  })
+
+  server.registerResource('views', 'crm://views', {
+    title: 'Saved views',
+    description: 'Policy-filtered saved view index with slug, name, and object type.',
+    mimeType: 'application/json',
+  }, async (uri) => jsonResource(uri, { views: await listViews(deps, ctx) }))
+
+  server.registerResource('view', new ResourceTemplate('crm://views/{slug}', {
+    list: undefined,
+  }), {
+    title: 'Saved view definition',
+    description: 'Full policy-filtered saved view definition addressed by slug.',
+    mimeType: 'application/json',
+  }, async (uri, variables) => {
+    const slug = Slug.safeParse(variables['slug'])
+    if (!slug.success) {
+      throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'View resource is invalid')
+    }
+    return jsonResource(uri, await getView(deps, ctx, slug.data))
   })
 
   server.registerResource('templates', 'crm://templates', {

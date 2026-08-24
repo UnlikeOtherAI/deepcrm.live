@@ -72,6 +72,27 @@ export const CrmRecordsQuery = { in: z.object({ object_type: Slug.describe('obje
 export const CrmRecordsQueryToolInput = CrmRecordsQuery.in.extend({
   filter: z.record(z.unknown()).optional().describe('structured filter; recursive grammar/operators in crm://help/filtering'),
 })
+export const CrmRecordsCount = {
+  in: z.object({
+    object_type: Slug.describe('object type slug to count'),
+    filter: Filter.optional().describe('structured exact filter'),
+  }),
+  out: z.object({ count: z.number().int().nonnegative() }),
+}
+export const CrmRecordsCountToolInput = CrmRecordsCount.in.extend({
+  filter: z.record(z.unknown()).optional()
+    .describe('structured filter; recursive grammar/operators in crm://help/filtering'),
+})
+export const CrmRecordsGetMany = {
+  in: z.object({
+    ids: z.array(Uuid).min(1).max(100)
+      .describe('one to 100 record ids; records and missing preserve input order'),
+  }),
+  out: z.object({
+    records: z.array(RecordOut),
+    missing: z.array(Uuid),
+  }),
+}
 export const CrmRecordDelete = { in: z.object({ id: Uuid.describe('record id'), expected_version: ExpectedVersion, reason: Reason }), out: z.object({ deleted: z.literal(true) }) }
 export const CrmRecordRestore = { in: z.object({ id: Uuid.describe('soft-deleted record id') }), out: z.object({ record: RecordOut }) }
 export const CrmRecordAt = { in: z.object({ id: Uuid.describe('record id'), at: IsoDateTime.describe('point in time') }), out: z.object({ record_at: z.object({ data: RecordData, links: z.record(Slug, z.array(LinkOut)), version_at: z.number().int(), as_of: IsoDateTime }) }) }

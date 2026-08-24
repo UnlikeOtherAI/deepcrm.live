@@ -57,9 +57,9 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 **Depends on:** T30. **Spec:** `docs/mcp-surface.md` §5.
 
-**Files:** `api/src/services/lists.ts`, `api/src/mcp/tools/lists.ts` (7 tools incl. `crm_view_delete`) and register `crm_records_count` + `crm_records_get_many` in `tools/records.ts` (shrinking `NOT_YET` accordingly). List attributes validated with `validateRecordData` against the list's attribute set (extend `LoadedSchema` with `lists`; **list-attribute mutations bump `teams.schema_version`** like any schema change, so the cache stays honest). `crm_view_run` = stored filter → `queryRecords`; views appear in `SchemaSnapshot.views` and `crm://views`. Tests: list with `priority` entry attribute; view saved, run, listed, deleted; count matches; get_many reports `missing`.
+**Files:** `packages/schemas/src/tools-lists.ts` and collection additions in `tools-records.ts`; extend `packages/schema-engine/src/schema/load.ts` with immutable list/view maps; `api/src/services/lists.ts`, `views.ts`, `record-collection.ts`; `api/src/mcp/tools/lists.ts` (7 tools incl. `crm_view_delete`), resources/presenters, and register `crm_records_count` + `crm_records_get_many` in `tools/records.ts` (shrinking `NOT_YET` accordingly). List attributes are validated with `validateRecordData` against the list's attribute set; **list schema and saved-view mutations bump `teams.schema_version`** so cached schema metadata stays honest. List counts/pages apply record visibility and row policy before counting/paging, then batch-project references and redact record/list attributes. `crm_view_run` = stored filter → `queryRecords`; views appear policy-filtered in `SchemaSnapshot.views`, `crm://views`, and `crm://views/{slug}`.
 
-**Acceptance:** api tests green.
+**Acceptance:** schemas and schema-loader tests are green; API tests cover a list with a typed `priority` entry attribute, visibility/record-policy-safe count and paging, batched reference projection, record-scoped write denial, a view saved/replayed/run/listed/deleted with schema-version changes, bound cursor mismatch, target-scope denial, exact `crm_records_count`, ordered `crm_records_get_many.missing`, and policy/tenant-safe view resources. `pnpm docs:mcp` is deterministic; a live MCP harness exercises all nine new tools plus both view resources.
 
 ---
 

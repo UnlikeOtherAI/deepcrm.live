@@ -35,7 +35,9 @@ async function tenant(): Promise<Tenant> {
 function stableEmptySource(teamId: string): SchemaLoadSource {
   return {
     readVersion: async () => ({ id: teamId, schemaVersion: 0 }),
-    readMetadata: async () => ({ objectTypes: [], relationTypes: [], matchingRules: [] }),
+    readMetadata: async () => ({
+      objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+    }),
   }
 }
 
@@ -56,7 +58,7 @@ describe('schema loader', () => {
       },
       readMetadata: async () => {
         metadataReads += 1
-        return { objectTypes: [], relationTypes: [], matchingRules: [] }
+        return { objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [] }
       },
     }
     const target = { organizationId: 'retry-org', teamId: 'retry-team' }
@@ -71,7 +73,9 @@ describe('schema loader', () => {
     let mismatchVersion = 0
     const changing: SchemaLoadSource = {
       readVersion: async () => ({ id: 'changing-team', schemaVersion: mismatchVersion++ }),
-      readMetadata: async () => ({ objectTypes: [], relationTypes: [], matchingRules: [] }),
+      readMetadata: async () => ({
+        objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+      }),
     }
     await expect(loadSchemaFromSource(changing, {
       organizationId: 'changing-org',
@@ -86,7 +90,9 @@ describe('schema loader', () => {
   it('returns a typed tenant error', async () => {
     const missing: SchemaLoadSource = {
       readVersion: async () => null,
-      readMetadata: async () => ({ objectTypes: [], relationTypes: [], matchingRules: [] }),
+      readMetadata: async () => ({
+        objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+      }),
     }
     await expect(loadSchemaFromSource(missing, {
       organizationId: 'missing-org',
@@ -138,6 +144,49 @@ describe('schema loader', () => {
       await setMatchingRules(tx, target, actor, 'person', {
         rules: [{ attributes: ['name'], method: 'exact', action: 'warn' }],
       })
+      const person = await tx.objectType.findFirstOrThrow({
+        where: { organizationId: target.organizationId, teamId: target.teamId, slug: 'person' },
+      })
+      const list = await tx.list.create({
+        data: {
+          organizationId: target.organizationId,
+          teamId: target.teamId,
+          slug: 'prospects',
+          name: 'Prospects',
+          objectTypeId: person.id,
+          createdByType: 'system',
+          createdById: actor.id,
+        },
+      })
+      await tx.attribute.create({
+        data: {
+          organizationId: target.organizationId,
+          teamId: target.teamId,
+          listId: list.id,
+          slug: 'priority',
+          name: 'Priority',
+          description: 'Prospect priority',
+          type: 'select',
+          config: {
+            type: 'select',
+            options: [
+              { id: 'high', label: 'High' },
+              { id: 'low', label: 'Low' },
+            ],
+          },
+        },
+      })
+      await tx.view.create({
+        data: {
+          organizationId: target.organizationId,
+          teamId: target.teamId,
+          objectTypeId: person.id,
+          slug: 'all_people',
+          name: 'All people',
+          createdByType: 'system',
+          createdById: actor.id,
+        },
+      })
     })
 
     const schema = await loadSchema(db, target)
@@ -159,6 +208,15 @@ describe('schema loader', () => {
     expect(schema.backingRelationsByAttributeId.get(companyAttribute?.id ?? 'missing'))
       .toBe(backingRelation)
     expect(schema.matchingRulesByObjectTypeId.get(person?.id ?? 'missing')).toHaveLength(1)
+    const list = schema.listsBySlug.get('prospects')
+    expect(list).toBe(schema.listsById.get(list?.id ?? 'missing'))
+    expect(schema.attributesByListId.get(list?.id ?? 'missing')?.get('priority')?.type).toBe('select')
+    const view = schema.viewsBySlug.get('all_people')
+    expect(view).toBe(schema.viewsById.get(view?.id ?? 'missing'))
+    expect(view?.objectTypeId).toBe(person?.id)
+    expect(Object.isFrozen(list)).toBe(true)
+    expect(Object.isFrozen(list?.attributes)).toBe(true)
+    expect(Object.isFrozen(view)).toBe(true)
     expect(schema.resolveBackingRelation('person', 'name')).toBeUndefined()
     expect(schema.resolveBackingRelation('missing', 'company')).toBeUndefined()
     if (person === undefined) throw new Error('person object type must load')

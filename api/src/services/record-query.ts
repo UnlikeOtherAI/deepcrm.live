@@ -208,6 +208,27 @@ export function queryRecords(
   })
 }
 
+export async function countRecords(
+  deps: AppDeps,
+  ctx: ActorContext,
+  input: Pick<RecordQueryInput, 'objectType' | 'filter'>,
+): Promise<{ count: number }> {
+  const result = await queryRecordsOperation(deps, ctx, {
+    objectType: input.objectType,
+    ...(input.filter === undefined ? {} : { filter: input.filter }),
+    attributes: [],
+    includeTotal: true,
+    limit: 1,
+  }, {
+    tool: 'crm_records_count',
+    cursorArguments: recordCursorArguments,
+  })
+  if (result.total === undefined) {
+    throw new ServiceError(ErrorCode.INTERNAL, 'Record count was not returned')
+  }
+  return { count: result.total }
+}
+
 export function queryRecordsForTool(
   deps: AppDeps, ctx: ActorContext, input: RecordQueryInput, integration: RecordQueryIntegration,
 ): Promise<RecordQueryResult> {

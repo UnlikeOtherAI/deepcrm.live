@@ -123,7 +123,10 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
   })
 }
 
-export function presentSchema(schema: LoadedSchema) {
+export function presentSchema(
+  schema: LoadedSchema,
+  views: readonly { slug: string; name: string; object_type: string }[],
+) {
   const matchingRules = Object.fromEntries(schema.objectTypes.map((objectType) => [
     objectType.slug,
     schema.matchingRulesByObjectTypeId.get(objectType.id)?.map((rule) => ({
@@ -147,6 +150,7 @@ export function presentSchema(schema: LoadedSchema) {
     })),
     relation_types: schema.relationTypes.map((relationType) => relation(schema, relationType)),
     matching_rules: matchingRules,
+    views,
   })
 }
 

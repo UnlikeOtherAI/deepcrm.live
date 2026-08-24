@@ -18,6 +18,7 @@ import {
   type ActorContext,
 } from '@deepcrm/schemas'
 import type { AppDeps } from '../../deps.js'
+import { listViews } from '../../services/lists.js'
 import {
   applySchemaTemplate,
   archiveSchemaAttribute,
@@ -121,11 +122,13 @@ async function latestSchema(deps: AppDeps, ctx: ActorContext) {
 export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps): void {
   defineTool(server, {
     name: 'crm_schema_get',
-    description: 'Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by schema_version.',
+    description: 'Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail.',
     input: CrmSchemaGet.in.shape,
     handler: async (args) => {
       const schema = await latestSchema(deps, ctx)
-      if (args.object_type === undefined) return jsonResult(presentSchema(schema))
+      if (args.object_type === undefined) {
+        return jsonResult(presentSchema(schema, await listViews(deps, ctx)))
+      }
       const objectType = schema.objectTypesBySlug.get(args.object_type)
       if (objectType === undefined) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type')
       return jsonResult(presentObjectType(schema, objectType))

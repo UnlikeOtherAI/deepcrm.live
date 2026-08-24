@@ -1,10 +1,12 @@
 export {
   loadSchema,
   type LoadedAttribute,
+  type LoadedList,
   loadSchemaForMatchingBootstrap,
   type LoadedObjectType,
   type LoadedRelationType,
   type LoadedSchema,
+  type LoadedView,
 } from './load.js'
 export type { RecordTx, SchemaTx } from './tx.js'
 export {

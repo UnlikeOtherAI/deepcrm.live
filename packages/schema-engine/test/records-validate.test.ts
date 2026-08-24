@@ -163,6 +163,8 @@ async function schema(options: SchemaOptions = {}): Promise<LoadedSchema> {
         }),
         relation({ id: dealContactsId, slug: 'person_contacts', fromObjectTypeId: personId, toObjectTypeId: companyId, cardinality: 'many_to_many', projectionAttributeSlug: 'contacts' }),
       ],
+      lists: [],
+      views: [],
       matchingRules: [],
     }),
   }, { organizationId, teamId })
