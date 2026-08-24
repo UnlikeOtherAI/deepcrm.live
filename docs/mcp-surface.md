@@ -174,7 +174,7 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_suppression_check` | **Call before any outbound send**, with the channel you are about to use; `all` entries and unexpired time-boxed entries suppress. | `{ entries: [{kind, value, channel?}] (≤100) }` | `{ results: [{kind, suppressed, reason?, sub_reason?}] }` |
 | `crm_suppression_list` | List suppression entries (hashes and metadata only — the store holds no readable values). | `{ kind?, cursor?, limit? }` | `{ entries, next_cursor }` |
 | `crm_suppression_remove` | Remove a suppression entry (un-suppressing an objector — owner + approval). | `{ kind, value, reason }` | `{ removed: boolean }` |
-| `crm_write_guard_set` | Set the team's write guard: rejected origin classes (`ORIGIN_REJECTED`), `require_origin` (refuse origin-less writes), and `team_visibility_only_apps` (app keys whose writes must be team-visible — `VISIBILITY_REJECTED`; server-enforces "we write no private data"). Owner-only. | `{ rejected_origins?, require_origin?, team_visibility_only_apps? }` | the guard |
+| `crm_write_guard_set` | Set rejected origins, require_origin, and app keys forced to team-visible writes. Owner-only; rejected writes return ORIGIN_REJECTED or VISIBILITY_REJECTED. | `{ rejected_origins?: array, require_origin?: boolean, team_visibility_only_apps?: array }` | the guard |
 <!-- tools:end -->
 
 Suppression entries survive tenant deletion and record erasure by construction (no foreign keys — schema-engine §2); erasure semantics: schema-engine §4d.

@@ -5,6 +5,7 @@ import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
 import { canonicalJsonValue, type JsonValue } from './json.js'
 import { planRecordMetadata, replaceVisibilityGrants, requestedVisibility, type RecordMetadataInput } from './metadata.js'
+import { enforceWriteGuard } from './write-guard.js'
 import { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
 import {
   findMatches, refreshMatchingRecords, removeMatchingKeys,
@@ -168,6 +169,7 @@ async function prepareCreate(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: CreateRecordInput, linkWriter: LinkWriter,
 ): Promise<PreparedCreate> {
   const objectType = object(schema, input.objectType)
+  await enforceWriteGuard(tx, ctx, input, null)
   const validated = validateRecordData(schema, objectType, {}, input.data, 'create')
   const validatedData = data(validated.data)
   const displayName = computeDisplayName(schema, objectType, validatedData)
@@ -224,6 +226,7 @@ async function updateRecordInternal(
   version(record, input.expectedVersion)
   const objectType = schema.objectTypesById.get(record.objectTypeId)
   if (objectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema metadata is inconsistent')
+  await enforceWriteGuard(tx, ctx, input, record)
   const before = data(record.data)
   const validated = validateRecordData(schema, objectType, before, input.data, 'update')
   const validatedData = data(validated.data)

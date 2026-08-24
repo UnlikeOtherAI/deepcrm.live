@@ -9,6 +9,22 @@ const MAX_RECORD_DATA_BYTES = 256 * 1024
 const reservedVirtualSlugs = new Set(['id', 'created_at', 'updated_at', 'last_activity_at', 'display_name', 'owner'])
 type Mode = 'create' | 'update'
 type Entry = readonly [string, unknown]
+type GuardVisibility = 'team' | 'users' | 'private'
+
+export type WriteGuard = {
+  rejectedOrigins: readonly string[]
+  requireOrigin: boolean
+  teamVisibilityOnlyApps: readonly string[]
+}
+
+export type WriteGuardInput = {
+  app: string
+  origin: string | undefined
+  currentOrigin: string | null
+  visibility: GuardVisibility | undefined
+  visibleTo: readonly string[] | undefined
+  currentVisibility: GuardVisibility
+}
 
 function pointer(slug: string): string { return `/${slug.replace(/~/gu, '~0').replace(/\//gu, '~1')}` }
 
@@ -18,6 +34,20 @@ function fail(issues: ValidationIssue[]): never {
     return left.message < right.message ? -1 : left.message > right.message ? 1 : 0
   })
   throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Record data validation failed', { issues: sorted })
+}
+
+export function validateWriteGuard(guard: WriteGuard, input: WriteGuardInput): void {
+  const origin = input.origin ?? input.currentOrigin
+  if (origin === null && guard.requireOrigin) {
+    throw new ServiceError(ErrorCode.ORIGIN_REJECTED, 'Origin is required', { origin: null })
+  }
+  if (origin !== null && guard.rejectedOrigins.includes(origin)) {
+    throw new ServiceError(ErrorCode.ORIGIN_REJECTED, 'Origin is rejected', { origin })
+  }
+  const visibility = input.visibleTo === undefined ? input.visibility ?? input.currentVisibility : 'users'
+  if (visibility !== 'team' && guard.teamVisibilityOnlyApps.includes(input.app)) {
+    throw new ServiceError(ErrorCode.VISIBILITY_REJECTED, 'Visibility is rejected')
+  }
 }
 
 function invalidAttribute(

@@ -83,6 +83,13 @@ async function tenant(): Promise<Tenant> {
         config: { maxLength: 120 }, sensitivity: 'confidential', position: 2,
       },
     })
+    await tx.attribute.create({
+      data: {
+        organizationId: created.organizationId, teamId: created.teamId, objectTypeId: person.id,
+        slug: 'tags', name: 'Tags', description: 'Ordered tags', type: 'text',
+        config: { maxLength: 120 }, isMulti: true, position: 3,
+      },
+    })
     await tx.objectType.update({ where: { id: person.id }, data: { primaryAttributeId: name.id } })
     await tx.team.update({ where: { id: created.teamId }, data: { schemaVersion: 1 } })
   })
@@ -125,6 +132,40 @@ afterAll(async () => {
 })
 
 describe('record service security boundaries', () => {
+  it('enforces write guard origin, visibility, immutability, and stable multi order', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await db.team.update({
+      where: { id: target.teamId },
+      data: { rejectedOrigins: ['blocked'], requireOrigin: true, teamVisibilityOnlyApps: ['test'] },
+    })
+
+    await expect(createRecord(deps, ctx, {
+      objectType: 'person', data: { name: 'No Origin' },
+    })).rejects.toMatchObject({ code: 'ORIGIN_REJECTED', details: { origin: null } })
+    await expect(createRecord(deps, ctx, {
+      objectType: 'person', data: { name: 'Blocked' }, origin: 'blocked',
+    })).rejects.toMatchObject({ code: 'ORIGIN_REJECTED', details: { origin: 'blocked' } })
+    await expect(createRecord(deps, ctx, {
+      objectType: 'person', data: { name: 'Users' }, origin: 'manual', visibleTo: [ctx.onBehalfOf.uoaUserId],
+    })).rejects.toMatchObject({ code: 'VISIBILITY_REJECTED' })
+
+    const created = await createRecord(deps, ctx, {
+      objectType: 'person',
+      data: { name: 'Ordered', tags: ['second', 'first', 'second'] },
+      origin: 'manual',
+    })
+    await expect(updateRecord(deps, ctx, {
+      recordId: created.record.id, data: { name: 'Other Origin' }, origin: 'other',
+    })).rejects.toMatchObject({ code: 'ORIGIN_REJECTED', details: { origin: 'other' } })
+
+    const stored = await db.record.findUniqueOrThrow({ where: { id: created.record.id } })
+    expect(stored.data).toMatchObject({ tags: ['second', 'first'] })
+    expect(await db.record.count({
+      where: { organizationId: target.organizationId, teamId: target.teamId },
+    })).toBe(1)
+  })
+
   it('returns NOT_FOUND before policy for an invisible record and honors a users grant', async () => {
     const target = await tenant()
     const owner = context(target, 'uoa_private_owner')

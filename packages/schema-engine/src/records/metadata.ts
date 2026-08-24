@@ -74,7 +74,9 @@ export async function planRecordMetadata(
     changes.push(intent(record, 'visibility', record.visibility, nextVisibility, groupId))
   }
   if (input.origin !== undefined && input.origin !== record.origin) {
-    if (record.origin !== null) throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Origin is set once')
+    if (record.origin !== null) {
+      throw new ServiceError(ErrorCode.ORIGIN_REJECTED, 'Origin is set once', { origin: input.origin })
+    }
     data.origin = input.origin
     changes.push(intent(record, 'origin', record.origin, input.origin, groupId))
   }
