@@ -117,6 +117,7 @@ describe('tool results', () => {
   })
 })
 
+
 describe('MRTR request state', () => {
   it('seals and verifies the normative input_required result', () => {
     const result = inputRequired(elicitation, requestPayload, secretBox)
@@ -168,6 +169,48 @@ describe('MRTR request state', () => {
 })
 
 describe('defineTool', () => {
+  it('rejects undiscoverable tool registrations at the length boundary', () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' })
+    servers.push(server)
+    configureToolRuntime(server, {
+      requestId: 'request_runtime', clock: () => 10, log: () => undefined,
+    })
+    const definition = {
+      name: 'crm_registration_test',
+      input: { value: z.string().describe('test value') },
+      handler: () => ok({}, '{}'),
+    }
+    expect(() => defineTool(server, {
+      ...definition,
+      description: 'x'.repeat(300),
+    })).not.toThrow()
+    expect(() => defineTool(server, {
+      ...definition,
+      name: 'crm_registration_too_long',
+      description: 'x'.repeat(301),
+    })).toThrow("Tool 'crm_registration_too_long' description exceeds 300 characters")
+  })
+
+  it('rejects every top-level input field without a nonempty description', () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' })
+    servers.push(server)
+    configureToolRuntime(server, {
+      requestId: 'request_runtime', clock: () => 10, log: () => undefined,
+    })
+    expect(() => defineTool(server, {
+      name: 'crm_registration_missing_descriptions',
+      description: 'Registration test.',
+      input: {
+        missing: z.string(),
+        blank: z.string().describe('   '),
+        described: z.string().describe('test value'),
+      },
+      handler: () => ok({}, '{}'),
+    })).toThrow(
+      "Tool 'crm_registration_missing_descriptions' input fields lack descriptions: missing, blank",
+    )
+  })
+
   it('validates and dispatches ordinary and params-level MRTR calls with request context', async () => {
     const logs: ToolLogEntry[] = []
     const seenMrtr: MrtrInput[] = []
@@ -224,4 +267,3 @@ describe('defineTool', () => {
     expect(logs.map((entry) => entry.tool)).toEqual(['crm_test', 'crm_test', 'crm_test'])
   })
 })
-

@@ -65,6 +65,22 @@ function invalidArguments(error: z.ZodError): ServiceError {
   })
 }
 
+function assertDiscoverableTool<Shape extends z.ZodRawShape>(
+  definition: ToolDefinition<Shape>,
+): void {
+  if (definition.description.length > 300) {
+    throw new Error(`Tool '${definition.name}' description exceeds 300 characters`)
+  }
+  const missingDescriptions = Object.entries(definition.input)
+    .filter(([, field]) => (field.description?.trim().length ?? 0) === 0)
+    .map(([name]) => name)
+  if (missingDescriptions.length > 0) {
+    throw new Error(
+      `Tool '${definition.name}' input fields lack descriptions: ${missingDescriptions.join(', ')}`,
+    )
+  }
+}
+
 export function logToolEntry(entry: Parameters<ToolLogger>[0]): void {
   process.stderr.write(`${JSON.stringify({ event: 'mcp_tool', ...entry })}\n`)
 }
@@ -99,6 +115,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
   server: McpServer,
   definition: ToolDefinition<Shape>,
 ): void {
+  assertDiscoverableTool(definition)
   const runtime = runtimeFor(server)
   const inputSchema = z.object(definition.input).strict()
   const tool: ToolRuntime = {
