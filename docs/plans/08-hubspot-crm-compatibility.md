@@ -77,7 +77,7 @@ against a fresh disposable database and an upgraded fixture; `pnpm --filter
 
 ---
 
-### T58 — First-class pipelines, stages and stage history
+### T58 ✅ — First-class pipelines, stages and stage history
 
 **Depends on:** T57. **Spec:** this file; `docs/schema-engine.md` §§3a–5;
 `docs/mcp-surface.md` §6.
