@@ -6,7 +6,8 @@ const roots = ['api/src', 'worker/src', 'packages/schema-engine/src']
 const callPattern = new RegExp(
   'prisma\\.(record|recordLink|recordChange|recordUniqueKey|recordMatchKey|recordMatchLookupKey|recordSearch|objectType|' +
     'attribute|relationType|matchingRule|matchingRuleGeneration|list|listEntry|view|policyRule|policyBinding|approvalRequest|' +
-    'webhook|idempotencyReplay)\\.(findMany|findFirst|findUnique|count|aggregate|updateMany|deleteMany)\\(',
+    'webhook|idempotencyReplay|recordVisibilityGrant|suppressionEntry)\\.' +
+    '(findMany|findFirst|findUnique|count|aggregate|updateMany|deleteMany)\\(',
 )
 
 function* walk(dir) {

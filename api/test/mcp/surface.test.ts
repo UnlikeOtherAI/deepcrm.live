@@ -2,8 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestServer } from './harness.js'
 
-const NOT_YET: string[] = []
-const DOCUMENTED_UNTIL_T48 = [
+const NOT_YET = [
   'crm_record_erase',
   'crm_suppression_add',
   'crm_suppression_check',
@@ -69,7 +68,7 @@ describe('documented MCP tool surface', () => {
     const listed = (await client.listTools()).tools.map((tool) => tool.name)
     const documented = new Set(documentedNames)
     const listedSet = new Set(listed)
-    const notYet = new Set([...NOT_YET, ...DOCUMENTED_UNTIL_T48])
+    const notYet = new Set(NOT_YET)
     const implemented = documentedNames.filter((name) => !notYet.has(name))
 
     expect(new Set(listed).size, 'listed tool names are unique').toBe(listed.length)
