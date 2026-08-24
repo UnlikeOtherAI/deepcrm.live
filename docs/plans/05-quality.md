@@ -62,7 +62,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T40 — Data quality report
+### T40 ✅ — Data quality report
 
 **Depends on:** T39. **Spec:** `docs/mcp-surface.md` §7 (`crm_data_quality`).
 
