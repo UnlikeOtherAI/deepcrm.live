@@ -4,7 +4,7 @@ Outcome: the DeepSignal policy asks — round one **and the accepted round-two a
 
 Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surface.test.ts` (they are documented before they exist); T50–T53 remove them as they land; the phase ends with `NOT_YET = []` again.
 
-### T48 — Compliance schema verification and search-model index
+### T48 ✅ — Compliance schema verification and search-model index
 
 **Depends on:** T42. **Spec:** `docs/schema-engine.md` §2. The immutable
 T03 init migration already contains `Visibility`, `SuppressionKind/Channel/Reason`,
