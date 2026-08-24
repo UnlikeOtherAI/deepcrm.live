@@ -25,6 +25,7 @@ import { registerLinkTools } from './tools/links.js'
 import { registerListTools } from './tools/lists.js'
 import { registerActivityTools } from './tools/activity.js'
 import { registerPipelineTools } from './tools/pipeline.js'
+import { registerIoTools } from './tools/io.js'
 import { configureToolRuntime, logToolEntry } from './tools/register.js'
 import { registerTaskMethods } from './tasks.js'
 
@@ -155,6 +156,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   registerListTools(server, ctx, deps)
   registerActivityTools(server, ctx, deps)
   registerPipelineTools(server, ctx, deps)
+  registerIoTools(server, ctx, deps)
   registerResources(server, ctx, deps)
   registerTaskMethods(server, ctx, deps)
 
