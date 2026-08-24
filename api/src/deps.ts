@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createDb, writeAudit, type Db } from '@deepcrm/db'
 import { createProjectionLinkWriter, type LinkWriter } from '@deepcrm/schema-engine'
-import { parseSecretBox } from '@deepcrm/schemas'
+import { parseSecretBox, type SecretBox } from '@deepcrm/schemas'
 import type { Env } from './env.js'
 import { createHistoryCursorCodec, type HistoryCursorCodec } from './services/history-cursor.js'
 import { createQueryCursorCodec, type QueryCursorCodec } from './services/query-cursor.js'
@@ -16,6 +16,7 @@ export type AppDeps = {
   linkWriter: LinkWriter
   historyCursor: HistoryCursorCodec
   queryCursor: QueryCursorCodec
+  secretBox: SecretBox
   writeAudit: typeof writeAudit
 }
 
@@ -40,6 +41,7 @@ export function createAppDeps(env: Env): AppDeps {
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(secretBox),
     queryCursor: createQueryCursorCodec(secretBox),
+    secretBox,
     writeAudit,
   }
 }

@@ -37,6 +37,7 @@ const deps: AppDeps = {
   linkWriter: createProjectionLinkWriter(),
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
+  secretBox: parseSecretBox(keyring),
   writeAudit,
 }
 type Tenant = { organizationId: string; teamId: string }

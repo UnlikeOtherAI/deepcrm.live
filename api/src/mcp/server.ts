@@ -18,6 +18,7 @@ import {
 import type { ActorContext } from '@deepcrm/schemas'
 import { z } from 'zod'
 import type { AppDeps } from '../deps.js'
+import { configureToolRuntime, logToolEntry } from './tools/register.js'
 
 const PROTOCOL_VERSION = '2026-07-28'
 const CACHE_TTL_MS = 300_000
@@ -127,6 +128,11 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
     },
   )
   installResultWrappers(server, deps.version)
+  configureToolRuntime(server, {
+    requestId: ctx.requestId,
+    clock: () => deps.clock().getTime(),
+    log: logToolEntry,
+  })
 
   // Initialises the SDK's tools/list and tools/call handlers without exposing
   // a placeholder capability. T22+ registers real tools into this same registry.

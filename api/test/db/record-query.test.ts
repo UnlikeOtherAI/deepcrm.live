@@ -35,6 +35,7 @@ const deps: AppDeps = {
     parseSecretBox(keyring('test-v1', { 'test-v1': localKey })),
   ),
   queryCursor: cursor,
+  secretBox: parseSecretBox(keyring('test-v1', { 'test-v1': localKey })),
   writeAudit,
 }
 

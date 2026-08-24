@@ -42,6 +42,7 @@ const deps: AppDeps = {
   linkWriter: throwingLinkWriter,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
+  secretBox: parseSecretBox(keyring),
   writeAudit,
 }
 

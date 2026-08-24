@@ -28,6 +28,7 @@ const deps: AppDeps = {
   linkWriter: createProjectionLinkWriter(),
   historyCursor: createHistoryCursorCodec(secretBox),
   queryCursor: createQueryCursorCodec(secretBox),
+  secretBox,
   writeAudit,
 }
 

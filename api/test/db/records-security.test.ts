@@ -33,7 +33,8 @@ const deps: AppDeps = {
   db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000,
   orgAllowlist: null, linkWriter: noLinks,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
-  queryCursor: createQueryCursorCodec(parseSecretBox(keyring)), writeAudit,
+  queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
+  secretBox: parseSecretBox(keyring), writeAudit,
 }
 
 function context(tenant: Tenant, userId = 'uoa_records_user'): ActorContext {
