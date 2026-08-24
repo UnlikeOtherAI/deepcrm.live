@@ -77,49 +77,56 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 
 ## 2. Schema tools
 
-| Tool | Description (as registered) | Input | Output |
+<!-- tools:start:2 -->
+| Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_schema_get` | Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by `schema_version`. | `{ object_type?: slug }` | `crm://schema` body or one `ObjectTypeDetail` |
-| `crm_object_type_define` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with `crm_attribute_define`. | `{ slug, singular_name, plural_name, description, icon?, attributes?: AttributeSpec[], primary_attribute?: slug }` | `ObjectTypeDetail` |
-| `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type, singular_name?, plural_name?, description?, icon?, primary_attribute? }` | `ObjectTypeDetail` |
-| `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type, reason? }` | `{ archived: true, records: n }` |
-| `crm_attribute_define` | Add an attribute (field) to an object type. Use `record_reference` to relate to other object types. Unique attributes enable `crm_record_assert`. | `{ object_type, ...AttributeSpec }` | `AttributeDetail` |
-| `crm_attribute_update` | Change an attribute's name, description, options, required/indexed/sensitivity flags. Type, slug **and `is_multi`** are immutable. Tightening reports violations via MRTR; normalize-affecting config changes require a key-recompute backfill; sensitivity raises trigger a reindex Task (schema-engine §3a). | `{ object_type, attribute, name?, description?, config?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }` | `AttributeDetail` |
-| `crm_attribute_archive` | Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value. | `{ object_type, attribute, reason? }` | `{ archived: true, records_with_values: n }` |
-| `crm_relation_type_define` | Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. All four cardinalities (`many_to_one`, `one_to_many`, `one_to_one`, `many_to_many`) are supported; a `record_reference` attribute owns exactly one backing relation, never shared (schema-engine §4f). | `{ slug, from_object_type: slug \| null, to_object_type: slug \| null, forward_name, inverse_name, description?, cardinality, on_delete?, edge_attributes?: AttributeSpec[] }` | `RelationTypeDetail` |
-| `crm_relation_type_archive` | Archive a relation type; links are kept but inactive. | `{ relation_type, reason? }` | `{ archived: true, links: n }` |
-| `crm_matching_rule_set` | Replace duplicate rules for an object type. Existing live data may require an internal backfill; until collision-free activation, the old generation remains effective. Re-call to inspect; set `retry_backfill` only after resolving reported collisions or a terminal job failure/cancel. | `{ object_type, rules: [{ attributes: [slug], method: exact\|normalized\|fuzzy, threshold?, action: block\|warn }], retry_backfill?: boolean }` | `{ rules, activation: { state: active, taskId: null } \| { state: pending_backfill, taskId } \| { state: collision_blocked, taskId, group_count, record_count } }` |
-| `crm_template_apply` | Apply a schema template by slug (see `crm://templates`), e.g. `standard_crm`: people, companies, deals. Idempotent: existing slugs untouched. Unknown slug ⇒ `UNKNOWN_TEMPLATE {available}`. | `{ template: slug }` | `{ added: { object_types, attributes, relation_types, matching_rules } }` (numeric counts) |
+| `crm_schema_get` | Get the workspace data model: object types, their attributes, relation types and matching rules. Call this first in a session; cache by schema_version. | `{ object_type?: string }` | `crm://schema` body or one `ObjectTypeDetail` |
+| `crm_object_type_define` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with crm_attribute_define. | `{ slug: string, singular_name: string, plural_name: string, description: string, icon?: string, attributes?: array, primary_attribute?: string }` | `ObjectTypeDetail` |
+| `crm_object_type_update` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type: string, singular_name?: string, plural_name?: string, description?: string, icon?: string, primary_attribute?: string }` | `ObjectTypeDetail` |
+| `crm_object_type_archive` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type: string, reason?: string }` | `{ archived: true, records: n }` |
+| `crm_attribute_define` | Add an attribute (field) to an object type. Use record_reference to relate to other object types. Unique attributes enable crm_record_assert. | `{ slug: string, name: string, description: string, type: "text" \| "rich_text" \| "number" \| "currency" \| "percent" \| "boolean" \| "date" \| "datetime" \| "select" \| "status" \| "rating" \| "email" \| "phone" \| "url" \| "domain" \| "registry_id" \| "location" \| "personal_name" \| "actor_reference" \| "record_reference" \| "timestamp_system" \| "json", config?: object, is_multi?: boolean, is_required?: boolean, is_unique?: boolean, is_indexed?: boolean, sensitivity?: "public" \| "internal" \| "confidential" \| "restricted", default_value?: unknown, object_type: string }` | `AttributeDetail` |
+| `crm_attribute_update` | Change an attribute name, description, options, required/indexed/sensitivity flags. Type, slug and is_multi are immutable. Tightening may require MRTR; normalize-affecting config changes require a key-recompute backfill; sensitivity raises trigger a reindex Task. | `{ object_type: string, attribute: string, name?: string, description?: string, config?: object, is_required?: boolean, is_unique?: boolean, is_indexed?: boolean, sensitivity?: "public" \| "internal" \| "confidential" \| "restricted", default_value?: unknown }` | `AttributeDetail` |
+| `crm_attribute_archive` | Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value. | `{ object_type: string, attribute: string, reason?: string }` | `{ archived: true, records_with_values: n }` |
+| `crm_relation_type_define` | Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. All four cardinalities are supported; a record_reference attribute owns exactly one backing relation, never shared. | `{ slug: string, from_object_type: string \| null, to_object_type: string \| null, forward_name: string, inverse_name: string, description?: string, cardinality: "one_to_one" \| "one_to_many" \| "many_to_one" \| "many_to_many", on_delete?: "unlink" \| "cascade" \| "restrict", edge_attributes?: array }` | `RelationTypeDetail` |
+| `crm_relation_type_archive` | Archive a relation type; links are kept but inactive. | `{ relation_type: string, reason?: string }` | `{ archived: true, links: n }` |
+| `crm_matching_rule_set` | Replace duplicate rules for an object type. Existing live data may require an internal backfill; until collision-free activation, the old generation remains effective. Re-call to inspect; set retry_backfill only after resolving reported collisions or a terminal job failure/cancel. | `{ object_type: string, rules: array, retry_backfill?: boolean }` | `{ rules, activation: { state: active, taskId: null } \| { state: pending_backfill, taskId } \| { state: collision_blocked, taskId, group_count, record_count } }` |
+| `crm_template_apply` | Apply a schema template by slug (see crm://templates), e.g. standard_crm: people, companies, deals. Idempotent: existing slugs untouched. Unknown slug ⇒ UNKNOWN_TEMPLATE {available}. | `{ template: string }` | `{ added: { object_types, attributes, relation_types, matching_rules } }` (numeric counts) |
+<!-- tools:end -->
 
 `AttributeSpec = { slug, name, description, type, config?, is_multi?, is_required?, is_unique?, is_indexed?, sensitivity?, default_value? }`. Policy: all `define` on `schema`.
 
 ## 3. Record tools
 
+<!-- tools:start:3 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_record_create` | Create a record (one-off inserts; syncing or importing? use `crm_record_assert`; many rows? `crm_records_bulk_assert`). Inline `links` are atomic with the create. `visibility`/`visible_to` restrict who can see it (data-level, admins not exempt); `origin` declares the data's source class. Returns `duplicates` on `warn` matches; fails `DUPLICATE_FOUND` on unique/`block` collisions. | `{ object_type, data: {slug: value}, links?: [{ relation_type, to_record_id, data? }], owner?: Actor, reason?, idempotency_key? }` | `{ record, duplicates?: Candidate[] }` |
-| `crm_record_update` | Patch attributes on a record. Keys set to `null` are cleared. Pass `expected_version` to avoid overwriting concurrent edits. | `{ id, data, owner?, expected_version?, reason?, idempotency_key? }` | `{ record }` |
-| `crm_record_assert` | Create-or-update by a unique attribute (upsert) — the safe default for any sync or import. Multi-value match attribute: the first element is the key; other elements resolving to different records ⇒ `DUPLICATE_FOUND` with all candidates (merge cue). Returns visibility- and policy-filtered `duplicates` for active warn rules. | `{ object_type, match_attribute: slug, data, links?, owner?, reason?, idempotency_key? }` | `{ record, created: boolean, duplicates?: Candidate[] }` |
-| `crm_record_get` | Fetch one record by id, or by a unique attribute value. Optionally include active links (grouped by relation) and the recent timeline. | `{ id? , object_type?, match_attribute?, value?, include_links?: boolean, include_timeline?: number }` | `{ record, links?, timeline? }` |
-| `crm_records_query` | List records of one object type with a structured filter, sort and cursor (exact reads; use `crm_record_get` for one known record, `crm_search` for fuzzy/free-text). Grammar + examples: resource `crm://help/filtering`. | `{ object_type, filter?, sort?, attributes?: [slug], include_total?, cursor?, limit? }` | `{ records, next_cursor, total? }` |
+| `crm_record_create` | Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. | `{ object_type: string, data: object, links?: array, owner?: object, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, reason?: string, idempotency_key?: string }` | `{ record, duplicates?: Candidate[] }` |
+| `crm_record_update` | Patch attributes; null clears an attribute. Supply expected_version for concurrency protection. Metadata changes are policy enforced. | `{ id: string, data: object, owner?: object \| null, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, expected_version?: integer, reason?: string, idempotency_key?: string }` | `{ record }` |
+| `crm_record_assert` | Create or patch by a unique attribute for sync/import writes. Multiple multi-value matches return DUPLICATE_FOUND. Inline links are atomic. | `{ object_type: string, match_attribute: string, data: object, links?: array, owner?: object, reason?: string, idempotency_key?: string }` | `{ record, created: boolean, duplicates?: Candidate[] }` |
+| `crm_record_get` | Fetch one visible record by id or a unique attribute. include_links groups active related records; include_timeline returns recent activity. | `{ id?: string, object_type?: string, match_attribute?: string, value?: unknown, include_links?: boolean, include_timeline?: integer }` | `{ record, links?, timeline? }` |
+| `crm_records_query` | List visible records with exact structured filters, sort and opaque cursor. Use crm_record_get for a known record and crm_search for fuzzy text. | `{ object_type: string, filter?: object, sort?: array, attributes?: array, include_total?: boolean, cursor?: string, limit?: integer }` | `{ records, next_cursor, total? }` |
 | `crm_records_count` | Count records matching a filter — cheap and exact; use instead of paginating to count. | `{ object_type, filter? }` | `{ count }` |
 | `crm_records_get_many` | Fetch up to 100 records by id in one call. | `{ ids: [uuid] }` | `{ records, missing: [uuid] }` |
 | `crm_records_bulk_assert` | Upsert many rows by a unique attribute as a background Task (cap `DEEPCRM_MAX_BULK_ROWS`). Poll `tasks/get`. | `{ object_type, match_attribute, rows: [{ data, links? }], reason? }` | `{ task_id }` → result `{ created, updated, failed: [{ index, code, message }] }` |
-| `crm_record_delete` | Soft-delete a record (restorable for the retention window). Links are ended per relation `on_delete`. Admin or approval. | `{ id, reason?, expected_version? }` | `{ deleted: true }` |
-| `crm_record_restore` | Restore a soft-deleted record and its links. | `{ id }` | `{ record }` |
-| `crm_record_at` | The record's attribute values as they were at a point in time, replayed from `set`/`unset` changes; reference state is reconstructed from link history (`links`, multi ordered by `position`), never from stored data (§4a). `version_at` derives from the latest change's `resulting_version` ≤ `at`. | `{ id, at: datetime }` | `{ record_at: { data, version_at, as_of, links } }` |
-| `crm_record_history` | Field-level change history for one record (who changed what, when, why). To undo a bad change, read `old_value` here and apply a corrective `crm_record_update` — there is no automatic revert. The cursor is opaque and bound to the full argument set including `attributes` (§0.2). | `{ id, attributes?: [slug], cursor?, limit? }` | `{ changes: Change[], next_cursor }` |
+| `crm_record_delete` | Soft-delete a visible record and end links according to relation policy. Requires delete entitlement or approval. | `{ id: string, expected_version?: integer, reason?: string }` | `{ deleted: true }` |
+| `crm_record_restore` | Restore a soft-deleted record and recoverable links. Restore conflicts identify a current unique-key holder. | `{ id: string }` | `{ record }` |
+| `crm_record_at` | Reconstruct visible record values and reference links at an ISO timestamp from change history. | `{ id: string, at: string }` | `{ record_at: { data, version_at, as_of, links } }` |
+| `crm_record_history` | Read field-level history for one visible record. Cursor is bound to id, attributes and limit. | `{ id: string, attributes?: array, cursor?: string, limit?: integer }` | `{ changes: Change[], next_cursor }` |
+<!-- tools:end -->
 
 ## 4. Link tools
 
+<!-- tools:start:4 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
-| `crm_link` | Relate two records through a relation type, optionally with link attributes (e.g. role, since). Cardinality is enforced: a `*_to_one` link replaces the existing one — the result names what was ended. | `{ relation_type, from_record_id, to_record_id, data?, label?, reason?, idempotency_key? }` | `{ link, ended_links: [link_id] }` |
-| `crm_unlink` | End an active link (kept in history). The triple form targets the newest active link when more than one exists. | `{ link_id?, relation_type?, from_record_id?, to_record_id?, reason? }` | `{ link_id }` |
-| `crm_links_list` | Active links of a record, optionally filtered by relation type and direction, with the related records' summaries. | `{ record_id, relation_type?, direction?: from\|to\|both, include_history?: boolean, cursor?, limit? }` | `{ links: [{ link, related: RecordSummary }], next_cursor }` |
+| `crm_link` | Relate two visible records with optional edge data. Cardinality replacements are returned in ended_links. Reusing an idempotency key with changed arguments fails. | `{ relation_type: string, from_record_id: string, to_record_id: string, data?: object, label?: string, reason?: string, idempotency_key?: string }` | `{ link, ended_links: [link_id] }` |
+| `crm_unlink` | End an active link while retaining history. Identify it by link_id or a full relation triple; an ambiguous triple ends the newest active link. | `{ link_id?: string, relation_type?: string, from_record_id?: string, to_record_id?: string, reason?: string }` | `{ link_id }` |
+| `crm_links_list` | List visible links for one visible record with related record summaries. Filter by relation and direction; include_history adds ended links. Cursor binds all filters. | `{ record_id: string, relation_type?: string, direction?: "from" \| "to" \| "both", include_history?: boolean, cursor?: string, limit?: integer }` | `{ links: [{ link, related: RecordSummary }], next_cursor }` |
+<!-- tools:end -->
 
 ## 5. Lists, views
 
+<!-- tools:start:5 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
 | `crm_list_create` | Create a curated list of records (any object type, or mixed) with optional per-entry attributes — e.g. "Q4 target accounts" with a `priority` per entry. | `{ slug, name, description?, object_type?, attributes?: AttributeSpec[] }` | `ListDetail` |
@@ -129,9 +136,11 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_view_save` | Save a reusable query (filter + sort + attributes) for an object type. | `{ slug, name, object_type, filter, sort?, attributes?, description? }` | `ViewDetail` |
 | `crm_view_run` | Run a saved view. | `{ view, cursor?, limit? }` | same as `crm_records_query` |
 | `crm_view_delete` | Delete a saved view. | `{ view }` | `{ deleted: true }` |
+<!-- tools:end -->
 
 ## 6. Activities, timeline, tasks, pipeline
 
+<!-- tools:start:6 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
 | `crm_activity_log` | Log an interaction (email, call, meeting, message…) against one or more records. Idempotent on `external_ref`. Updates `last_activity_at` on linked records. | `{ kind, occurred_at, subject?, body?, direction?, participants?: Actor[], about: [record_id], external_ref?, reason? }` | `{ record }` (the activity record) |
@@ -141,9 +150,11 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_task_update` | Update a task's status, assignee, due date. | `{ id, status?, assignee?, due_at?, priority?, title?, body? }` | `{ record }` |
 | `crm_tasks_list` | Tasks by status/assignee/due window. | `{ status?, assignee?: Actor, due_before?, due_after?, about?: record_id, cursor?, limit? }` | `{ records, next_cursor }` |
 | `crm_pipeline_summary` | Stage-by-stage counts, amounts and average time-in-stage for any object type with a `status` attribute (e.g. deals). Derived from history. | `{ object_type, status_attribute?: slug, amount_attribute?: slug, filter?, since? }` | `{ stages: [{ id, label, category, count, amount_sum?, avg_days_in_stage }] , conversions: [{ from, to, count }] }` |
+<!-- tools:end -->
 
 ## 7. Search, quality, merge
 
+<!-- tools:start:7 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
 | `crm_search` | Free-text or by-example search: `query` text (keyword/semantic/hybrid) **or** `similar_to` (nearest neighbours of an existing record's embedding — "companies like this one"). Single-page, ranked; recently changed linked records may lag the index briefly. Exact lookups: `crm_records_query`. | `{ query?, similar_to?: record_id, object_types?, mode?, limit? }` | `{ hits: [{ record: RecordSummary, score, match }] }` |
@@ -151,9 +162,11 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_merge_records` | Merge duplicates into a survivor: per-attribute survivor values (override with `field_choices`), union of multi-values, links and list entries re-pointed, losers become redirects. Reversible with `crm_unmerge` within retention. Approval-gated by default. | `{ survivor_id, merged_ids: [id], field_choices?: { slug: record_id }, reason }` | `{ record, merge_change_id, repointed_links: n }` |
 | `crm_unmerge` | Undo a merge from its snapshot. | `{ merge_change_id, reason }` | `{ restored: [id] }` |
 | `crm_data_quality` | Report: required attributes missing, stale records (no activity in N days), orphans (many-side of a `restrict` relation with no active link), unique collisions predating a rule. Each bucket carries a `query_filter` to paginate the full set via `crm_records_query`. | `{ object_type?, stale_days?: number }` | `{ missing_required, stale, orphans, collisions }` each `{ count, items: [{record, detail}] (≤100), query_filter }` |
+<!-- tools:end -->
 
 ### 7a. Compliance: erasure, suppression, write guard
 
+<!-- tools:start:7a -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
 | `crm_record_erase` | Right-to-erasure: suppress first, scrub data + edge/entry data + historical values in place, reindex neighbours, leave a permanent tombstone, emit `record.erased` (consumers must erase their copies). Owner-only, approval-gated, irreversible. | `{ id, reason: gdpr_request\|retention_policy\|legal_order\|other, suppress?: true }` | `{ erased: true, suppressed: [{kind, count}] }` |
@@ -162,11 +175,13 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_suppression_list` | List suppression entries (hashes and metadata only — the store holds no readable values). | `{ kind?, cursor?, limit? }` | `{ entries, next_cursor }` |
 | `crm_suppression_remove` | Remove a suppression entry (un-suppressing an objector — owner + approval). | `{ kind, value, reason }` | `{ removed: boolean }` |
 | `crm_write_guard_set` | Set the team's write guard: rejected origin classes (`ORIGIN_REJECTED`), `require_origin` (refuse origin-less writes), and `team_visibility_only_apps` (app keys whose writes must be team-visible — `VISIBILITY_REJECTED`; server-enforces "we write no private data"). Owner-only. | `{ rejected_origins?, require_origin?, team_visibility_only_apps? }` | the guard |
+<!-- tools:end -->
 
 Suppression entries survive tenant deletion and record erasure by construction (no foreign keys — schema-engine §2); erasure semantics: schema-engine §4d.
 
 ## 8. IO, change feed, webhooks
 
+<!-- tools:start:8 -->
 | Tool | Description | Input | Output |
 |---|---|---|---|
 | `crm_export` | Export an object type or view to JSONL/CSV as a Task; the approval names the exact attribute list, rows honour the approver's redaction, and the result is a single-use signed URL (≤1 h, row-capped). | `{ object_type?, view?, format: jsonl\|csv, attributes?, reason?, idempotency_key? }` | `{ task_id }` → `{ url, rows, expires_at }` |
@@ -174,6 +189,7 @@ Suppression entries survive tenant deletion and record erasure by construction (
 | `crm_webhook_set` | Register (upsert by URL) an HMAC-signed webhook receiving coalesced change batches **from now on** (never historical replay). Owner-only + approval. Intended for integration code, not conversational agents: the once-shown secret must never enter model context. | `{ url, events: [record.*\|link.*\|schema.*], active?, rotate_secret? }` | `{ webhook: { id, url, events, active }, secret?: string (creation or rotate only) }` |
 | `crm_webhook_list` | List webhooks (secrets never returned). | `{}` | `{ webhooks }` |
 | `crm_webhook_delete` | Delete a webhook. | `{ id }` | `{ deleted: true }` |
+<!-- tools:end -->
 
 Webhook wire contract (envelope, signature, retry, catch-up): **normative in [events.md](spec/events.md) §3** — this section only names the tools.
 
