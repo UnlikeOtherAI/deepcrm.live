@@ -61,7 +61,7 @@ const EnvSchema = z.object({
   DEEPCRM_DIRECT_CLIENTS: boolish.default('false'),
   DEEPCRM_UOA_CONFIG_PRIVATE_KEY_B64: optionalString,
   DEEPCRM_UOA_CLIENT_SECRET: optionalString,
-  DEEPCRM_SECRET_KEYRING_B64: optionalString,
+  DEEPCRM_SECRET_KEYRING_B64: z.string().min(1),
   LEDGER_PUBLIC_URL: optionalString,
   LEDGER_PROXY_TOKEN: optionalString,
   DEEPCRM_EMBEDDING_MODEL: z.string().min(1).default('jina-embeddings-v3'),
@@ -85,5 +85,3 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
   const parsed = EnvSchema.parse(source)
   return { ...parsed, REQUIRE_AUTH: parsed.REQUIRE_AUTH ?? parsed.NODE_ENV === 'production' }
 }
-
-export const env = parseEnv(process.env)

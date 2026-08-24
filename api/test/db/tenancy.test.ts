@@ -1,10 +1,11 @@
 import { createDb, writeAudit } from '@deepcrm/db'
 import { devPrincipal } from '@deepcrm/mcp-inbound'
 import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
-import type { Principal } from '@deepcrm/schemas'
+import { parseSecretBox, type Principal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import { resolveTenant, type TenantResolution } from '../../src/services/tenancy.js'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -13,6 +14,7 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for ten
 const db = createDb(databaseUrl)
 const createdOrganizationIds: string[] = []
 const createdTenants: TenantResolution[] = []
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 
 function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
   return {
@@ -22,6 +24,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
     version: '0.0.0',
     orgAllowlist,
     linkWriter: createProjectionLinkWriter(),
+    queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }
 }

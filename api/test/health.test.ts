@@ -1,11 +1,18 @@
 import { createDb, writeAudit, type Db } from '@deepcrm/db'
 import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { parseSecretBox } from '@deepcrm/schemas'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createAppDeps, type AppDeps } from '../src/deps.js'
 import { parseEnv, type Env } from '../src/env.js'
+import { createQueryCursorCodec } from '../src/services/query-cursor.js'
 
-const testEnv: Env = parseEnv({ DATABASE_URL: 'postgresql://unused', NODE_ENV: 'test' })
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
+const testEnv: Env = parseEnv({
+  DATABASE_URL: 'postgresql://unused',
+  NODE_ENV: 'test',
+  DEEPCRM_SECRET_KEYRING_B64: keyring,
+})
 
 function makeDeps(ok: boolean): AppDeps {
   const db: Db = createDb('postgresql://unused')
@@ -19,6 +26,7 @@ function makeDeps(ok: boolean): AppDeps {
     version: '0.0.0',
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
+    queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }
 }
@@ -42,11 +50,22 @@ describe('GET /health', () => {
 })
 
 describe('createAppDeps', () => {
+  it('requires a valid query-cursor keyring and fails closed', () => {
+    expect(() => parseEnv({ DATABASE_URL: 'postgresql://unused', NODE_ENV: 'test' })).toThrow()
+    const invalid = parseEnv({
+      DATABASE_URL: 'postgresql://unused',
+      NODE_ENV: 'test',
+      DEEPCRM_SECRET_KEYRING_B64: 'invalid',
+    })
+    expect(() => createAppDeps(invalid)).toThrow()
+  })
+
   it('parses the organization allowlist once into a normalized set', async () => {
     const deps = createAppDeps(parseEnv({
       DATABASE_URL: 'postgresql://unused',
       NODE_ENV: 'test',
       DEEPCRM_ORG_ALLOWLIST: ' org_a,org_b, org_a ',
+      DEEPCRM_SECRET_KEYRING_B64: keyring,
     }))
 
     expect(deps.orgAllowlist).not.toBeNull()

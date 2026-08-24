@@ -1,9 +1,10 @@
 import { createDb, dropTenant, seedTenant, writeAudit, type PolicyEffect } from '@deepcrm/db'
 import { createProjectionLinkWriter, defineObjectType } from '@deepcrm/schema-engine'
-import type { ActorContext } from '@deepcrm/schemas'
+import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import {
   archiveSchemaAttribute,
   archiveSchemaObject,
@@ -24,6 +25,7 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for sch
 
 const db = createDb(databaseUrl)
 const organizationIds: string[] = []
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 const deps: AppDeps = {
   db,
   clock: () => new Date(),
@@ -31,6 +33,7 @@ const deps: AppDeps = {
   version: '0.0.0',
   orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(),
+  queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
   writeAudit,
 }
 type Tenant = { organizationId: string; teamId: string }

@@ -2,10 +2,11 @@ import {
   createDb, dropTenant, seedTenant, writeAudit, type PolicyAction, type PolicyResourceType,
 } from '@deepcrm/db'
 import type { LinkWriter } from '@deepcrm/schema-engine'
-import { ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import {
   assertRecord,
   createRecord,
@@ -19,6 +20,7 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for rec
 const db = createDb(databaseUrl)
 const organizations: string[] = []
 const now = new Date('2026-08-24T12:00:00.000Z')
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 type Tenant = { organizationId: string; teamId: string }
 
 const noLinks: LinkWriter = {
@@ -28,7 +30,8 @@ const noLinks: LinkWriter = {
 }
 const deps: AppDeps = {
   db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0',
-  orgAllowlist: null, linkWriter: noLinks, writeAudit,
+  orgAllowlist: null, linkWriter: noLinks,
+  queryCursor: createQueryCursorCodec(parseSecretBox(keyring)), writeAudit,
 }
 
 function context(tenant: Tenant, userId = 'uoa_records_user'): ActorContext {

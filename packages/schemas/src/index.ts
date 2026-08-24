@@ -7,3 +7,5 @@ export { ActorType, Cursor, ExpectedVersion, IdempotencyKey, IsoDate, IsoDateTim
 export * from './attribute-values.js'
 export * from './attribute-config.js'
 export * from './schema-specs.js'
+export * from './filter.js'
+export * from './crypto/secret-box.js'

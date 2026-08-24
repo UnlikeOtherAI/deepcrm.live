@@ -4,10 +4,11 @@ import {
   canonicalJson, createDb, dropTenant, seedTenant, writeAudit, type PolicyAction,
 } from '@deepcrm/db'
 import type { LinkWriter } from '@deepcrm/schema-engine'
-import { ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import {
   createRecord,
   updateRecord,
@@ -20,6 +21,7 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for rec
 const db = createDb(databaseUrl)
 const organizationIds: string[] = []
 const fixedNow = new Date('2026-08-24T12:00:00.000Z')
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 type Tenant = { organizationId: string; teamId: string }
 
 const throwingLinkWriter: LinkWriter = {
@@ -36,6 +38,7 @@ const deps: AppDeps = {
   version: '0.0.0',
   orgAllowlist: null,
   linkWriter: throwingLinkWriter,
+  queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
   writeAudit,
 }
 

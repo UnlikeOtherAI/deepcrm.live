@@ -18,6 +18,9 @@ export type PolicyRequest = {
   scopes: PolicyScopeRef[]
   sensitivity?: 'public' | 'internal' | 'confidential' | 'restricted'
 }
+export type PolicyEvaluator = {
+  evaluate: (request: PolicyRequest) => PolicyDecision
+}
 
 type Sensitivity = NonNullable<PolicyRequest['sensitivity']>
 type PolicyConditions = { sensitivity: Sensitivity } | null
@@ -153,22 +156,19 @@ function isHardDenied(decision: PolicyDecision): boolean {
   return !decision.allowed && !decision.requiresApproval
 }
 
-export async function checkPolicy(
-  db: Db,
+type PolicyRuleWithBindings = Prisma.PolicyRuleGetPayload<{
+  include: { bindings: true }
+}>
+
+function evaluatePolicy(
   ctx: ActorContext,
+  rules: readonly PolicyRuleWithBindings[],
   request: PolicyRequest,
-): Promise<PolicyDecision> {
-  const rules = await db.policyRule.findMany({
-    where: {
-      organizationId: ctx.tenant.organizationId,
-      teamId: ctx.tenant.teamId,
-      resourceType: request.resourceType,
-      action: request.action,
-    },
-    include: { bindings: true },
-  })
+): PolicyDecision {
   const scoped = rules.filter((rule) => (
-    request.scopes.some((scope) => scope.scope === rule.scope && scope.id === rule.scopeId)
+    rule.resourceType === request.resourceType
+    && rule.action === request.action
+    && request.scopes.some((scope) => scope.scope === rule.scope && scope.id === rule.scopeId)
     && conditionsMatch(rule.conditions, request.sensitivity)
   ))
   const humanIds = new Set([
@@ -192,6 +192,43 @@ export async function checkPolicy(
   }
   if (!human.allowed || !agent.allowed) return { allowed: false, requiresApproval: true }
   return { allowed: true, requiresApproval: human.requiresApproval || agent.requiresApproval }
+}
+
+function requestKey(request: PolicyRequest): string {
+  return `${request.resourceType}:${request.action}`
+}
+
+export async function loadPolicyEvaluator(
+  db: Db,
+  ctx: ActorContext,
+  requests: readonly PolicyRequest[],
+): Promise<PolicyEvaluator> {
+  const distinct = new Map(requests.map((request) => [requestKey(request), request]))
+  const rules = distinct.size === 0
+    ? []
+    : await db.policyRule.findMany({
+      where: {
+        organizationId: ctx.tenant.organizationId,
+        teamId: ctx.tenant.teamId,
+        OR: [...distinct.values()].map((request) => ({
+          resourceType: request.resourceType,
+          action: request.action,
+        })),
+      },
+      include: { bindings: true },
+    })
+  return {
+    evaluate: (request) => evaluatePolicy(ctx, rules, request),
+  }
+}
+
+export async function checkPolicy(
+  db: Db,
+  ctx: ActorContext,
+  request: PolicyRequest,
+): Promise<PolicyDecision> {
+  const evaluator = await loadPolicyEvaluator(db, ctx, [request])
+  return evaluator.evaluate(request)
 }
 
 function parseBinding(value: unknown): SeedBinding {

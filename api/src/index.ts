@@ -1,8 +1,10 @@
 import { buildApp } from './app.js'
 import { createAppDeps, type AppDeps } from './deps.js'
-import { env } from './env.js'
+import { parseEnv } from './env.js'
 import type { JobHandler, WorkerDeps } from '@deepcrm/worker'
 import { handlers } from '@deepcrm/worker/dist/jobs/registry.js'
+
+const env = parseEnv(process.env)
 
 // Fail-closed boot check (docs/auth-and-tenancy.md §1, review S2.3): with
 // auth off, only localhost origins are ever safe, and never in production.

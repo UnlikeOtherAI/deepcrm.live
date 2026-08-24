@@ -9,9 +9,10 @@ import {
   type PolicyEffect,
   type PolicyResourceType,
 } from '@deepcrm/db'
-import type { ActorContext } from '@deepcrm/schemas'
+import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 
 export type LinkTenant = { organizationId: string; teamId: string }
 export type LinkFixture = {
@@ -22,6 +23,7 @@ export type LinkFixture = {
 }
 
 const now = new Date('2026-08-24T12:00:00.000Z')
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 
 export function linkDeps(db: Db): AppDeps {
   return {
@@ -31,6 +33,7 @@ export function linkDeps(db: Db): AppDeps {
     version: '0.0.0',
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
+    queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }
 }
