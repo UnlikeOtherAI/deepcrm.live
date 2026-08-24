@@ -39,11 +39,11 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 **Files:**
 - Copy `docs/spec/templates/system.json` and `standard_crm.json` into `packages/schema-engine/src/templates/` unchanged; **import them** (`resolveJsonModule` inlines into dist — never `fs.readFile`, the Docker image copies only `dist`); define `TemplateSchema` (zod) that both parse against.
-- Create `packages/schema-engine/src/templates/apply.ts` — `applyTemplate(tx, tenant, actor, slug)`: idempotent (skip existing slugs), returns `{ added }`; `listTemplates()`. Apply atomically in four passes: create object-type shells with primary unset; create explicit relation types; define attributes (claiming compatible supplied record-reference projections); then set and validate primary attributes and matching rules.
-- Edit `api/src/services/tenancy.ts` — on first creation of a team: `seedDefaultPolicies` + `applyTemplate(system)`.
-- Tests (DB): applying `standard_crm` twice adds nothing the second time; provisioning creates `activity`, `note`, `task`, `activity_about`.
+- Create `packages/schema-engine/src/templates/apply.ts` — `applyTemplate(tx, tenant, actor, slug)`: idempotent (skip existing slugs; never mutate or archive an existing definition), returns `{ added }`; `listTemplates()`. The caller owns **one transaction**, takes the namespace-3 provisioning advisory lock before any write, and applies exactly four passes in this order: (1) object-type shells with primary unset, (2) explicit relation types, (3) attributes and compatible supplied `record_reference` projection claims, (4) primaries plus matching rules. T11 uses a dedicated batch/internal schema-apply seam, not T10's public per-mutation mutators: child operations must not independently increment `schemaVersion` or write audits. The enclosing provision/apply operation performs at most one coherent version bump and one audit insert, with the audit as the final database operation.
+- Edit `api/src/services/tenancy.ts` — after authentication and the tenant allowlist gate but before any provisioning write, take the namespace-3 lock; **only when the team row was first created**, call `seedDefaultPolicies` and `applyTemplate(system)` in the same caller transaction. Existing teams do not receive implicit policy/template mutation.
+- Tests (DB): both imported JSON templates parse through `TemplateSchema`; applying `standard_crm` twice adds nothing the second time; provisioning creates `activity`, `note`, `task`, `activity_about`; one provisioning call produces one version bump and one final audit row.
 
-**Acceptance:** tests green; `node -e "JSON.parse(require('fs').readFileSync('packages/schema-engine/src/templates/standard_crm.json'))"`.
+**Acceptance:** tests green; imported `system.json` and `standard_crm.json` parse through `TemplateSchema`; no production template path uses `fs`.
 
 ---
 

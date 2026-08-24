@@ -1016,7 +1016,9 @@ Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id
 
 ## 9. Templates (`packages/schema-engine/src/templates/*.json`)
 
-`standard_crm` (person, company, deal + relations + matching rules as in brief §5.6), `system` (activity, note, task, their relation types — applied automatically on tenant provision), later `saas`, `agency`. Template application is idempotent: existing slugs are left untouched; new ones added; never archives.
+`standard_crm` (person, company, deal + relations + matching rules as in brief §5.6), `system` (activity, note, task, their relation types — applied automatically only when a team is first provisioned), later `saas`, `agency`. Templates are statically imported JSON modules (`resolveJsonModule`); no runtime filesystem read is permitted. Template application is idempotent: existing slugs are left untouched; new ones added; never mutates or archives an existing definition.
+
+`applyTemplate` runs inside the caller's single transaction under the namespace-3 provisioning advisory lock. It uses the dedicated internal batch-apply seam rather than the public schema mutators: exactly four passes, in order — object-type shells with primaries unset; explicit relation types; attributes and compatible `record_reference` projection claims; then primaries and matching rules. Child work does not independently bump `schemaVersion` or write audit rows. The enclosing operation makes at most one coherent version bump and one audit insertion, and that audit insertion is the final database operation before commit.
 
 **Evidence-bearing facts — the blessed idiom (R18):** a fact that carries its own provenance (`observed_at`, source URL, confidence band, verdict) is modelled as its **own object type** with a `{subject}:{dimension}` unique text key and a `record_reference` to its subject — not as metadata bolted onto another record's attribute. `crm_record_assert` on the unique key gives idempotent re-observation; history gives the audit trail. A per-attribute evidence sidecar may come later; this pattern is supported today and is what integrations should build on.
 
