@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { canonicalJson, tenantWhere } from '@deepcrm/db'
 import type { RecordTx } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, LinkOut, ServiceError, Uuid, type ActorContext } from '@deepcrm/schemas'
 
 import type { LinkServiceResult } from './links.js'
 
@@ -29,25 +29,14 @@ function replayResult(value: unknown): LinkServiceResult {
   if (!isObject(value) || !isObject(value['link'])) {
     throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
   }
-  const link = value['link']
-  const ended = value['ended_links']
-  if (
-    typeof link['id'] !== 'string'
-    || typeof link['relation_type_id'] !== 'string'
-    || typeof link['from_record_id'] !== 'string'
-    || typeof link['to_record_id'] !== 'string'
-    || !Array.isArray(ended)
-    || !ended.every((id): id is string => typeof id === 'string')
-    || typeof value['changed'] !== 'boolean'
-  ) throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
+  const link = LinkOut.safeParse(value['link'])
+  const ended = Uuid.array().safeParse(value['ended_links'])
+  if (!link.success || !ended.success || typeof value['changed'] !== 'boolean') {
+    throw new ServiceError(ErrorCode.INTERNAL, 'Stored replay result is invalid')
+  }
   return {
-    link: {
-      id: link['id'],
-      relation_type_id: link['relation_type_id'],
-      from_record_id: link['from_record_id'],
-      to_record_id: link['to_record_id'],
-    },
-    ended_links: ended,
+    link: link.data,
+    ended_links: ended.data,
     changed: value['changed'],
   }
 }

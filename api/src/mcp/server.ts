@@ -21,6 +21,7 @@ import type { AppDeps } from '../deps.js'
 import { registerResources } from './resources.js'
 import { registerSchemaTools } from './tools/schema.js'
 import { registerRecordTools } from './tools/records.js'
+import { registerLinkTools } from './tools/links.js'
 import { configureToolRuntime, logToolEntry } from './tools/register.js'
 
 const PROTOCOL_VERSION = '2026-07-28'
@@ -145,6 +146,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   bootstrap.disable()
   registerSchemaTools(server, ctx, deps)
   registerRecordTools(server, ctx, deps)
+  registerLinkTools(server, ctx, deps)
   registerResources(server, ctx, deps)
 
   server.server.setRequestHandler(ServerDiscoverRequestSchema, async () => {

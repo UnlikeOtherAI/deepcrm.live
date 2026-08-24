@@ -213,6 +213,15 @@ describe('direct link service', () => {
       where: { ...target.tenant, id: { in: [target.people[0]!, target.companies[0]!] } },
     })
     expect(link).toMatchObject({ data: { role: 'buyer' }, label: 'primary' })
+    expect(result.link).toMatchObject({
+      relation_type: 'edge_many',
+      from_record_id: target.people[0],
+      to_record_id: target.companies[0],
+      data: { role: 'buyer' },
+      label: 'primary',
+      active_until: null,
+    })
+    expect(result.link.active_from).toBe(link.activeFrom.toISOString())
     expect(changes).toHaveLength(2)
     expect(changes.map((change) => change.kind)).toEqual(['link', 'link'])
     expect(new Set(changes.map((change) => change.groupId)).size).toBe(1)

@@ -24,6 +24,7 @@ import {
   storeLinkReplay,
   type LinkDescriptor,
 } from './link-idempotency.js'
+import { presentLink, type PublicLink } from './link-presenter.js'
 import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { findVisibleRecord, requireVisibleRecord, type VisibleRecord } from './record-visibility.js'
@@ -40,12 +41,7 @@ type UnlinkByTriple = {
 export type UnlinkRecordsServiceInput = (UnlinkById | UnlinkByTriple) & CommonInput
 
 export type LinkServiceResult = {
-  link: {
-    id: string
-    relation_type_id: string
-    from_record_id: string
-    to_record_id: string
-  }
+  link: PublicLink
   ended_links: string[]
   changed: boolean
 }
@@ -57,14 +53,13 @@ type ResolvedTarget = {
   linkId: string | null
 }
 
-function serviceResult(result: LinkOperationResult): LinkServiceResult {
+async function serviceResult(
+  tx: LinkServiceTx,
+  ctx: ActorContext,
+  result: LinkOperationResult,
+): Promise<LinkServiceResult> {
   return {
-    link: {
-      id: result.link.id,
-      relation_type_id: result.link.relationTypeId,
-      from_record_id: result.link.fromRecordId,
-      to_record_id: result.link.toRecordId,
-    },
+    link: await presentLink(tx, ctx, result.link.id),
     ended_links: [...result.endedLinks],
     changed: result.changes.length > 0,
   }
@@ -251,7 +246,7 @@ async function runWrite(
     const reservation = await reserveLinkReplay(serviceTx, ctx, descriptor, hash)
     if (reservation.kind === 'replay') return reservation.result
     const engineResult = await operation(serviceTx)
-    const result = serviceResult(engineResult)
+    const result = await serviceResult(serviceTx, ctx, engineResult)
     const changes = engineResult.changes.map((change) => ({
       ...change,
       reason: descriptor.reason ?? change.reason,
