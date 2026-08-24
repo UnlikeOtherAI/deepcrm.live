@@ -25,7 +25,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T29 — Timeline
+### T29 ✅ — Timeline
 
 **Depends on:** T28. **Spec:** `docs/mcp-surface.md` §6 (`crm_record_timeline`).
 
