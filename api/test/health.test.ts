@@ -1,4 +1,5 @@
 import { createDb, writeAudit, type Db } from '@deepcrm/db'
+import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createAppDeps, type AppDeps } from '../src/deps.js'
@@ -17,6 +18,7 @@ function makeDeps(ok: boolean): AppDeps {
     ids: () => 'id_test',
     version: '0.0.0',
     orgAllowlist: null,
+    linkWriter: createProjectionLinkWriter(),
     writeAudit,
   }
 }

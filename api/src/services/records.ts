@@ -14,7 +14,6 @@ import {
   type AssertResolvedAction,
   type AssertRecordInput,
   type CreateRecordInput,
-  type LinkWriter,
   type LoadedSchema,
   type RecordTx,
   type RecordWriteResult,
@@ -349,7 +348,7 @@ function commonArgs(input: CommonWriteInput): Record<string, unknown> {
 }
 
 export async function createRecord(
-  deps: AppDeps, ctx: ActorContext, input: CreateRecordServiceInput, linkWriter: LinkWriter,
+  deps: AppDeps, ctx: ActorContext, input: CreateRecordServiceInput,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const schema = await loadSchema(deps.db, ctx.tenant)
@@ -366,13 +365,13 @@ export async function createRecord(
       ...attributePolicies(schema, objectTypeId, input.data, descriptor.scopes),
     ]
     return runWrite(deps, ctx, descriptor, authorization, (tx) => (
-      engineCreateRecord(tx, ctx, schema, { ...engineInput, reason }, linkWriter)
+      engineCreateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
     ))
   })
 }
 
 export async function updateRecord(
-  deps: AppDeps, ctx: ActorContext, input: UpdateRecordServiceInput, linkWriter: LinkWriter,
+  deps: AppDeps, ctx: ActorContext, input: UpdateRecordServiceInput,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, record] = await Promise.all([
@@ -394,13 +393,13 @@ export async function updateRecord(
       ...attributePolicies(schema, record.objectTypeId, input.data, scopes),
     ]
     return runWrite(deps, ctx, descriptor, authorization, (tx) => (
-      engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason }, linkWriter)
+      engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter)
     ))
   })
 }
 
 export async function assertRecord(
-  deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput, linkWriter: LinkWriter,
+  deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const schema = await loadSchema(deps.db, ctx.tenant)
@@ -432,14 +431,14 @@ export async function assertRecord(
       ])
     }
     return runWrite(deps, ctx, descriptor, null, (tx) => engineAssertRecord(
-      tx, ctx, schema, { ...engineInput, reason }, linkWriter, onResolved,
+      tx, ctx, schema, { ...engineInput, reason }, deps.linkWriter, onResolved,
     ))
   })
 }
 
 async function changeDeletedState(
   deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
-  linkWriter: LinkWriter, restore: boolean,
+  restore: boolean,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, record] = await Promise.all([
@@ -460,23 +459,23 @@ async function changeDeletedState(
     return runWrite(deps, ctx, descriptor, [recordPolicy(action, scopes)], (tx) => (
       restore
         ? engineRestoreRecord(
-          tx, ctx, schema, input.recordId, input.expectedVersion, linkWriter, input.reason,
+          tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
         )
         : engineDeleteRecord(
-          tx, ctx, schema, input.recordId, input.expectedVersion, linkWriter, input.reason,
+          tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
         )
     ))
   })
 }
 
 export function deleteRecord(
-  deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput, linkWriter: LinkWriter,
+  deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
 ): Promise<RecordServiceResult> {
-  return changeDeletedState(deps, ctx, input, linkWriter, false)
+  return changeDeletedState(deps, ctx, input, false)
 }
 
 export function restoreRecord(
-  deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput, linkWriter: LinkWriter,
+  deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
 ): Promise<RecordServiceResult> {
-  return changeDeletedState(deps, ctx, input, linkWriter, true)
+  return changeDeletedState(deps, ctx, input, true)
 }

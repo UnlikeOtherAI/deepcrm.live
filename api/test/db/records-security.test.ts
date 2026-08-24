@@ -19,16 +19,16 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for rec
 const db = createDb(databaseUrl)
 const organizations: string[] = []
 const now = new Date('2026-08-24T12:00:00.000Z')
-const deps: AppDeps = {
-  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0',
-  orgAllowlist: null, writeAudit,
-}
 type Tenant = { organizationId: string; teamId: string }
 
 const noLinks: LinkWriter = {
   apply: async () => ({ changes: [], touchedRecordIds: [] }),
   delete: async () => ({ changes: [], touchedRecordIds: [] }),
   restore: async () => ({ changes: [], touchedRecordIds: [] }),
+}
+const deps: AppDeps = {
+  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0',
+  orgAllowlist: null, linkWriter: noLinks, writeAudit,
 }
 
 function context(tenant: Tenant, userId = 'uoa_records_user'): ActorContext {
@@ -124,20 +124,20 @@ describe('record service security boundaries', () => {
     const caller = context(target, 'uoa_granted_caller')
     const created = await createRecord(deps, owner, {
       objectType: 'person', data: { name: 'Private', email: 'private@example.com' },
-    }, noLinks)
+    })
     await db.record.update({ where: { id: created.record.id }, data: { visibility: 'private' } })
     const auditsBefore = await db.auditLog.count({ where: { organizationId: target.organizationId } })
 
     await expect(updateRecord(deps, caller, {
       recordId: created.record.id, data: { name: 'Hidden' },
-    }, noLinks)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(assertRecord(deps, caller, {
       objectType: 'person', matchAttribute: 'email',
       data: { name: 'Hidden', email: 'private@example.com' },
-    }, noLinks)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(deleteRecord(deps, caller, {
       recordId: created.record.id, expectedVersion: 1,
-    }, noLinks)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await db.auditLog.count({ where: { organizationId: target.organizationId } })).toBe(auditsBefore)
 
     await db.record.update({ where: { id: created.record.id }, data: { visibility: 'users' } })
@@ -146,7 +146,7 @@ describe('record service security boundaries', () => {
     })
     await expect(updateRecord(deps, caller, {
       recordId: created.record.id, data: { name: 'Visible' },
-    }, noLinks)).resolves.toMatchObject({ changed: true, record: { displayName: 'visible' } })
+    })).resolves.toMatchObject({ changed: true, record: { displayName: 'visible' } })
   })
 
   it('redacts an invisible duplicate id but preserves a visible duplicate id', async () => {
@@ -155,12 +155,12 @@ describe('record service security boundaries', () => {
     const hiddenOwner = context(target, 'uoa_duplicate_owner')
     const hidden = await createRecord(deps, hiddenOwner, {
       objectType: 'person', data: { name: 'Hidden', email: 'hidden@example.com' },
-    }, noLinks)
+    })
     await db.record.update({ where: { id: hidden.record.id }, data: { visibility: 'private' } })
 
     const hiddenError = await caught(createRecord(deps, caller, {
       objectType: 'person', data: { name: 'Collision', email: 'hidden@example.com' },
-    }, noLinks))
+    }))
     expect(hiddenError.code).toBe('DUPLICATE_FOUND')
     expect(hiddenError.details).not.toHaveProperty('record_id')
     expect(hiddenError.details).not.toHaveProperty('record_ids')
@@ -168,10 +168,10 @@ describe('record service security boundaries', () => {
 
     const visible = await createRecord(deps, caller, {
       objectType: 'person', data: { name: 'Visible', email: 'visible@example.com' },
-    }, noLinks)
+    })
     const visibleError = await caught(createRecord(deps, caller, {
       objectType: 'person', data: { name: 'Collision', email: 'visible@example.com' },
-    }, noLinks))
+    }))
     expect(visibleError).toMatchObject({
       code: 'DUPLICATE_FOUND', details: { record_id: visible.record.id },
     })
@@ -182,7 +182,7 @@ describe('record service security boundaries', () => {
     await addRule(denied, 'attribute', 'edit', 'deny', false, 'confidential')
     const deniedError = await caught(createRecord(deps, context(denied), {
       objectType: 'person', data: { name: 'Denied', secret: 'classified' },
-    }, noLinks))
+    }))
     expect(deniedError).toMatchObject({
       code: 'POLICY_DENIED', details: { resource: 'attribute', action: 'edit' },
     })
@@ -195,7 +195,7 @@ describe('record service security boundaries', () => {
     await addRule(approval, 'attribute', 'edit', 'deny', true, 'confidential')
     const approvalError = await caught(createRecord(deps, context(approval), {
       objectType: 'person', data: { name: 'Approval', secret: 'classified' },
-    }, noLinks))
+    }))
     expect(approvalError).toMatchObject({
       code: 'APPROVAL_REQUIRED', details: { resource: 'attribute', action: 'edit' },
     })
@@ -207,13 +207,13 @@ describe('record service security boundaries', () => {
     const ctx = context(target)
     const existing = await createRecord(deps, ctx, {
       objectType: 'person', data: { name: 'Existing', email: 'existing@example.com' },
-    }, noLinks)
+    })
     await addRule(target, 'record', 'create', 'deny')
 
     await expect(assertRecord(deps, ctx, {
       objectType: 'person', matchAttribute: 'email',
       data: { name: 'Edited', email: 'existing@example.com' },
-    }, noLinks)).resolves.toMatchObject({ created: false, record: { id: existing.record.id } })
+    })).resolves.toMatchObject({ created: false, record: { id: existing.record.id } })
     const tenantWhere = { organizationId: target.organizationId, teamId: target.teamId }
     const rowsBeforeMiss = await Promise.all([
       db.record.count({ where: tenantWhere }),
@@ -224,7 +224,7 @@ describe('record service security boundaries', () => {
     await expect(assertRecord(deps, ctx, {
       objectType: 'person', matchAttribute: 'email',
       data: { name: 'Missing', email: 'missing@example.com' },
-    }, noLinks)).rejects.toMatchObject({ code: 'POLICY_DENIED' })
+    })).rejects.toMatchObject({ code: 'POLICY_DENIED' })
     expect(await Promise.all([
       db.record.count({ where: tenantWhere }),
       db.recordChange.count({ where: tenantWhere }),
@@ -238,7 +238,7 @@ describe('record service security boundaries', () => {
     await expect(assertRecord(deps, context(createAllowed), {
       objectType: 'person', matchAttribute: 'email',
       data: { name: 'Created', email: 'created@example.com' },
-    }, noLinks)).resolves.toMatchObject({ created: true })
+    })).resolves.toMatchObject({ created: true })
   })
 
   it('stores replay and enqueues before the terminal audit database operation', async () => {
@@ -266,7 +266,7 @@ describe('record service security boundaries', () => {
 
     await createRecord(tracedDeps, context(target), {
       objectType: 'person', data: { name: 'Ordered' }, idempotencyKey: 'ordered-create',
-    }, noLinks)
+    })
 
     const replayAt = trace.lastIndexOf('IdempotencyReplay.updateMany')
     const enqueueAt = Math.max(trace.lastIndexOf('QueueJob.create'), trace.lastIndexOf('QueueJob.createMany'))
@@ -287,24 +287,24 @@ describe('record service security boundaries', () => {
     const created = await createRecord(deps, ctx, {
       objectType: 'person', data: { name: 'One', email: 'five@example.com' },
       idempotencyKey: 'five-create', reason: 'create reason',
-    }, noLinks)
+    })
     const updated = await updateRecord(deps, ctx, {
       recordId: created.record.id, data: { name: 'Two' }, expectedVersion: 1,
       idempotencyKey: 'five-update', reason: 'update reason',
-    }, noLinks)
+    })
     const asserted = await assertRecord(deps, ctx, {
       objectType: 'person', matchAttribute: 'email',
       data: { name: 'Three', email: 'five@example.com' }, expectedVersion: 2,
       idempotencyKey: 'five-assert', reason: 'assert reason',
-    }, noLinks)
+    })
     const deleted = await deleteRecord(deps, ctx, {
       recordId: created.record.id, expectedVersion: 3,
       idempotencyKey: 'five-delete', reason: 'delete reason',
-    }, noLinks)
+    })
     const restored = await restoreRecord(deps, ctx, {
       recordId: created.record.id, expectedVersion: 4,
       idempotencyKey: 'five-restore', reason: 'restore reason',
-    }, noLinks)
+    })
 
     expect([created, updated, asserted, deleted, restored].map((result) => result.record.version))
       .toEqual([1, 2, 3, 4, 5])

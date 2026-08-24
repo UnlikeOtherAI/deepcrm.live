@@ -20,14 +20,6 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for rec
 const db = createDb(databaseUrl)
 const organizationIds: string[] = []
 const fixedNow = new Date('2026-08-24T12:00:00.000Z')
-const deps: AppDeps = {
-  db,
-  clock: () => fixedNow,
-  ids: () => crypto.randomUUID(),
-  version: '0.0.0',
-  orgAllowlist: null,
-  writeAudit,
-}
 type Tenant = { organizationId: string; teamId: string }
 
 const throwingLinkWriter: LinkWriter = {
@@ -36,6 +28,15 @@ const throwingLinkWriter: LinkWriter = {
   },
   delete: async () => ({ changes: [], touchedRecordIds: [] }),
   restore: async () => ({ changes: [], touchedRecordIds: [] }),
+}
+const deps: AppDeps = {
+  db,
+  clock: () => fixedNow,
+  ids: () => crypto.randomUUID(),
+  version: '0.0.0',
+  orgAllowlist: null,
+  linkWriter: throwingLinkWriter,
+  writeAudit,
 }
 
 function context(tenant: Tenant): ActorContext {
@@ -220,11 +221,11 @@ describe('record service policy, transaction, and idempotency seam', () => {
       idempotencyKey: 'create-ada',
       reason: 'fixture create',
     }
-    const created = await createRecord(deps, ctx, input, throwingLinkWriter)
+    const created = await createRecord(deps, ctx, input)
     const replayed = await createRecord(deps, ctx, {
       ...input,
       data: { email: 'Ada@Example.COM', name: 'Ada' },
-    }, throwingLinkWriter)
+    })
 
     expect(replayed).toEqual(created)
     expect(created).toMatchObject({ created: true, changed: true, record: { version: 1 } })
@@ -234,7 +235,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
     await expect(createRecord(deps, ctx, {
       ...input,
       data: { name: 'Grace', email: 'grace@example.com' },
-    }, throwingLinkWriter)).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
+    })).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
     expect(await state(target)).toEqual({
       records: 1, changes: 3, jobs: 1, replays: 1, audits: 1, uniqueKeys: 1,
     })
@@ -257,7 +258,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
       },
     })
 
-    await expect(createRecord(deps, ctx, input, throwingLinkWriter)).rejects.toMatchObject({
+    await expect(createRecord(deps, ctx, input)).rejects.toMatchObject({
       code: 'IDEMPOTENCY_IN_PROGRESS',
     })
     expect(await state(target)).toEqual({
@@ -284,10 +285,11 @@ describe('record service policy, transaction, and idempotency seam', () => {
       data: { name: 'Concurrent', company: crypto.randomUUID() },
       idempotencyKey: 'concurrent-create',
     }
-    const first = createRecord(deps, ctx, input, blockingWriter)
+    const blockingDeps: AppDeps = { ...deps, linkWriter: blockingWriter }
+    const first = createRecord(blockingDeps, ctx, input)
     await entered.promise
     try {
-      await expect(createRecord(deps, ctx, input, blockingWriter)).rejects.toMatchObject({
+      await expect(createRecord(blockingDeps, ctx, input)).rejects.toMatchObject({
         code: 'IDEMPOTENCY_IN_PROGRESS',
       })
     } finally {
@@ -306,7 +308,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
 
     await expect(createRecord(deps, ctx, {
       objectType: 'person', data: { name: 'Denied' }, idempotencyKey: 'denied-create',
-    }, throwingLinkWriter)).rejects.toMatchObject({ code: 'POLICY_DENIED' })
+    })).rejects.toMatchObject({ code: 'POLICY_DENIED' })
     expect(await state(target)).toEqual({
       records: 0, changes: 0, jobs: 0, replays: 0, audits: 1, uniqueKeys: 0,
     })
@@ -330,7 +332,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
       objectType: 'person',
       data: { name: 'Rollback', company: crypto.randomUUID() },
       idempotencyKey: 'rollback-create',
-    }, throwingLinkWriter))
+    }))
     expect(failure).toMatchObject({
       code: 'INTERNAL', message: 'Record operation failed',
       details: { correlation_id: expect.any(String) },
@@ -347,7 +349,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
     const ctx = context(target)
     const created = await createRecord(deps, ctx, {
       objectType: 'person', data: { name: 'Noop' },
-    }, throwingLinkWriter)
+    })
     const before = await state(target)
     const auditActions: string[] = []
     const noOpDeps: AppDeps = {
@@ -363,8 +365,8 @@ describe('record service policy, transaction, and idempotency seam', () => {
       expectedVersion: 1,
       idempotencyKey: 'noop-update',
     }
-    const first = await updateRecord(noOpDeps, ctx, input, throwingLinkWriter)
-    const replay = await updateRecord(noOpDeps, ctx, input, throwingLinkWriter)
+    const first = await updateRecord(noOpDeps, ctx, input)
+    const replay = await updateRecord(noOpDeps, ctx, input)
 
     expect(first).toEqual(replay)
     expect(first).toMatchObject({ changed: false, record: { id: created.record.id, version: 1 } })
@@ -380,7 +382,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
     const ctx = context(target)
     const created = await createRecord(deps, ctx, {
       objectType: 'person', data: { name: 'Versioned' },
-    }, throwingLinkWriter)
+    })
     const before = await state(target)
 
     await expect(updateRecord(deps, ctx, {
@@ -388,7 +390,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
       data: { name: 'Changed' },
       expectedVersion: 99,
       idempotencyKey: 'bad-version',
-    }, throwingLinkWriter)).rejects.toMatchObject({ code: 'VERSION_CONFLICT', details: { current: 1 } })
+    })).rejects.toMatchObject({ code: 'VERSION_CONFLICT', details: { current: 1 } })
     expect(await state(target)).toEqual(before)
     await expect(db.record.findFirstOrThrow({
       where: { organizationId: target.organizationId, teamId: target.teamId, id: created.record.id },

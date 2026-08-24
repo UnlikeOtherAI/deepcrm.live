@@ -4,7 +4,7 @@ import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
 import { canonicalJsonValue, type JsonValue } from './json.js'
-import { lockKeys, lockRecords } from './locks.js'
+import { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
 import { findUniqueRecord, keyHash, normalizedAttributeValue, syncMatchKeys, syncUniqueKeys } from './unique-keys.js'
 import { validateRecordData } from './validate.js'
 import type { LinkIntent } from './types.js'
@@ -24,6 +24,7 @@ export type LinkWriter = {
 export type LinkWriteResult = {
   changes: readonly ChangeIntent[]
   touchedRecordIds: readonly string[]
+  snapshot?: JsonValue
 }
 
 export type AssertResolvedAction =
@@ -156,6 +157,7 @@ async function prepareCreate(
 export async function createRecord(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: CreateRecordInput, linkWriter: LinkWriter,
 ): Promise<RecordWriteResult> {
+  await lockLinkTopology(tx, ctx.tenant.teamId)
   const prepared = await prepareCreate(tx, ctx, schema, input, linkWriter)
   return finish(tx, ctx, prepared.record, prepared.changes, true, prepared.links, input.reason)
 }
@@ -163,6 +165,7 @@ export async function createRecord(
 export async function updateRecord(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: UpdateRecordInput, linkWriter: LinkWriter,
 ): Promise<RecordWriteResult> {
+  await lockLinkTopology(tx, ctx.tenant.teamId)
   const record = await activeRecord(tx, ctx, input.recordId)
   version(record, input.expectedVersion)
   const objectType = schema.objectTypesById.get(record.objectTypeId)
@@ -202,11 +205,19 @@ export async function deleteRecord(
   linkWriter: LinkWriter,
   reason?: string,
 ): Promise<RecordWriteResult> {
+  await lockLinkTopology(tx, ctx.tenant.teamId)
   const record = await activeRecord(tx, ctx, recordId)
   version(record, expectedVersion)
   const objectType = schema.objectTypesById.get(record.objectTypeId)
   if (objectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema metadata is inconsistent')
-  const snapshot = await deleteSnapshot(tx, ctx, record)
+  const links = await linkWriter.delete(tx, ctx, schema, record.id)
+  const baseSnapshot = await deleteSnapshot(tx, ctx, record)
+  const linkSnapshot = links.snapshot === undefined ? {} : data(links.snapshot)
+  const snapshot = canonicalJsonValue({
+    ...data(baseSnapshot),
+    links: linkSnapshot['links'] ?? [],
+    cascaded: linkSnapshot['cascaded'] ?? [],
+  })
   await syncUniqueKeys(tx, schema, objectType, record.id, {})
   await syncMatchKeys(tx, schema, objectType, record.id, {})
   const persisted = await tx.record.updateMany({
@@ -220,7 +231,6 @@ export async function deleteRecord(
     recordId, kind: 'delete', attributeSlug: null, relationTypeId: null, linkId: null, groupId: null, oldValue: null, newValue: null,
     snapshot, resultingVersion: updated.version, reason: null,
   }]
-  const links = await linkWriter.delete(tx, ctx, schema, record.id)
   return finish(tx, ctx, updated, changes, false, links, reason)
 }
 
@@ -233,6 +243,7 @@ export async function restoreRecord(
   linkWriter: LinkWriter,
   reason?: string,
 ): Promise<RecordWriteResult> {
+  await lockLinkTopology(tx, ctx.tenant.teamId)
   await lockRecords(tx, ctx.tenant.teamId, [recordId])
   const record = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: recordId } })
   if (record === null || record.deletedAt === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
@@ -288,6 +299,7 @@ export async function assertRecord(
   linkWriter: LinkWriter,
   onResolved: AssertResolvedActionHandler,
 ): Promise<RecordWriteResult> {
+  await lockLinkTopology(tx, ctx.tenant.teamId)
   const objectType = object(schema, input.objectType)
   const attribute = schema.attributesByObjectTypeId.get(objectType.id)?.get(input.matchAttribute)
   if (attribute === undefined || !attribute.isUnique) {
