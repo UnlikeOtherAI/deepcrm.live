@@ -62,7 +62,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T23 — Record tools
+### T23 ✅ — Record tools
 
 **Depends on:** T22. **Spec:** `docs/mcp-surface.md` §3; `docs/spec/contracts.md` (`records.ts`, `tools.ts` record section); flows F3/F4 in `docs/spec/protocol-flows.md` are the acceptance narrative.
 
