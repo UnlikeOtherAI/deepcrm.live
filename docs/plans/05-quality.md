@@ -72,7 +72,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T41 — Export Task
+### T41 ✅ — Export Task
 
 **Depends on:** T40. **Spec:** `docs/mcp-surface.md` §8 (`crm_export`).
 
