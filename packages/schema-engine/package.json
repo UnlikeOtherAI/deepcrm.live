@@ -15,12 +15,16 @@
     "@deepcrm/db": "workspace:*",
     "@deepcrm/schemas": "workspace:*",
     "ajv": "^8.17.1",
+    "commonmark": "^0.31.2",
+    "currency-codes": "^2.2.0",
     "decimal.js": "^10.5.0",
+    "email-addresses": "^5.0.0",
     "libphonenumber-js": "^1.11.0",
     "tldts": "^6.1.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/commonmark": "^0.27.10",
     "fast-check": "^4.3.0"
   }
 }

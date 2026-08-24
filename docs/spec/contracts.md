@@ -34,9 +34,17 @@ export type Actor = z.infer<typeof Actor>
 ## `attribute-values.ts` — value shapes per attribute type
 
 ```ts
+import { code as findCurrency } from 'currency-codes'
+
+// Backed by the maintained finite set of currently supported ISO 4217 codes.
+// A regex alone is not a currency validator: withdrawn, reserved, and
+// otherwise unassigned three-letter strings must be rejected.
+const isSupportedIso4217Code = (value: string): boolean => findCurrency(value) !== undefined
+export const SupportedIso4217CurrencyCode = z.string().refine(isSupportedIso4217Code,
+  'must be a supported ISO 4217 currency code')
 export const CurrencyValue = z.object({
   amount: z.string().regex(/^-?\d+(\.\d{1,4})?$/).describe('canonical non-exponent decimal string; never rounded'),
-  currency: z.string().regex(/^[A-Z]{3}$/).describe('ISO 4217 uppercase code'),
+  currency: SupportedIso4217CurrencyCode.describe('supported ISO 4217 uppercase code; a three-letter pattern alone is invalid'),
 })
 export const LocationValue = z.object({
   line1: z.string().max(200).optional(), line2: z.string().max(200).optional(),
@@ -50,7 +58,9 @@ export const PersonalNameValue = z.object({
   full: z.string().max(250).optional().describe('derived from first+last when absent'),
 }).refine(v => v.full || v.first || v.last, 'at least one of first, last, full')
 export const SelectOption = z.object({
-  id: Slug, label: z.string().min(1).max(120), color: z.string().max(32).optional(),
+  id: Slug,
+  label: z.string().min(1).max(120),
+  color: z.string().min(1).max(32).optional(),
 })
 export const StatusOption = SelectOption.extend({
   category: z.enum(['open', 'won', 'lost', 'neutral']).describe('pipeline semantics of this stage'),
@@ -71,8 +81,8 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rich_text') }),
   z.object({ type: z.literal('number'), precision: z.number().int().min(0).max(10).optional(),
              min: z.number().optional(), max: z.number().optional() }),
-  z.object({ type: z.literal('currency'), defaultCurrency: z.string().regex(/^[A-Z]{3}$/).default('USD'),
-             fixedCurrency: z.string().regex(/^[A-Z]{3}$/).optional()
+  z.object({ type: z.literal('currency'), defaultCurrency: SupportedIso4217CurrencyCode.default('USD'),
+             fixedCurrency: SupportedIso4217CurrencyCode.optional()
                .describe('pin every value to one currency so range filters are comparable') }),
   z.object({ type: z.literal('percent') }),
   z.object({ type: z.literal('boolean') }),
@@ -94,7 +104,8 @@ export const AttributeConfig = z.discriminatedUnion('type', [
              objectTypes: z.array(Slug).min(1).describe('allowed target object types'),
              relationTypeSlug: Slug.optional().describe('backing relation (one per attribute, never shared — schema-engine §4f); generated as <objectType>_<attr> when absent') }),
   z.object({ type: z.literal('timestamp_system'),
-             source: z.enum(['created_at','updated_at','last_activity_at']) }),
+             source: z.enum(['created_at','updated_at','last_activity_at'])
+               .describe('virtual source; timestamp_system is computed and read-only; T12 owns write-time rejection') }),
   z.object({ type: z.literal('json'), schema: z.record(z.unknown()).optional()
              .describe('optional Draft 2020-12 JSON Schema; Ajv v8, no external refs; value max 64 KiB') }),
 ])
@@ -246,7 +257,8 @@ Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
 
 | ops | types |
 |---|---|
-| `eq neq in not_in is_null is_not_null` | all |
+| `is_null is_not_null` | all attributes; global null tests, not a type capability |
+| `eq neq in not_in` | every non-`json` type |
 | `contains starts_with` | text, email, url, domain, personal_name, select (multi), rich_text (contains only) |
 | `gt gte lt lte between` | number, currency (compares `amount`), percent, rating, date, datetime, timestamp_system, system timestamps |
 

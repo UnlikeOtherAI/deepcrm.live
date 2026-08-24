@@ -3,14 +3,17 @@ import { z } from 'zod'
 import { equalityFilterOps, normalizeWhitespace, type AttributeTypeDef } from './types.js'
 
 const configSchema = z.object({}).strict()
-const namePart = z.string().min(1).transform(normalizeWhitespace)
+const namePart = z.string().max(120).transform(normalizeWhitespace)
+const fullName = z.string().max(250).transform(normalizeWhitespace)
 
 const personalNameValueSchema = z.object({
   first: namePart.optional(),
   last: namePart.optional(),
-  full: namePart.optional(),
+  full: fullName.optional(),
 }).strict().transform((value, context) => {
-  const full = value.full ?? [value.first, value.last].filter((part): part is string => part !== undefined).join(' ')
+  const full = value.full ?? [value.first, value.last]
+    .filter((part): part is string => part !== undefined && part !== '')
+    .join(' ')
   if (full === '') {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'must include full, first, or last' })
     return z.NEVER

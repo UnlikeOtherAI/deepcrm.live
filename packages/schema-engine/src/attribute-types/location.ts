@@ -3,11 +3,12 @@ import { z } from 'zod'
 import { equalityFilterOps, normalizeWhitespace, type AttributeTypeDef } from './types.js'
 
 const locationValueSchema = z.object({
-  line1: z.string().min(1).optional(),
-  city: z.string().min(1).optional(),
-  region: z.string().min(1).optional(),
+  line1: z.string().max(200).optional(),
+  line2: z.string().max(200).optional(),
+  city: z.string().max(120).optional(),
+  region: z.string().max(120).optional(),
   country: z.string().regex(/^[a-z]{2}$/iu).transform((value) => value.toLocaleUpperCase()).optional(),
-  postal: z.string().min(1).optional(),
+  postal: z.string().max(32).optional(),
   lat: z.number().finite().min(-90).max(90).optional(),
   lng: z.number().finite().min(-180).max(180).optional(),
 }).strict()
@@ -23,6 +24,7 @@ export const location: AttributeTypeDef = {
     const locationValue = locationValueSchema.parse(value)
     return normalizeWhitespace([
       locationValue.line1,
+      locationValue.line2,
       locationValue.city,
       locationValue.region,
       locationValue.country,

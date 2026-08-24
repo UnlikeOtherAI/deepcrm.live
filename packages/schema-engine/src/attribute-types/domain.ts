@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url'
 import { getDomain } from 'tldts'
 import { z } from 'zod'
 
@@ -7,22 +8,32 @@ const configSchema = z.object({}).strict()
 
 function hostnameFor(value: string): string {
   const trimmed = value.trim()
+  let hostname: string
   if (/^https?:\/\//iu.test(trimmed)) {
     const url = new URL(trimmed)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('must use http or https')
-    return url.hostname
+    hostname = url.hostname
+  } else {
+    if (trimmed.includes('://')) throw new Error('must be a hostname or absolute http(s) URL')
+    hostname = domainToASCII(trimmed)
   }
-  if (trimmed.includes('://')) throw new Error('must be a hostname or absolute http(s) URL')
-  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.?$/iu.test(trimmed)) {
+  const withoutRootDot = hostname.replace(/\.$/u, '')
+  const labels = withoutRootDot.split('.')
+  const valid = withoutRootDot.length <= 253 && labels.every((label) => (
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/iu.test(label)
+  ))
+  if (!valid) {
     throw new Error('must be a hostname or absolute http(s) URL')
   }
-  return trimmed.replace(/\.$/u, '')
+  return withoutRootDot
 }
 
 function canonicalDomain(value: string): string {
   const domain = getDomain(hostnameFor(value), { allowPrivateDomains: true })
   if (domain === null) throw new Error('must contain a registrable domain')
-  return domain.toLocaleLowerCase()
+  return domain.toLowerCase()
 }
 
 const domainValueSchema = z.string().transform((value, context) => {

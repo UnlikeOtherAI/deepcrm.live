@@ -1,14 +1,33 @@
+import { Parser } from 'commonmark'
 import { z } from 'zod'
 
 import { equalityFilterOps, normalizeWhitespace, type AttributeTypeDef } from './types.js'
 
 const configSchema = z.object({}).strict()
+const markdownParser = new Parser()
 
 function stripMarkdown(value: string): string {
-  return normalizeWhitespace(value
-    .replace(/!\[[^\]]*\]\([^)]*\)/gu, '')
-    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
-    .replace(/[`*_>#~-]/gu, ''))
+  const parts: string[] = []
+  const walker = markdownParser.parse(value).walker()
+  let step = walker.next()
+  while (step !== null) {
+    if (step.entering) {
+      if (step.node.type === 'text' || step.node.type === 'code' || step.node.type === 'code_block') {
+        if (step.node.literal !== null) parts.push(step.node.literal)
+      } else if (step.node.type === 'softbreak' || step.node.type === 'linebreak') {
+        parts.push(' ')
+      }
+    } else if (
+      step.node.type === 'paragraph' ||
+      step.node.type === 'heading' ||
+      step.node.type === 'item' ||
+      step.node.type === 'code_block'
+    ) {
+      parts.push(' ')
+    }
+    step = walker.next()
+  }
+  return normalizeWhitespace(parts.join(''))
 }
 
 export const richText: AttributeTypeDef = {

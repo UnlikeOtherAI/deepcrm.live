@@ -2,10 +2,11 @@ import { z } from 'zod'
 
 import { equalityFilterOps, type AttributeTypeDef } from './types.js'
 
+const slug = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/u)
 const optionSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  color: z.string().min(1).optional(),
+  id: slug,
+  label: z.string().min(1).max(120),
+  color: z.string().min(1).max(32).optional(),
 }).strict()
 
 const configSchema = z.object({
@@ -39,5 +40,5 @@ export const select: AttributeTypeDef = {
   supportsMulti: true,
   supportsUnique: true,
   supportsIndexed: true,
-  filterOps: [...equalityFilterOps, 'contains'],
+  filterOps: [...equalityFilterOps, 'contains', 'starts_with'],
 }

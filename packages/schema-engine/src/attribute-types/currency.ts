@@ -1,9 +1,12 @@
+import { code as findCurrency } from 'currency-codes'
 import Decimal from 'decimal.js'
 import { z } from 'zod'
 
 import { orderedFilterOps, type AttributeTypeDef } from './types.js'
 
-const currencyCode = z.string().regex(/^[A-Z]{3}$/u, 'must be an ISO 4217 currency code')
+const currencyCode = z.string()
+  .regex(/^[A-Z]{3}$/u, 'must be an ISO 4217 currency code')
+  .refine((value) => findCurrency(value) !== undefined, 'must be an ISO 4217 currency code')
 const configSchema = z.object({
   defaultCurrency: currencyCode.default('USD'),
   fixedCurrency: currencyCode.optional(),

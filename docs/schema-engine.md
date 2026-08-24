@@ -855,33 +855,33 @@ type AttributeTypeDef = {
 | type | value shape | config | normalize | notes |
 |---|---|---|---|---|
 | `text` | string ≤ `maxLength` (default 4000) | `{maxLength?}` | trim, lower, collapse whitespace | |
-| `rich_text` | markdown string ≤ 100k | — | — | not unique/indexed |
+| `rich_text` | markdown string ≤ 100k | — | — | not unique/indexed; search strips Markdown delimiters but preserves ordinary punctuation |
 | `number` | number | `{precision?, min?, max?}` | canonical decimal string | |
-| `currency` | `{amount: string (decimal), currency: ISO4217}` | `{defaultCurrency, fixedCurrency?}` | — | amount as string; range filters compare `amount` **ignoring currency** — set `fixedCurrency` on columns meant to be comparable (R19) |
+| `currency` | `{amount: string (decimal), currency: supported ISO4217 code}` | `{defaultCurrency, fixedCurrency?}` | — | codes are checked against the supported ISO-4217 set, not merely a three-letter regex; amount as string; range filters compare `amount` **ignoring currency** — set `fixedCurrency` on columns meant to be comparable (R19) |
 | `percent` | number 0–100 | — | — | |
 | `boolean` | boolean | — | `"true"/"false"` | |
 | `date` | `YYYY-MM-DD` | — | same | |
 | `datetime` | ISO 8601 UTC | — | same | |
-| `select` | option id string | `{options: [{id, label, color?}]}` | option id | `isMulti` ⇒ multi-select |
-| `status` | option id | `{options: [{id, label, category: open\|won\|lost\|neutral, position}]}` | option id | pipeline stages; never `isMulti` |
+| `select` | option id string | `{options: [{id: Slug, label: 1–120 chars, color?: 1–32 chars}]}` | option id | `isMulti` ⇒ multi-select; ids unique |
+| `status` | option id | `{options: [{id: Slug, label: 1–120 chars, color?: 1–32 chars, category: open\|won\|lost\|neutral, position}]}` | option id | pipeline stages; never `isMulti`; ids/positions unique and positions contiguous from zero |
 | `rating` | int 0–`max` | `{max: 5}` | — | |
 | `email` | RFC 5322 address | — | lower-case, strip display name | unique-capable |
-| `phone` | international number (`+` required; whitespace accepted) | — | canonical E.164 via `libphonenumber-js`; no regional guessing | unique-capable |
+| `phone` | international number (`+` required; only whitespace formatting is permitted) | — | canonical E.164 via `libphonenumber-js`; no regional guessing and no extensions | unique-capable |
 | `url` | absolute http(s) URL | — | lower host, strip trailing slash | |
-| `domain` | hostname | — | registrable domain (`tldts`), lower | unique-capable |
+| `domain` | hostname or absolute http(s) URL | — | validates the host in either form, then returns registrable domain (`tldts`), lower | unique-capable |
 | `registry_id` | company/registry number string | `{jurisdiction?}` | uppercase; strip spaces, hyphens, dots; strip leading zeros | unique-capable; the one normalizer for Companies-House-style ids (R19) |
-| `location` | `{line1?, city?, region?, country? (ISO2), postal?, lat?, lng?}` | — | — | |
-| `personal_name` | `{first?, last?, full}` | — | lower(full) collapse | `full` derived when absent |
+| `location` | `{line1?: ≤200, line2?: ≤200, city?: ≤120, region?: ≤120, country?: ISO2, postal?: ≤32, lat?, lng?}` | — | — | latitude −90…90; longitude −180…180 |
+| `personal_name` | `{first?: ≤120, last?: ≤120, full?: ≤250}` | — | lower(full) collapse | at least one field; `full` derived when absent |
 | `actor_reference` | `{type: human\|agent, id}` | `{allow: [human, agent]}` | `type:id` | |
 | `record_reference` | record id (string) or array when `isMulti` | `{objectTypes: [slug…], relationTypeSlug}` | record id | backed by a `RelationType`; see §4.4 |
-| `timestamp_system` | ISO datetime | `{source: created_at\|updated_at\|last_activity_at}` | — | read-only, computed |
-| `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique, **opaque to the filter grammar** — promote queryable keys to real attributes (R19) |
+| `timestamp_system` | ISO datetime | `{source: created_at\|updated_at\|last_activity_at}` | — | virtual, computed and read-only; it is never stored in `records.data`; T12 owns the write-time rejection gate |
+| `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique, **no type filterOps**; global null tests are handled outside the registry — promote queryable keys to real attributes (R19) |
 
 Registry notes: `currency`, `percent`, `rating` and `location` have no `normalize` and therefore cannot back a unique key or a matching rule — stated here so nobody designs a match rule on money (R19). `isMulti` is **immutable after define**, like `type` and `slug` (R19). Each type's `toSearchText` follows its `normalize` where present; `rich_text` **is** included in search content as stripped markdown truncated to 2 KiB per value (R14); composite quantity values (number + unit + tolerance) are an open question (brief §9).
 
 Capability matrix (`multi`, `unique`, `indexed`): text Y/Y/Y; rich_text Y/N/N; number Y/Y/Y; currency Y/N/N; percent Y/N/Y; boolean Y/Y/Y; date Y/Y/Y; datetime Y/Y/Y; select Y/Y/Y; status N/N/Y; rating Y/N/Y; email Y/Y/Y; phone Y/Y/Y; url Y/Y/Y; domain Y/Y/Y; registry_id Y/Y/Y; location Y/N/N; personal_name Y/Y/N; actor_reference Y/Y/N; record_reference Y/N/Y; timestamp_system N/N/N; json Y/N/N. `record_reference` indexing is satisfied only by the existing `record_links` indexes and `EXISTS` compilation; it creates no JSON expression index.
 
-Validation details: number precision rejects excess fractional precision rather than rounding, uses `decimal.js`, and stores canonical non-exponent decimals. Dates are real Gregorian `YYYY-MM-DD`; datetimes require RFC3339 with `Z` or an explicit offset and normalize to UTC millisecond `Z`. Currency codes are ISO4217; `fixedCurrency` requires that code and comparisons otherwise remain explicitly currency-agnostic. Select ids are unique; status ids and positions are unique, positions contiguous from zero. URLs require absolute http(s), lowercase host, remove a trailing slash only from an otherwise empty path, and preserve meaningful path/query. Domains accept a hostname or absolute http(s) URL and normalize with `tldts` to lowercase registrable domain. JSON Schema validation uses Draft 2020-12 with Ajv v8, no external references; Ajv is a direct T09 dependency.
+Validation details: number precision rejects excess fractional precision rather than rounding, uses `decimal.js`, and stores canonical non-exponent decimals. Dates are real Gregorian `YYYY-MM-DD`; datetimes require RFC3339 with `Z` or an explicit offset and normalize to UTC millisecond `Z`. Currency codes must be members of the maintained supported ISO-4217 set (not merely `/^[A-Z]{3}$/`); `fixedCurrency` requires such a code and comparisons otherwise remain explicitly currency-agnostic. Phone input is already international: a leading `+` is required, whitespace is the only allowed presentation formatting, and extensions or regional/default-country interpretation are refused. Select/status option ids use `Slug`, labels are 1–120 characters, and optional colors are 1–32 characters; select ids are unique, and status ids and positions are unique with positions contiguous from zero. URLs require absolute http(s), lowercase host, remove a trailing slash only from an otherwise empty path, and preserve meaningful path/query. Domains validate their host whether supplied as a hostname or absolute http(s) URL, then normalize with `tldts` to lowercase registrable domain. Rich-text search removes Markdown delimiters while retaining ordinary punctuation. Location and personal-name fields observe the caps in the registry table. JSON Schema validation uses Draft 2020-12 with Ajv v8, no external references; Ajv is a direct T09 dependency.
 
 Reserved attribute slugs on every object type (system, not stored in `data`): `id`, `created_at`, `updated_at`, `last_activity_at`, `display_name`, `owner`.
 

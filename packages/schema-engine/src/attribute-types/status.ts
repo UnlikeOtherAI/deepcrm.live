@@ -2,9 +2,11 @@ import { z } from 'zod'
 
 import { equalityFilterOps, type AttributeTypeDef } from './types.js'
 
+const slug = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/u)
 const optionSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
+  id: slug,
+  label: z.string().min(1).max(120),
+  color: z.string().min(1).max(32).optional(),
   category: z.enum(['open', 'won', 'lost', 'neutral']),
   position: z.number().int().min(0),
 }).strict()

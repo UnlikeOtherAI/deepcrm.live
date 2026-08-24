@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "currency-codes": "^2.2.0",
     "undici": "^6.21.0",
     "zod": "^3.25.76"
   }

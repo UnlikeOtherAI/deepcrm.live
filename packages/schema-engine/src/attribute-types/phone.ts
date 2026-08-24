@@ -4,10 +4,13 @@ import { z } from 'zod'
 import { equalityFilterOps, type AttributeTypeDef } from './types.js'
 
 const configSchema = z.object({}).strict()
+const internationalPhone = /^\+[0-9](?:[0-9\s]*[0-9])?$/u
 
 function canonicalPhone(value: string): string {
   const trimmed = value.trim()
-  if (!trimmed.startsWith('+')) throw new Error('phone input must already be international E.164')
+  if (!internationalPhone.test(trimmed)) {
+    throw new Error('phone input must contain only +, international digits, and formatting whitespace')
+  }
   const parsed = parsePhoneNumberFromString(trimmed)
   if (parsed === undefined || !parsed.isValid()) throw new Error('must be a valid E.164 phone number')
   return parsed.number
