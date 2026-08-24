@@ -96,7 +96,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T26 — MCP docs generator
+### T26 ✅ — MCP docs generator
 
 **Depends on:** T25. **Spec:** `AGENTS.md` Documentation; `docs/mcp-surface.md`.
 
