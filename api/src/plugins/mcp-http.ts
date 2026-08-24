@@ -9,6 +9,12 @@ import type { AppDeps } from '../deps.js'
 import type { Env } from '../env.js'
 import { buildMcpServer, installTransportResultWrapper } from '../mcp/server.js'
 import { buildActorContext } from '../services/context.js'
+import {
+  consumeSeenRequestId,
+  expectedToolInvocation,
+  recordPrincipalSeen,
+  TokenVersionRegressionError,
+} from '../services/principals.js'
 
 const PROVISION_WINDOW_MS = 60_000
 const PROVISION_LIMIT_PER_APP = 30
@@ -79,6 +85,13 @@ async function handleMcp(
   limiter: ProvisioningRateLimiter,
 ): Promise<void> {
   const requestId = request.id
+  let invocation: ReturnType<typeof expectedToolInvocation> | undefined
+  try {
+    invocation = expectedToolInvocation(request.body)
+  } catch {
+    unauthorized(reply, env)
+    return
+  }
   const principalResult = await authenticate(request.headers, {
     requireAuth: env.REQUIRE_AUTH,
     directClients: env.DEEPCRM_DIRECT_CLIENTS,
@@ -91,6 +104,9 @@ async function handleMcp(
       now: deps.clock(),
     },
     contextAudience: env.DEEPCRM_API_PUBLIC_URL,
+    expectedTool: invocation === undefined
+      ? undefined
+      : { tool: invocation.tool, argsSha256: invocation.argsSha256 },
   })
   if (!principalResult.ok) {
     unauthorized(reply, env)
@@ -108,7 +124,26 @@ async function handleMcp(
 
   // buildActorContext is the single tenancy-resolution seam and provisions a
   // verified first-contact team before returning the request-scoped context.
-  const ctx = await buildActorContext(deps, principal, requestId)
+  let ctx: Awaited<ReturnType<typeof buildActorContext>>
+  try {
+    ctx = await buildActorContext(deps, principal, requestId)
+    await recordPrincipalSeen(deps.db, ctx, principal)
+    if (
+      env.REQUIRE_AUTH
+      &&
+      invocation?.destructive === true
+      && !await consumeSeenRequestId(deps.db, ctx, invocation.tool, invocation.argsSha256)
+    ) {
+      unauthorized(reply, env)
+      return
+    }
+  } catch (error) {
+    if (error instanceof TokenVersionRegressionError) {
+      unauthorized(reply, env)
+      return
+    }
+    throw error
+  }
   const server = buildMcpServer(ctx, deps)
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   installTransportResultWrapper(transport, deps.version)

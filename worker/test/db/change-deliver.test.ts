@@ -56,6 +56,9 @@ async function fixture() {
     displayName: 'Ada', visibility: 'team', createdOnBehalfOf: 'subscriber',
     createdByType: 'human', createdById: 'subscriber',
   } })
+  await db.principalLastSeen.create({
+    data: { teamId: tenant.teamId, uoaUserId: 'subscriber', lastSeenAt: now },
+  })
   return { tenant, objectType, record }
 }
 
@@ -124,7 +127,7 @@ describe('change delivery worker', () => {
       requests.push({ body: init.body, headers: init.headers })
       return { ok: true, status: 204 }
     }
-    await createChangeDeliverHandler(secretBox, safeFetch)(await handlerInput(target.tenant, 1))
+    await createChangeDeliverHandler(secretBox, safeFetch, 30)(await handlerInput(target.tenant, 1))
 
     const request = requests[0]
     expect(request).toBeDefined()
@@ -148,7 +151,7 @@ describe('change delivery worker', () => {
     const target = await fixture()
     await storeWebhook(target.tenant, 'b'.repeat(64))
     await storeChange(target)
-    const handler = createChangeDeliverHandler(secretBox, async () => ({ ok: false, status: 500 }))
+    const handler = createChangeDeliverHandler(secretBox, async () => ({ ok: false, status: 500 }), 30)
     const input = await handlerInput(target.tenant, 1)
     const failure = await handler(input).catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(JobRetryError)
@@ -166,8 +169,24 @@ describe('change delivery worker', () => {
       async () => [{ address: '127.0.0.1', family: 4 }],
       requester,
     )
-    await expect(createChangeDeliverHandler(secretBox, safeFetch)(await handlerInput(target.tenant, 1)))
+    await expect(createChangeDeliverHandler(secretBox, safeFetch, 30)(await handlerInput(target.tenant, 1)))
       .rejects.toBeInstanceOf(JobRetryError)
     expect(requester).not.toHaveBeenCalled()
+  })
+
+  it('pauses stale subscribers without advancing the delivery cursor', async () => {
+    const target = await fixture()
+    const webhook = await storeWebhook(target.tenant, 'd'.repeat(64))
+    await storeChange(target)
+    await db.principalLastSeen.update({
+      where: { teamId_uoaUserId: { teamId: target.tenant.teamId, uoaUserId: 'subscriber' } },
+      data: { lastSeenAt: new Date('2026-07-01T00:00:00.000Z') },
+    })
+    const requester = vi.fn().mockResolvedValue({ ok: true, status: 204 })
+    await createChangeDeliverHandler(secretBox, requester, 30)(await handlerInput(target.tenant, 1))
+    expect(requester).not.toHaveBeenCalled()
+    expect((await db.webhook.findFirstOrThrow({
+      where: { id: webhook.id, organizationId: target.tenant.organizationId, teamId: target.tenant.teamId },
+    })).lastDeliveredSeq).toBe(0n)
   })
 })

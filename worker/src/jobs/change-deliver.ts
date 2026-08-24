@@ -60,6 +60,7 @@ function eventName(row: ChangeRow): WebhookEventValue {
 
 type ChangeReadTx = Pick<Db, 'recordChange'>
 type EventReadTx = Pick<Db, 'attribute' | 'relationType' | 'record'>
+type PrincipalReadTx = Pick<Db, 'principalLastSeen'>
 
 async function changeBatch(db: ChangeReadTx, tenant: Tenant, after: bigint) {
   return db.recordChange.findMany({
@@ -198,6 +199,22 @@ async function visibleEvents(
   })
 }
 
+async function subscriberIsStale(
+  db: PrincipalReadTx,
+  tenant: Tenant,
+  subscriber: string,
+  now: Date,
+  staleDays: number,
+): Promise<boolean> {
+  const row = await db.principalLastSeen.findUnique({
+    where: { teamId_uoaUserId: { teamId: tenant.teamId, uoaUserId: subscriber } },
+    select: { lastSeenAt: true },
+  })
+  if (row === null) return true
+  const staleBefore = now.getTime() - staleDays * 86_400_000
+  return row.lastSeenAt.getTime() < staleBefore
+}
+
 function openSecret(secretBox: SecretBox, webhook: {
   id: string; organizationId: string; teamId: string; url: string; secretCiphertext: string
 }): string {
@@ -224,6 +241,7 @@ async function deliverWebhook(
   webhookId: string,
   secretBox: SecretBox,
   target: DeliveryTarget,
+  staleDays: number,
 ): Promise<void> {
   await input.db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(4, hashtext(${webhookId}))`
@@ -231,6 +249,7 @@ async function deliverWebhook(
       where: { id: webhookId, ...tenantWhere(tenant), active: true },
     })
     if (webhook === null) return
+    if (await subscriberIsStale(tx, tenant, webhook.subscribingUoaUserId, input.clock(), staleDays)) return
     const team = await tx.team.findFirst({
       where: { id: tenant.teamId, organizationId: tenant.organizationId },
       select: { feedSeq: true, externalTeamId: true, organization: { select: { externalOrgId: true } } },
@@ -284,7 +303,11 @@ async function deliverWebhook(
   })
 }
 
-export function createChangeDeliverHandler(secretBox: SecretBox, safeFetch: SafeFetch): JobHandler {
+export function createChangeDeliverHandler(
+  secretBox: SecretBox,
+  safeFetch: SafeFetch,
+  staleDays: number,
+): JobHandler {
   const target = createWebhookTarget(safeFetch)
   return async (input) => {
     const tenant = ChangeDeliverPayload.parse(input.job.payload)
@@ -297,7 +320,7 @@ export function createChangeDeliverHandler(secretBox: SecretBox, safeFetch: Safe
       orderBy: { id: 'asc' },
     })
     for (const webhook of webhooks) {
-      await deliverWebhook(input, tenant, webhook.id, secretBox, target)
+      await deliverWebhook(input, tenant, webhook.id, secretBox, target, staleDays)
     }
   }
 }

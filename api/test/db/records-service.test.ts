@@ -299,6 +299,27 @@ describe('record service policy, transaction, and idempotency seam', () => {
     })
   })
 
+  it('rejects an owner human who has not been seen in the team', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await expect(createRecord(deps, ctx, {
+      objectType: 'person',
+      data: { name: 'Ada' },
+      owner: { type: 'human', id: 'uoa_unseen_owner' },
+    })).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { issues: [{ path: '', message: 'Human actor reference has not been seen in this team' }] },
+    })
+    await db.principalLastSeen.create({
+      data: { teamId: target.teamId, uoaUserId: 'uoa_unseen_owner', lastSeenAt: fixedNow },
+    })
+    await expect(createRecord(deps, ctx, {
+      objectType: 'person',
+      data: { name: 'Ada' },
+      owner: { type: 'human', id: 'uoa_unseen_owner' },
+    })).resolves.toMatchObject({ record: { owner: { type: 'human', id: 'uoa_unseen_owner' } } })
+  })
+
   it('reports an existing null replay as in progress', async () => {
     const target = await tenant()
     const ctx = context(target)

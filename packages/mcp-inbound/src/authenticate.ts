@@ -22,6 +22,11 @@ export type AuthenticationFailure =
   | 'subject_mismatch'
   | 'unsupported'
 
+export type ExpectedToolInvocation = {
+  tool: string
+  argsSha256: string
+}
+
 export type AuthenticationResult =
   | { ok: true; principal: Principal }
   | { ok: false; reason: AuthenticationFailure }
@@ -33,6 +38,7 @@ export type AuthenticateOptions = {
   apps: AppRegistry
   uoa: UoaDelegationOptions
   contextAudience: string
+  expectedTool?: ExpectedToolInvocation
 }
 
 function failure(reason: AuthenticationFailure): AuthenticationResult {
@@ -49,7 +55,31 @@ export async function authenticate(
   if (headers.bearer === undefined) return failure('missing_bearer')
 
   const appName = verifyAppKey(appKeys(options.apps), headers.bearer)
-  if (appName === null) return failure(options.directClients === true ? 'unsupported' : 'invalid_app_key')
+  if (appName === null) {
+    if (options.directClients !== true) return failure('invalid_app_key')
+    try {
+      const delegation = await verifyUoaDelegation(headers.bearer, options.uoa)
+      if (delegation.product !== 'direct') return failure('caller_mismatch')
+      return {
+        ok: true,
+        principal: PrincipalSchema.parse({
+          app: 'direct',
+          uoaUserId: delegation.sub,
+          uoaOrgId: delegation.org.org_id,
+          uoaTeamId: delegation.active.teamId,
+          role: resolveRole(delegation.org, delegation.active),
+          sourceDomain: delegation.source_domain,
+          product: delegation.product,
+          actChain: flattenActChain(delegation.act),
+          agentId: null,
+          tokenVersion: delegation.tv ?? null,
+          provenance: null,
+        }),
+      }
+    } catch {
+      return failure('invalid_delegation')
+    }
+  }
   const app = options.apps.get(appName)
   if (app === undefined) return failure('invalid_app_key')
   if (headers.delegation === undefined) return failure('missing_delegation')
@@ -80,6 +110,13 @@ export async function authenticate(
       audience: options.contextAudience,
       issuer: app.contextIssuer,
       now: options.uoa.now,
+      expectedBinding: options.expectedTool === undefined
+        ? undefined
+        : {
+            delegationJti: delegation.jti,
+            tool: options.expectedTool.tool,
+            argsSha256: options.expectedTool.argsSha256,
+          },
     })
   } catch {
     return failure('invalid_context')
@@ -100,6 +137,7 @@ export async function authenticate(
         product: delegation.product,
         actChain: flattenActChain(delegation.act),
         agentId: context.agentId,
+        tokenVersion: delegation.tv ?? null,
         provenance: context.provenance,
       }),
     }

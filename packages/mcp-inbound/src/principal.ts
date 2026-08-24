@@ -11,6 +11,7 @@ export function devPrincipal(requestId: string): Principal {
     product: 'dev',
     actChain: [],
     agentId: 'agent_dev',
+    tokenVersion: null,
     provenance: {
       runId: 'run_dev',
       toolCallId: 'call_dev',

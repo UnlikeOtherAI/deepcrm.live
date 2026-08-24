@@ -40,6 +40,7 @@ const DelegationClaimsSchema = z.object({
   source_domain: z.string().min(1),
   azp: z.string().min(1),
   product: z.string().min(1),
+  tv: z.number().int().nonnegative().optional(),
   act: ActorClaimSchema.optional(),
   scope: z.string().min(1),
 }).passthrough()

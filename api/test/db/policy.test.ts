@@ -68,6 +68,20 @@ describe('policy truth table', () => {
     })).resolves.toEqual({ allowed: true, requiresApproval: false })
   })
 
+  it('keeps direct clients on the destructive-default-deny posture', async () => {
+    const target = await tenant()
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await addRule(target, {
+      action: 'delete',
+      bindings: [{ actorType: 'human', actorId: 'uoa_1' }],
+    })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+  })
+
   it('requires the exact app-agent grant as well as the human grant', async () => {
     const target = await tenant()
     await addRule(target, { bindings: [{ actorType: 'role', actorId: 'member' }] })

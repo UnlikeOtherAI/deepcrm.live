@@ -189,6 +189,9 @@ describe('record inline-link security and metadata', () => {
     const target = await fixture()
     const userId = 'uoa_inline_metadata'
     await allowRecordWrites(target.tenant, userId)
+    await db.principalLastSeen.create({
+      data: { teamId: target.tenant.teamId, uoaUserId: 'uoa_grantee', lastSeenAt: linkContext(target.tenant).now },
+    })
     const created = await createRecord(linkDeps(db), linkContext(target.tenant, userId), {
       objectType: 'person', data: {}, visibleTo: ['uoa_grantee'],
     })

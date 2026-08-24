@@ -96,6 +96,9 @@ async function signContext(overrides: TokenOverrides = {}): Promise<string> {
     runId: 'run_1',
     toolCallId: 'tool_call_1',
     requestId: 'request_1',
+    delegation_jti: 'delegation-jti',
+    tool: 'crm_record_create',
+    args_sha256: 'a'.repeat(64),
     ...overrides.claims,
   })
     .setProtectedHeader({ alg: 'RS256', kid: 'context-key' })
@@ -165,8 +168,40 @@ describe('authenticate', () => {
         { sub: 'api.origin.example', product: 'origin' },
       ],
       agentId: 'agent_nessie',
+      tokenVersion: null,
       provenance: { runId: 'run_1', toolCallId: 'tool_call_1', requestId: 'request_1' },
     })
+  })
+
+  it('rejects context proof binding mismatches', async () => {
+    const options = authOptions({
+      expectedTool: { tool: 'crm_record_create', argsSha256: 'a'.repeat(64) },
+    })
+    const valid = await authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext(),
+    }, options)
+    expect(valid.ok).toBe(true)
+
+    const wrongJti = await authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext({ claims: { delegation_jti: 'other-jti' } }),
+    }, options)
+    const wrongTool = await authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext({ claims: { tool: 'crm_record_delete' } }),
+    }, options)
+    const wrongHash = await authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext({ claims: { args_sha256: 'b'.repeat(64) } }),
+    }, options)
+    expect(wrongJti).toEqual({ ok: false, reason: 'invalid_context' })
+    expect(wrongTool).toEqual({ ok: false, reason: 'invalid_context' })
+    expect(wrongHash).toEqual({ ok: false, reason: 'invalid_context' })
   })
 
   it('rejects expired delegation and context tokens', async () => {
@@ -288,14 +323,25 @@ describe('authenticate', () => {
     expect(result).toEqual({ ok: false, reason: 'subject_mismatch' })
   })
 
-  it('rejects a missing bearer and leaves direct-client auth unsupported', async () => {
+  it('authenticates direct clients when enabled', async () => {
     const noBearer = await authenticate({}, authOptions({ directClients: true }))
+    const token = await signDelegation({ claims: {
+      product: 'direct',
+      source_domain: 'direct',
+      tv: 7,
+    } })
     const direct = await authenticate(
-      { authorization: 'Bearer uoa_public_profile_token' },
+      { authorization: `Bearer ${token}` },
       authOptions({ directClients: true }),
     )
     expect(noBearer).toEqual({ ok: false, reason: 'missing_bearer' })
-    expect(direct).toEqual({ ok: false, reason: 'unsupported' })
+    expect(authenticated(direct)).toEqual(expect.objectContaining({
+      app: 'direct',
+      agentId: null,
+      product: 'direct',
+      tokenVersion: 7,
+      provenance: null,
+    }))
   })
 
   it('returns the development principal without reading supplied proofs', async () => {

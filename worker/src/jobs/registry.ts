@@ -16,8 +16,11 @@ import {
 } from './record-reindex.js'
 import { createDedupScanHandler, DEDUP_SCAN_JOB } from './dedup-scan.js'
 import { createRetentionHandler, RETENTION_JOB, type RetentionConfig } from './retention.js'
+import { tenantReparentHandler, TENANT_REPARENT_JOB } from './tenant-reparent.js'
 
-export type WorkerJobConfig = BulkExportConfig & RetentionConfig
+export type WorkerJobConfig = BulkExportConfig & RetentionConfig & {
+  webhookPrincipalStaleDays?: number
+}
 
 export const handlers: Record<string, JobHandler> = {
   noop,
@@ -36,9 +39,14 @@ export function createHandlers(
     [BULK_ASSERT_JOB]: createBulkAssertHandler(recordAssert),
     [RECORD_REINDEX_JOB]: createRecordReindexHandler(embedder),
     [RECORD_REINDEX_NEIGHBOURS_JOB]: createRecordReindexNeighboursHandler(),
-    [CHANGE_DELIVER_JOB]: createChangeDeliverHandler(secretBox, createSafeFetch()),
+    [CHANGE_DELIVER_JOB]: createChangeDeliverHandler(
+      secretBox,
+      createSafeFetch(),
+      config.webhookPrincipalStaleDays ?? 30,
+    ),
     [DEDUP_SCAN_JOB]: createDedupScanHandler(),
     [BULK_EXPORT_JOB]: createBulkExportHandler(exportPage, secretBox, config),
     [RETENTION_JOB]: createRetentionHandler(config),
+    [TENANT_REPARENT_JOB]: tenantReparentHandler,
   }
 }

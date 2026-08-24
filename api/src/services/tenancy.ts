@@ -1,4 +1,5 @@
 import { writeAudit, type TenantRef } from '@deepcrm/db'
+import { enqueue } from '@deepcrm/queue'
 import { applyTemplateBatch, type TemplateAdded } from '@deepcrm/schema-engine'
 import { ErrorCode, ServiceError, type Principal } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
@@ -7,6 +8,7 @@ import { seedDefaultPolicies } from './policy.js'
 const CACHE_TTL_MS = 60_000
 const CACHE_LIMIT = 1_000
 const PROVISIONING_ACTOR_ID = 'provisioning'
+const TENANT_REPARENT_JOB = 'tenant.reparent'
 
 type CachedTenantIds = {
   organizationId: string
@@ -99,12 +101,26 @@ export async function resolveTenant(
     })
     if (existingTeam !== null) {
       if (existingTeam.organizationId !== organization.id) {
-        throw new ServiceError(
-          ErrorCode.TENANT_MISMATCH,
-          'The UOA team is paired with a different organisation',
-        )
+        await enqueue(tx, {
+          organizationId: existingTeam.organizationId,
+          teamId: existingTeam.id,
+          type: TENANT_REPARENT_JOB,
+          priority: 100,
+          maxAttempts: 10,
+          idempotencyKey: `tenant-reparent:${principal.uoaTeamId}:${organization.id}`,
+          payload: {
+            teamId: existingTeam.id,
+            sourceOrganizationId: existingTeam.organizationId,
+            targetOrganizationId: organization.id,
+            externalOrgId: principal.uoaOrgId,
+            externalTeamId: principal.uoaTeamId,
+            requestId,
+            uoaUserId: principal.uoaUserId,
+          },
+        })
+        return { status: 'reparenting' as const }
       }
-      return existingTeam
+      return { status: 'resolved' as const, team: existingTeam }
     }
     const created = await tx.team.create({
       data: {
@@ -155,14 +171,21 @@ export async function resolveTenant(
       ipAddress: null,
       userAgent: null,
     })
-    return versioned
+    return { status: 'resolved' as const, team: versioned }
   })
 
-  cacheTenant(key, { organizationId: resolved.organizationId, teamId: resolved.id })
+  if (resolved.status === 'reparenting') {
+    throw new ServiceError(
+      ErrorCode.TENANT_REPARENTING,
+      'The UOA team is being reconciled to its current organisation',
+    )
+  }
+  const team = resolved.team
+  cacheTenant(key, { organizationId: team.organizationId, teamId: team.id })
   return {
-    organizationId: resolved.organizationId,
-    teamId: resolved.id,
-    schemaVersion: resolved.schemaVersion,
-    policyVersion: resolved.policyVersion,
+    organizationId: team.organizationId,
+    teamId: team.id,
+    schemaVersion: team.schemaVersion,
+    policyVersion: team.policyVersion,
   }
 }

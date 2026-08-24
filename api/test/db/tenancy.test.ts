@@ -92,6 +92,7 @@ afterAll(async () => {
     await db.objectType.deleteMany({ where })
   }
   if (createdOrganizationIds.length > 0) {
+    await db.queueJob.deleteMany({ where: { organizationId: { in: createdOrganizationIds } } })
     await db.organization.deleteMany({ where: { id: { in: createdOrganizationIds } } })
   }
   await db.$disconnect()
@@ -163,7 +164,7 @@ describe('resolveTenant provisioning', () => {
     expect(await db.auditLog.count({ where: { requestId } })).toBe(0)
   })
 
-  it('rolls back the provisional organisation on a pairing mismatch', async () => {
+  it('enqueues tenant reparenting on a verified pairing mismatch', async () => {
     const suffix = crypto.randomUUID()
     const existingOrganization = await db.organization.create({
       data: { externalOrgId: `org_existing_${suffix}`, name: 'Organisation existing' },
@@ -182,10 +183,23 @@ describe('resolveTenant provisioning', () => {
     const requestId = `mismatch_${suffix}`
 
     await expect(resolveTenant(makeDeps(), principal, requestId)).rejects.toMatchObject({
-      code: 'TENANT_MISMATCH',
+      code: 'TENANT_REPARENTING',
     })
-    expect(await db.organization.findUnique({ where: { externalOrgId: requestedExternalOrgId } })).toBeNull()
+    const targetOrganization = await db.organization.findUniqueOrThrow({
+      where: { externalOrgId: requestedExternalOrgId },
+    })
+    trackOrganization(targetOrganization.id)
     expect(await db.team.findUniqueOrThrow({ where: { externalTeamId } })).toEqual(existingTeam)
-    expect(await db.auditLog.count({ where: { requestId } })).toBe(0)
+    const queued = await db.queueJob.findFirstOrThrow({
+      where: { organizationId: existingOrganization.id, teamId: existingTeam.id, type: 'tenant.reparent' },
+    })
+    expect(queued.payload).toMatchObject({
+      teamId: existingTeam.id,
+      sourceOrganizationId: existingOrganization.id,
+      targetOrganizationId: targetOrganization.id,
+      externalOrgId: requestedExternalOrgId,
+      externalTeamId,
+      requestId,
+    })
   })
 })

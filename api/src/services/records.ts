@@ -44,6 +44,7 @@ import {
 } from './record-write-authorization.js'
 import { recordBoundary } from './record-boundary.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
+import { validateActorReferences } from './principals.js'
 import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } from './record-results.js'
 import { requireVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
@@ -251,6 +252,7 @@ async function createRecordOperation(
       recordPolicy(descriptor.action, descriptor.scopes),
       ...attributePolicies(schema, objectTypeId, input.data, descriptor.scopes),
     ]
+    await validateActorReferences(deps.db, ctx, schema, input)
     try {
       await preflightInlineLinks(deps.db, ctx, schema, input.links)
     } catch (error) {
@@ -310,6 +312,14 @@ async function updateRecordOperation(
       recordPolicy(descriptor.action, scopes),
       ...attributePolicies(schema, record.objectTypeId, input.data, scopes),
     ]
+    const objectType = schema.objectTypesById.get(record.objectTypeId)
+    if (objectType === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Record schema is missing')
+    await validateActorReferences(deps.db, ctx, schema, {
+      objectType: objectType.slug,
+      data: input.data,
+      owner: input.owner,
+      visibleTo: input.visibleTo,
+    })
     try {
       await preflightInlineLinks(deps.db, ctx, schema, input.links, input.recordId)
     } catch (error) {
@@ -372,6 +382,7 @@ async function assertRecordOperation(
       ])
     }
     const evaluator = await loadDuplicateEvaluator(deps.db, ctx)
+    await validateActorReferences(deps.db, ctx, schema, input)
     try {
       await preflightInlineLinks(deps.db, ctx, schema, input.links)
     } catch (error) {

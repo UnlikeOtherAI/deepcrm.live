@@ -72,6 +72,8 @@ const EnvSchema = z.object({
   DEEPCRM_ORG_ALLOWLIST: optionalString,
   DEEPCRM_AUDIT_RETENTION_YEARS: z.coerce.number().int().positive().default(7),
   DEEPCRM_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS: z.coerce.number().int().positive().default(30),
+  DEEPCRM_ACTOR_STALE_DAYS: z.coerce.number().int().positive().default(60),
   DEEPCRM_TRUSTED_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
 })
 

@@ -15,6 +15,7 @@ if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for tas
 
 const db = createDb(databaseUrl)
 const organizationIds: string[] = []
+const taskAgentId = 'agent:test:agent_dev'
 
 async function fixture() {
   const seeded = await seedTenant(db)
@@ -30,6 +31,9 @@ async function fixture() {
   await db.$transaction(async (tx) => {
     await applyTemplate(tx, tenant, actor, 'system')
     await applyTemplate(tx, tenant, actor, 'standard_crm')
+  })
+  await db.principalLastSeen.create({
+    data: { teamId: tenant.teamId, uoaUserId: 'uoa_human', lastSeenAt: ctx.now },
   })
   const types = await db.objectType.findMany({
     where: { ...tenant, slug: { in: ['person', 'company'] } },
@@ -60,7 +64,7 @@ function taskInput(
     title,
     body: `${title} details`,
     dueAt,
-    assignee: { type: 'agent', id: 'agent_dev' },
+    assignee: { type: 'agent', id: taskAgentId },
     about: [about, about],
     idempotencyKey,
   }
@@ -100,7 +104,7 @@ describe('task service', () => {
     })).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
     expect(primary.record.data).toMatchObject({
       title: 'Primary task', status: 'open', priority: 'normal',
-      assignee: { type: 'agent', id: 'agent_dev' },
+      assignee: { type: 'agent', id: taskAgentId },
     })
     expect(await db.recordLink.count({
       where: {
@@ -121,17 +125,17 @@ describe('task service', () => {
     })
 
     const agentPage = await listTasks(deps, target.ctx, {
-      assignee: { type: 'agent', id: 'agent_dev' }, limit: 1,
+      assignee: { type: 'agent', id: taskAgentId }, limit: 1,
     })
     expect(agentPage.records).toHaveLength(1)
     expect(agentPage.next_cursor).not.toBeNull()
     if (agentPage.next_cursor === null) throw new Error('Expected a task cursor')
     const nextAgentPage = await listTasks(deps, target.ctx, {
-      assignee: { type: 'agent', id: 'agent_dev' }, limit: 1, cursor: agentPage.next_cursor,
+      assignee: { type: 'agent', id: taskAgentId }, limit: 1, cursor: agentPage.next_cursor,
     })
     expect(nextAgentPage.records).toHaveLength(1)
     await expect(listTasks(deps, target.ctx, {
-      assignee: { type: 'agent', id: 'agent_dev' }, limit: 2, cursor: agentPage.next_cursor,
+      assignee: { type: 'agent', id: taskAgentId }, limit: 2, cursor: agentPage.next_cursor,
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED', details: { detail: 'cursor_mismatch' } })
     await expect(queryRecords(deps, target.ctx, {
       objectType: 'task', limit: 1, cursor: agentPage.next_cursor,

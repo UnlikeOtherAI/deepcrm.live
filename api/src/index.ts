@@ -80,6 +80,7 @@ async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<
       maxExportRows: env.DEEPCRM_MAX_EXPORT_ROWS,
       publicUrl: env.DEEPCRM_API_PUBLIC_URL,
       retentionDays: env.DEEPCRM_RETENTION_DAYS,
+      webhookPrincipalStaleDays: env.DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS,
     },
   ), signal)
 }

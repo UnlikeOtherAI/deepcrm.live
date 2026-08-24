@@ -15,7 +15,16 @@ const ContextClaimsSchema = z.object({
   runId: z.string().min(1),
   toolCallId: z.string().min(1),
   requestId: z.string().min(1),
+  delegation_jti: z.string().min(1).optional(),
+  tool: z.string().min(1).optional(),
+  args_sha256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
 }).passthrough()
+
+export type ExpectedContextBinding = {
+  delegationJti: string
+  tool: string
+  argsSha256: string
+}
 
 export type NessieContext = {
   sub: string
@@ -33,6 +42,7 @@ export type NessieContextOptions = {
   audience: string
   issuer: string
   now: Date
+  expectedBinding?: ExpectedContextBinding
 }
 
 function resolveJwks(options: NessieContextOptions): JWTVerifyGetKey {
@@ -63,6 +73,14 @@ export async function verifyNessieContext(
   }
   const now = Math.floor(options.now.getTime() / 1000)
   if (claims.iat > now + CLOCK_TOLERANCE_SECONDS) throw new Error('Context issued in the future')
+  const expected = options.expectedBinding
+  if (expected !== undefined) {
+    if (
+      claims.delegation_jti !== expected.delegationJti
+      || claims.tool !== expected.tool
+      || claims.args_sha256?.toLowerCase() !== expected.argsSha256
+    ) throw new Error('Context binding does not match invocation')
+  }
 
   return {
     sub: claims.sub,

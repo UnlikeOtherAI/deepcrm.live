@@ -11,6 +11,7 @@ export const PrincipalSchema = z.object({
   product: z.string().describe("delegation product ('direct' for public-profile clients)"),
   actChain: z.array(z.object({ sub: z.string(), product: z.string() })).describe('upstream hops, verbatim'),
   agentId: z.string().nullable().describe('null for direct human clients'),
+  tokenVersion: z.number().int().nonnegative().nullable(),
   provenance: z.object({
     runId: z.string(),
     toolCallId: z.string(),

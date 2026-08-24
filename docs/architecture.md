@@ -139,6 +139,8 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 | `DEEPCRM_BOOTSTRAP_UOA_USER_ID` | — | required only by the T16 matching bootstrap runner; stable UOA subject attributed as `on_behalf_of` for its migration-scoped system ActorContext and audit |
 | `DEEPCRM_AUDIT_RETENTION_YEARS` | `7` | crypto-shred horizon for audit personal fields |
 | `DEEPCRM_RETENTION_DAYS` | `30` | soft-delete / merge snapshot retention |
+| `DEEPCRM_WEBHOOK_PRINCIPAL_STALE_DAYS` | `30` | pause webhook delivery when the subscribing UOA user has not authenticated within this many days |
+| `DEEPCRM_ACTOR_STALE_DAYS` | `60` | data-quality stale actor-reference window |
 | `DEEPCRM_TRUSTED_PROXY_HOPS` | `0` | `1` behind Caddy |
 
 Rate limiting is a deployment requirement: the Caddy edge meters per app key × `Mcp-Name`; expensive tools get a stricter bucket. Boot fails closed when `REQUIRE_AUTH=false` outside localhost (auth-and-tenancy §1).
