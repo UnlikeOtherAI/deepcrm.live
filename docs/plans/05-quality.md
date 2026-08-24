@@ -15,7 +15,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T36 — Find duplicates Task
+### T36 ✅ — Find duplicates Task
 
 **Depends on:** T35. **Spec:** `docs/schema-engine.md` §6; `docs/mcp-surface.md` §7 (`crm_find_duplicates`).
 
