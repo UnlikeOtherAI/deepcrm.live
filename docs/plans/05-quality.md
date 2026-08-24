@@ -86,7 +86,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T42 — Approvals via MRTR
+### T42 ✅ — Approvals via MRTR
 
 **Depends on:** T41. **Spec:** `docs/auth-and-tenancy.md` §4; `docs/mcp-surface.md` §0.4; flow F6 in `docs/spec/protocol-flows.md`; `docs/spec/policy-defaults.json` (requires_approval rows already seeded in T10 — verify, do not re-seed).
 
