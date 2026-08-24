@@ -4,6 +4,7 @@ import type { Env } from './env.js'
 import { registerMcpHttpPlugin } from './plugins/mcp-http.js'
 import { registerHealthRoute } from './routes/health.js'
 import { registerOAuthMetadataRoute } from './routes/oauth-metadata.js'
+import { registerExportRoute } from './routes/exports.js'
 
 // Pure builder: no env reads, no side effects. The caller (api/src/index.ts)
 // supplies env and deps; tests supply their own (api/test/health.test.ts).
@@ -29,6 +30,7 @@ export function buildApp(deps: AppDeps, env: Env): FastifyInstance {
   })
   registerHealthRoute(app, deps)
   registerOAuthMetadataRoute(app, env)
+  registerExportRoute(app, deps, env)
   registerMcpHttpPlugin(app, deps, env)
   return app
 }

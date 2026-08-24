@@ -1,5 +1,6 @@
 import {
   CrmChangesSince,
+  CrmExportInputShape,
   CrmWebhookDelete,
   CrmWebhookList,
   CrmWebhookSet,
@@ -8,15 +9,32 @@ import {
 
 import type { AppDeps } from '../../deps.js'
 import { changesSince } from '../../services/io.js'
+import { enqueueExport } from '../../services/exports.js'
 import { deleteWebhook, listWebhooks, setWebhook } from '../../services/webhooks.js'
 import { defineTool } from './register.js'
-import { ok } from './result.js'
+import { ok, taskCreated } from './result.js'
 
 export function registerIoTools(
   server: Parameters<typeof defineTool>[0],
   ctx: ActorContext,
   deps: AppDeps,
 ): void {
+  defineTool(server, {
+    name: 'crm_export',
+    description: 'Export exactly one object type or saved view for offline analysis when paginated queries are unsuitable. Returns a Task with a redacted, row-capped CSV or JSONL result at a signed, single-use URL valid for at most one hour; may raise POLICY_DENIED or APPROVAL_REQUIRED.',
+    input: CrmExportInputShape,
+    handler: async (args) => {
+      const result = await enqueueExport(deps, ctx, {
+        objectType: args.object_type,
+        view: args.view,
+        format: args.format,
+        attributes: args.attributes,
+        reason: args.reason,
+        idempotencyKey: args.idempotency_key,
+      })
+      return taskCreated(result.task)
+    },
+  })
   defineTool(server, {
     name: 'crm_changes_since',
     description: 'Read the visible, policy-redacted team change feed by commit-ordered decimal cursor. Omit cursor to start now; use from=beginning only for retained-history replay.',

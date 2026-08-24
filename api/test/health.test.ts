@@ -8,7 +8,8 @@ import { parseEnv, type Env } from '../src/env.js'
 import { createHistoryCursorCodec } from '../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../src/services/query-cursor.js'
 
-const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSIsImV4cG9ydCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUU9In19'
+const keyringWithoutExport = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
 const testEnv: Env = parseEnv({
   DATABASE_URL: 'postgresql://unused',
   NODE_ENV: 'test',
@@ -25,7 +26,7 @@ function makeDeps(ok: boolean): AppDeps {
     clock: () => new Date(),
     ids: () => 'id_test',
     version: '0.0.0',
-    maxBulkRows: 10_000,
+    maxBulkRows: 10_000, maxExportRows: 100_000,
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
@@ -63,6 +64,12 @@ describe('createAppDeps', () => {
       DEEPCRM_SECRET_KEYRING_B64: 'invalid',
     })
     expect(() => createAppDeps(invalid)).toThrow()
+    const missingExport = parseEnv({
+      DATABASE_URL: 'postgresql://unused',
+      NODE_ENV: 'test',
+      DEEPCRM_SECRET_KEYRING_B64: keyringWithoutExport,
+    })
+    expect(() => createAppDeps(missingExport)).toThrow()
   })
 
   it('parses the organization allowlist once into a normalized set', async () => {

@@ -1,8 +1,55 @@
 import { z } from 'zod'
 
-import { Limit, Slug } from './primitives.js'
+import { Filter, Sort } from './filter.js'
+import { IdempotencyKey, IsoDateTime, Limit, Reason, Slug, Uuid } from './primitives.js'
+import { BulkAssertActorContext, McpTask } from './tools-bulk.js'
 import { Change } from './tools-records.js'
-import { Uuid } from './primitives.js'
+
+export const ExportFormat = z.enum(['jsonl', 'csv'])
+
+export const CrmExportInputShape = {
+  object_type: Slug.optional()
+    .describe('active object type to export; mutually exclusive with view'),
+  view: Slug.optional()
+    .describe('saved view whose object type, filter, and sort define the export'),
+  format: ExportFormat.describe('jsonl emits one attribute object per line; csv uses RFC 4180'),
+  attributes: z.array(Slug).max(100).optional()
+    .describe('exact attribute columns; defaults to the view projection or all active attributes'),
+  reason: Reason,
+  idempotency_key: IdempotencyKey,
+}
+
+export const CrmExport = {
+  in: z.object(CrmExportInputShape).strict()
+    .refine((input) => (input.object_type === undefined) !== (input.view === undefined), {
+      message: 'exactly one of object_type or view is required',
+    }),
+  out: z.object({ task: McpTask }).strict(),
+}
+
+export const ExportProgress = z.object({
+  done: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+}).strict()
+
+export const ExportResult = z.object({
+  url: z.string().url(),
+  rows: z.number().int().nonnegative(),
+  expires_at: IsoDateTime,
+}).strict()
+
+export const ExportPayload = z.object({
+  organizationId: Uuid,
+  teamId: Uuid,
+  objectType: Slug,
+  filter: Filter.optional(),
+  sort: Sort,
+  attributes: z.array(Slug).max(100),
+  format: ExportFormat,
+  reason: z.string().max(500).optional(),
+  argumentsHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  actorContext: BulkAssertActorContext,
+}).strict()
 
 export const FeedChangeKind = z.enum([
   'create', 'set', 'unset', 'link', 'unlink', 'delete', 'restore', 'merge', 'unmerge', 'schema',

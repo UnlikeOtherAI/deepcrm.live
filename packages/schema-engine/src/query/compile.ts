@@ -434,7 +434,7 @@ export function compileQuery(
   input: QueryInput,
 ): CompiledQuery {
   if (tenant.organizationId !== ctx.tenant.organizationId || tenant.teamId !== ctx.tenant.teamId) throw new ServiceError(ErrorCode.TENANT_MISMATCH, 'Tenant does not match actor context')
-  const limit = input.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 200) failure('limit')
+  const limit = input.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 500) failure('limit')
   const keys = sortKeys(schema, objectType, input.sort)
   const base = compileRecordSet(tenant, ctx, schema, objectType, {
     ...(input.filter === undefined ? {} : { filter: input.filter }),

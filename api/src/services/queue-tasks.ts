@@ -5,6 +5,8 @@ import {
   BulkAssertResult,
   FindDuplicatesProgress,
   FindDuplicatesResult,
+  ExportProgress,
+  ExportResult,
   ErrorCode,
   McpTask,
   ServiceError,
@@ -15,6 +17,7 @@ import type { AppDeps } from '../deps.js'
 
 export const BULK_ASSERT_JOB = 'records.bulk_assert'
 export const DEDUP_SCAN_JOB = 'records.dedup_scan'
+export const EXPORT_JOB = 'records.export'
 const TASK_TTL_MS = 7 * 24 * 60 * 60 * 1_000
 const TASK_POLL_INTERVAL_MS = 1_000
 
@@ -36,7 +39,9 @@ function progress(job: QueueJob) {
   if (job.progress === null) return undefined
   const parsed = job.type === DEDUP_SCAN_JOB
     ? FindDuplicatesProgress.safeParse(job.progress)
-    : BulkAssertProgress.safeParse(job.progress)
+    : job.type === EXPORT_JOB
+      ? ExportProgress.safeParse(job.progress)
+      : BulkAssertProgress.safeParse(job.progress)
   if (!parsed.success) return invalidState('progress')
   return parsed.data
 }
@@ -70,7 +75,10 @@ function present(job: QueueJob): ReturnType<typeof McpTask.parse> {
 
 async function taskJob(deps: AppDeps, ctx: ActorContext, taskId: string): Promise<QueueJob> {
   const job = await deps.db.queueJob.findFirst({
-    where: { ...tenantWhere(ctx.tenant), id: taskId, type: { in: [BULK_ASSERT_JOB, DEDUP_SCAN_JOB] } },
+    where: {
+      ...tenantWhere(ctx.tenant), id: taskId,
+      type: { in: [BULK_ASSERT_JOB, DEDUP_SCAN_JOB, EXPORT_JOB] },
+    },
   })
   if (job === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Task not found')
   return job
@@ -100,14 +108,18 @@ export async function getQueueTaskResult(
   deps: AppDeps,
   ctx: ActorContext,
   taskId: string,
-): Promise<ReturnType<typeof BulkAssertResult.parse> | ReturnType<typeof FindDuplicatesResult.parse>> {
+): Promise<
+  | ReturnType<typeof BulkAssertResult.parse>
+  | ReturnType<typeof FindDuplicatesResult.parse>
+  | ReturnType<typeof ExportResult.parse>
+> {
   const job = await taskJob(deps, ctx, taskId)
   if (job.status !== 'completed' || job.result === null) {
     throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Task result is not available', {
       detail: 'task_not_completed',
     })
   }
-  return job.type === DEDUP_SCAN_JOB
-    ? FindDuplicatesResult.parse(job.result)
-    : BulkAssertResult.parse(job.result)
+  if (job.type === DEDUP_SCAN_JOB) return FindDuplicatesResult.parse(job.result)
+  if (job.type === EXPORT_JOB) return ExportResult.parse(job.result)
+  return BulkAssertResult.parse(job.result)
 }

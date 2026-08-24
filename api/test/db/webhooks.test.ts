@@ -27,7 +27,7 @@ const deps: AppDeps = {
   clock: () => now,
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
-  maxBulkRows: 10_000,
+  maxBulkRows: 10_000, maxExportRows: 100_000,
   orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(),
   historyCursor: createHistoryCursorCodec(secretBox),

@@ -15,6 +15,7 @@ export type WorkerDeps = {
 }
 
 export type { BulkAssertRecordInput, BulkAssertRecordPort } from './bulk-assert-port.js'
+export type { ExportPage, ExportPageInput, ExportPagePort } from './export-page-port.js'
 
 export type JobHandlerInput = {
   db: Db

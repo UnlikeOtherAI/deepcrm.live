@@ -49,4 +49,19 @@ describe('secret box', () => {
     const box = parseSecretBox(keyring())
     expect(() => box.open('not-an-envelope!', 'purpose', Buffer.from('aad'))).toThrow(SecretBoxError)
   })
+
+  it('signs and verifies with an explicitly selected key id', () => {
+    const current = randomBytes(32)
+    const signing = randomBytes(32)
+    const box = parseSecretBox(keyring('current', { current, export: signing }))
+    const message = Buffer.from('job-id:1234')
+    const signature = box.sign(message, 'export')
+
+    expect(() => box.assertKey('export')).not.toThrow()
+    expect(() => box.assertKey('missing')).toThrow(SecretBoxError)
+    expect(box.verify(signature, message, 'export')).toBe(true)
+    expect(box.verify(signature, Buffer.from('job-id:1235'), 'export')).toBe(false)
+    expect(box.verify('not+a+signature', message, 'export')).toBe(false)
+    expect(() => box.sign(message, 'missing')).toThrow(SecretBoxError)
+  })
 })

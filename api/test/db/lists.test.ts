@@ -25,7 +25,7 @@ const secretBox = parseSecretBox(Buffer.from(JSON.stringify({
   active: 'lists-v1', keys: { 'lists-v1': key },
 })).toString('base64'))
 const deps: AppDeps = {
-  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000,
+  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000, maxExportRows: 100_000,
   orgAllowlist: null, linkWriter: createProjectionLinkWriter(), secretBox,
   embedder: new FakeEmbedder('api-test'),
   historyCursor: createHistoryCursorCodec(secretBox), queryCursor: createQueryCursorCodec(secretBox),

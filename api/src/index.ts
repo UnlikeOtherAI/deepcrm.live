@@ -3,8 +3,10 @@ import { createAppDeps, type AppDeps } from './deps.js'
 import { parseEnv } from './env.js'
 import type { JobHandler, WorkerDeps } from '@deepcrm/worker'
 import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
+import { scheduleRetention } from '@deepcrm/worker/dist/jobs/retention.js'
 import { assertRecordWithIntegration } from './services/records.js'
 import { standardRecordWrite } from './services/record-write-integration.js'
+import { queryRecordsForExport } from './services/record-query.js'
 
 const env = parseEnv(process.env)
 
@@ -56,7 +58,30 @@ async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<
     )
     return { created: result.created }
   }
-  await loaded.startWorker(deps, createHandlers(recordAssert, deps.embedder, deps.secretBox), signal)
+  const exportPage = async (
+    ctx: Parameters<typeof queryRecordsForExport>[1],
+    input: Parameters<typeof queryRecordsForExport>[2],
+  ) => {
+    const result = await queryRecordsForExport(deps, ctx, input)
+    return {
+      records: result.records.map((record) => ({ data: record.data })),
+      nextCursor: result.next_cursor,
+      ...(result.total === undefined ? {} : { total: result.total }),
+    }
+  }
+  await scheduleRetention(deps.db, deps.clock())
+  await loaded.startWorker(deps, createHandlers(
+    recordAssert,
+    deps.embedder,
+    deps.secretBox,
+    exportPage,
+    {
+      exportDir: env.DEEPCRM_EXPORT_DIR,
+      maxExportRows: env.DEEPCRM_MAX_EXPORT_ROWS,
+      publicUrl: env.DEEPCRM_API_PUBLIC_URL,
+      retentionDays: env.DEEPCRM_RETENTION_DAYS,
+    },
+  ), signal)
 }
 
 async function main(): Promise<void> {

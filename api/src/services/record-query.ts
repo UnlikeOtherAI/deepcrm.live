@@ -71,7 +71,7 @@ function invalidQuery(path: string, message: string): never {
   })
 }
 
-function parseQuery(input: RecordQueryInput): NormalizedQuery {
+function parseQuery(input: RecordQueryInput, maxLimit = 200): NormalizedQuery {
   if (input.includeTotal !== undefined && typeof input.includeTotal !== 'boolean') {
     invalidQuery('/include_total', 'Include total must be boolean')
   }
@@ -105,8 +105,8 @@ function parseQuery(input: RecordQueryInput): NormalizedQuery {
     parsedAttributes = [...new Set(attributes.data)].sort()
   }
   const limit = input.limit ?? 50
-  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-    invalidQuery('/limit', 'Limit must be an integer from 1 to 200')
+  if (!Number.isInteger(limit) || limit < 1 || limit > maxLimit) {
+    invalidQuery('/limit', `Limit must be an integer from 1 to ${maxLimit}`)
   }
   return {
     objectType: objectType.data,
@@ -144,9 +144,10 @@ async function queryRecordsOperation(
   ctx: ActorContext,
   input: RecordQueryInput,
   integration: RecordQueryIntegration,
+  maxLimit = 200,
 ): Promise<RecordQueryResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
-    const query = parseQuery(input)
+    const query = parseQuery(input, maxLimit)
     const schema = await loadSchema(deps.db, ctx.tenant)
     const objectType = selectedObjectType(schema, query.objectType)
     const scopes = queryScopes(ctx, objectType)
@@ -233,4 +234,12 @@ export function queryRecordsForTool(
   deps: AppDeps, ctx: ActorContext, input: RecordQueryInput, integration: RecordQueryIntegration,
 ): Promise<RecordQueryResult> {
   return queryRecordsOperation(deps, ctx, input, integration)
+}
+
+export function queryRecordsForExport(
+  deps: AppDeps, ctx: ActorContext, input: RecordQueryInput,
+): Promise<RecordQueryResult> {
+  return queryRecordsOperation(deps, ctx, input, {
+    tool: 'crm_export', cursorArguments: recordCursorArguments,
+  }, 500)
 }

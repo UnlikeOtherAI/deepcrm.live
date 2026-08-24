@@ -175,6 +175,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
       serverInfo: { name: 'deepcrm', version: deps.version },
       limits: {
         maxBulkRows: deps.maxBulkRows,
+        maxExportRows: deps.maxExportRows,
         maxFilterNodes: MAX_FILTER_NODES,
         maxPageRows: MAX_PAGE_ROWS,
       },

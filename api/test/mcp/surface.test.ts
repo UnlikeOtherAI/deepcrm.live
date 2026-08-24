@@ -9,7 +9,6 @@ const NOT_YET: string[] = [
   'crm_suppression_list',
   'crm_suppression_remove',
   'crm_write_guard_set',
-  'crm_export',
 ]
 
 function numberedSection(markdown: string, section: number): string {

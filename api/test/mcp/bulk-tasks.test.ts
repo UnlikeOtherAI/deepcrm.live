@@ -130,7 +130,13 @@ describe('bulk assert MCP Task', () => {
     const controller = new AbortController()
     const worker = startWorker(
       { ...deps, writeAudit, ids: () => crypto.randomUUID() },
-      createHandlers(recordAssert, new FakeEmbedder('bulk-test-v1'), deps.secretBox),
+      createHandlers(
+        recordAssert,
+        new FakeEmbedder('bulk-test-v1'),
+        deps.secretBox,
+        async () => { throw new Error('unexpected export') },
+        { exportDir: '.exports-test', maxExportRows: 100_000, publicUrl: 'http://127.0.0.1', retentionDays: 30 },
+      ),
       controller.signal,
     )
     const stored = await waitForJob(created.task.taskId)

@@ -30,7 +30,7 @@ const noLinks: LinkWriter = {
   restore: async () => ({ changes: [], touchedRecordIds: [] }),
 }
 const deps: AppDeps = {
-  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000,
+  db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000, maxExportRows: 100_000,
   embedder: new FakeEmbedder('api-test'),
   orgAllowlist: null, linkWriter: noLinks,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),

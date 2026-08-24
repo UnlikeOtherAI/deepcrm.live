@@ -1,7 +1,9 @@
 import {
   createCipheriv,
   createDecipheriv,
+  createHmac,
   randomBytes,
+  timingSafeEqual,
 } from 'node:crypto'
 
 import { z } from 'zod'
@@ -44,8 +46,11 @@ export class SecretBoxError extends Error {
 }
 
 export type SecretBox = {
+  assertKey(keyId: string): void
   seal(plaintext: Uint8Array, purpose: string, additionalData: Uint8Array): string
   open(envelope: string, purpose: string, additionalData: Uint8Array): Uint8Array
+  sign(message: Uint8Array, keyId: string): string
+  verify(signature: string, message: Uint8Array, keyId: string): boolean
 }
 
 function invalidKeyring(): never {
@@ -123,6 +128,9 @@ export function parseSecretBox(encodedKeyring: string): SecretBox {
   if (activeKey === undefined) invalidKeyring()
 
   return {
+    assertKey(keyId) {
+      if (!keys.has(keyId)) invalidKeyring()
+    },
     seal(plaintext, purpose, additionalData) {
       const iv = randomBytes(ivBytes)
       const cipher = createCipheriv(algorithm, activeKey, iv, { authTagLength: tagBytes })
@@ -153,6 +161,19 @@ export function parseSecretBox(encodedKeyring: string): SecretBox {
       } catch {
         invalidEnvelope()
       }
+    },
+    sign(message, keyId) {
+      const key = keys.get(keyId)
+      if (key === undefined) invalidKeyring()
+      return createHmac('sha256', key).update(message).digest('base64url')
+    },
+    verify(signature, message, keyId) {
+      const key = keys.get(keyId)
+      if (key === undefined) invalidKeyring()
+      if (!/^[A-Za-z0-9_-]+$/u.test(signature)) return false
+      const supplied = Buffer.from(signature, 'base64url')
+      const expected = createHmac('sha256', key).update(message).digest()
+      return supplied.byteLength === expected.byteLength && timingSafeEqual(supplied, expected)
     },
   }
 }

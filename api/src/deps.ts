@@ -18,6 +18,7 @@ export type AppDeps = {
   ids: () => string
   version: string
   maxBulkRows: number
+  maxExportRows: number
   orgAllowlist: ReadonlySet<string> | null
   linkWriter: LinkWriter
   historyCursor: HistoryCursorCodec
@@ -38,12 +39,14 @@ function parseOrgAllowlist(value: string | undefined): ReadonlySet<string> | nul
 
 export function createAppDeps(env: Env): AppDeps {
   const secretBox = parseSecretBox(env.DEEPCRM_SECRET_KEYRING_B64)
+  secretBox.assertKey('export')
   return {
     db: createDb(env.DATABASE_URL),
     clock: () => new Date(),
     ids: () => randomUUID(),
     version: '0.0.0',
     maxBulkRows: env.DEEPCRM_MAX_BULK_ROWS,
+    maxExportRows: env.DEEPCRM_MAX_EXPORT_ROWS,
     orgAllowlist: parseOrgAllowlist(env.DEEPCRM_ORG_ALLOWLIST),
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(secretBox),

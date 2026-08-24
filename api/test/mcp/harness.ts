@@ -4,15 +4,22 @@ import { buildApp } from '../../src/app.js'
 import { createAppDeps } from '../../src/deps.js'
 import { parseEnv } from '../../src/env.js'
 
-const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSIsImV4cG9ydCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUU9In19'
 
 export type StartTestServerOptions = {
   headers?: Record<string, string>
+  exportDir?: string
 }
 
 export async function startTestServer(
   options: StartTestServerOptions = {},
-): Promise<{ client: Client; url: URL; close: () => Promise<void> }> {
+): Promise<{
+  client: Client
+  url: URL
+  deps: ReturnType<typeof createAppDeps>
+  env: ReturnType<typeof parseEnv>
+  close: () => Promise<void>
+}> {
   const databaseUrl = process.env.DATABASE_URL
   if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for MCP transport tests')
   const env = parseEnv({
@@ -21,6 +28,7 @@ export async function startTestServer(
     REQUIRE_AUTH: 'false',
     DEEPCRM_API_PUBLIC_URL: 'http://127.0.0.1',
     DEEPCRM_SECRET_KEYRING_B64: keyring,
+    DEEPCRM_EXPORT_DIR: options.exportDir,
   })
   const deps = createAppDeps(env)
   const app = buildApp(deps, env)
@@ -45,6 +53,8 @@ export async function startTestServer(
   return {
     client,
     url,
+    deps,
+    env,
     close: async () => {
       await client.close()
       await app.close()

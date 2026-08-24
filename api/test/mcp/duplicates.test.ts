@@ -99,7 +99,13 @@ describe('duplicate scan MCP Task', () => {
     const controller = new AbortController()
     const worker = startWorker(
       { ...deps, writeAudit, ids: () => crypto.randomUUID() },
-      createHandlers(async () => { throw new Error('unexpected bulk assert') }, new FakeEmbedder(), deps.secretBox),
+      createHandlers(
+        async () => { throw new Error('unexpected bulk assert') },
+        new FakeEmbedder(),
+        deps.secretBox,
+        async () => { throw new Error('unexpected export') },
+        { exportDir: '.exports-test', maxExportRows: 100_000, publicUrl: 'http://127.0.0.1', retentionDays: 30 },
+      ),
       controller.signal,
     )
     const job = await waitForJob(first.task.taskId)

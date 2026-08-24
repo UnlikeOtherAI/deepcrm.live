@@ -6,7 +6,7 @@ import { createAppDeps } from '../../src/deps.js'
 import { parseEnv } from '../../src/env.js'
 import { startTestServer } from './harness.js'
 
-const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
+const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSIsImV4cG9ydCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUU9In19'
 const DiscoverResultSchema = z.object({
   protocolVersions: z.array(z.string()),
   capabilities: z.object({
@@ -19,6 +19,7 @@ const DiscoverResultSchema = z.object({
   serverInfo: z.object({ name: z.string(), version: z.string() }),
   limits: z.object({
     maxBulkRows: z.number(),
+    maxExportRows: z.number(),
     maxFilterNodes: z.number(),
     maxPageRows: z.number(),
   }),
@@ -106,7 +107,10 @@ describe('streamable HTTP MCP transport', () => {
       protocolVersions: ['2026-07-28'],
       serverInfo: { name: 'deepcrm', version: '0.0.0' },
       resultType: 'complete',
-      limits: { maxBulkRows: 10_000, maxFilterNodes: 100, maxPageRows: 200 },
+      limits: {
+        maxBulkRows: 10_000, maxExportRows: 100_000,
+        maxFilterNodes: 100, maxPageRows: 200,
+      },
     })
     expect(result.capabilities.extensions).toHaveProperty('io.modelcontextprotocol/tasks')
     expect(result.capabilities.tasks).toEqual({

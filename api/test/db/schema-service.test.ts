@@ -32,7 +32,7 @@ const deps: AppDeps = {
   clock: () => new Date(),
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
-  maxBulkRows: 10_000,
+  maxBulkRows: 10_000, maxExportRows: 100_000,
   embedder: new FakeEmbedder('api-test'),
   orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(),
