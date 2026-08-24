@@ -57,7 +57,7 @@ async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<
     )
     return { created: result.created }
   }
-  await loaded.startWorker(deps, createHandlers(recordAssert, createEmbedder()), signal)
+  await loaded.startWorker(deps, createHandlers(recordAssert, createEmbedder(), deps.secretBox), signal)
 }
 
 function createEmbedder(): Embedder {

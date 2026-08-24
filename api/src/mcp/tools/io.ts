@@ -1,7 +1,14 @@
-import { CrmChangesSince, type ActorContext } from '@deepcrm/schemas'
+import {
+  CrmChangesSince,
+  CrmWebhookDelete,
+  CrmWebhookList,
+  CrmWebhookSet,
+  type ActorContext,
+} from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
 import { changesSince } from '../../services/io.js'
+import { deleteWebhook, listWebhooks, setWebhook } from '../../services/webhooks.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
@@ -25,5 +32,36 @@ export function registerIoTools(
       return ok(result, JSON.stringify(result))
     },
   })
+  defineTool(server, {
+    name: 'crm_webhook_set',
+    description: 'Register or update an owner-approved HMAC webhook from now on. Creation or explicit rotation returns secret material once; integration code must keep it out of model context.',
+    input: CrmWebhookSet.in.shape,
+    handler: async (args) => {
+      const result = await setWebhook(deps, ctx, {
+        url: args.url,
+        events: args.events,
+        active: args.active,
+        rotateSecret: args.rotate_secret,
+      })
+      return ok(result, JSON.stringify(result))
+    },
+  })
+  defineTool(server, {
+    name: 'crm_webhook_list',
+    description: 'List all webhooks in the entitled tenant, including inactive delivery errors. Secrets are never returned.',
+    input: CrmWebhookList.in.shape,
+    handler: async () => {
+      const result = await listWebhooks(deps, ctx)
+      return ok(result, JSON.stringify(result))
+    },
+  })
+  defineTool(server, {
+    name: 'crm_webhook_delete',
+    description: 'Delete one owner-approved webhook by id inside the entitled tenant.',
+    input: CrmWebhookDelete.in.shape,
+    handler: async (args) => {
+      const result = await deleteWebhook(deps, ctx, args.id)
+      return ok(result, JSON.stringify(result))
+    },
+  })
 }
-

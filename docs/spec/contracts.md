@@ -554,7 +554,8 @@ export const WebhookEvent = z.enum(['record.created','record.updated','record.de
 export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host; identity — set upserts by URL'),
   events: z.array(WebhookEvent).min(1), active: z.boolean().default(true),
   rotate_secret: z.boolean().default(false).describe('mint a new secret for an existing webhook') }),
-  out: z.object({ webhook: z.object({ id: Uuid, url: z.string(), events: z.array(WebhookEvent), active: z.boolean() }),
+  out: z.object({ webhook: z.object({ id: Uuid, url: z.string(), events: z.array(WebhookEvent),
+    active: z.boolean(), last_error: z.string().nullable() }),
     secret: z.string().optional().describe('creation or rotation only; secret material — never place in model context') }) }
 export const CrmWebhookList = { in: z.object({}), out: z.object({ webhooks: z.array(CrmWebhookSet.out.shape.webhook) }) }
 export const CrmWebhookDelete = { in: z.object({ id: Uuid }), out: z.object({ deleted: z.literal(true) }) }

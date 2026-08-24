@@ -130,7 +130,7 @@ describe('bulk assert MCP Task', () => {
     const controller = new AbortController()
     const worker = startWorker(
       { ...deps, writeAudit, ids: () => crypto.randomUUID() },
-      createHandlers(recordAssert, new FakeEmbedder('bulk-test-v1')),
+      createHandlers(recordAssert, new FakeEmbedder('bulk-test-v1'), deps.secretBox),
       controller.signal,
     )
     const stored = await waitForJob(created.task.taskId)

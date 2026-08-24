@@ -32,6 +32,12 @@ export type JobHandlerInput = {
 export type JobHandlerOutcome = void | { terminalized: true }
 export type JobHandler = (input: JobHandlerInput) => Promise<JobHandlerOutcome>
 
+export class JobRetryError extends Error {
+  constructor(message: string, readonly retryAt: Date) {
+    super(message)
+  }
+}
+
 /**
  * Processes at most four claimed jobs concurrently until aborted.
  */
@@ -66,7 +72,13 @@ export async function startWorker(
       if (outcome?.terminalized === true) return
       await complete(deps.db, job.id, workerId, null)
     } catch (error: unknown) {
-      await fail(deps.db, job.id, workerId, error instanceof Error ? error.message : 'worker failure')
+      await fail(
+        deps.db,
+        job.id,
+        workerId,
+        error instanceof Error ? error.message : 'worker failure',
+        error instanceof JobRetryError ? error.retryAt : undefined,
+      )
     }
   }
   while (!signal.aborted) {

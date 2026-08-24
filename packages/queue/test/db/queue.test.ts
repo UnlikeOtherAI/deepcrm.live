@@ -155,3 +155,17 @@ it('requeues failed work', async () => {
   expect(await fail(db, item.id, 'worker', 'failed')).toBe(true)
   await db.queueJob.delete({ where: { id: item.id } })
 })
+
+it('uses an explicit retry time supplied by a protocol handler', async () => {
+  const type = `scheduled_retry_${crypto.randomUUID()}`
+  const item = await enqueue(db, { type, payload: {}, maxAttempts: 2 })
+  await db.queueJob.update({
+    where: { id: item.id },
+    data: { status: 'running', lockedBy: 'scheduled-worker', lockedAt: new Date(), attempts: 1 },
+  })
+  const retryAt = new Date('2026-08-24T12:05:00.000Z')
+  expect(await fail(db, item.id, 'scheduled-worker', 'HTTP 500', retryAt)).toBe(true)
+  const stored = await db.queueJob.findUniqueOrThrow({ where: { id: item.id } })
+  expect(stored).toMatchObject({ status: 'queued', visibleAt: retryAt, lastError: 'HTTP 500' })
+  await db.queueJob.delete({ where: { id: item.id } })
+})

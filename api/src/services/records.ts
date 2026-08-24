@@ -197,6 +197,7 @@ async function enqueueChanges(
     idempotencyKey: `deliver:${ctx.tenant.teamId}:${bucket}`,
     visibleAt: new Date(ctx.now.getTime() + 30_000),
     priority: 100,
+    maxAttempts: 6,
   })
 }
 async function runWrite(

@@ -160,6 +160,7 @@ export async function fail(
   id: string,
   workerId: string,
   error: string,
+  retryAt?: Date,
 ): Promise<boolean> {
   const job = await db.queueJob.findFirst({
     where: { id, lockedBy: workerId, status: 'running' },
@@ -167,7 +168,7 @@ export async function fail(
   })
   if (job === null) return false
   const terminal = job.attempts >= job.maxAttempts
-  const visibleAt = new Date(Date.now() + Math.min(2 ** job.attempts, 60) * 60_000)
+  const visibleAt = retryAt ?? new Date(Date.now() + Math.min(2 ** job.attempts, 60) * 60_000)
   const data = terminal
     ? { status: 'failed' as const, lastError: error }
     : {

@@ -186,9 +186,9 @@ Suppression entries survive tenant deletion and record erasure by construction (
 |---|---|---|---|
 | `crm_export` | Export an object type or view to JSONL/CSV as a Task; the approval names the exact attribute list, rows honour the approver's redaction, and the result is a single-use signed URL (≤1 h, row-capped). | `{ object_type?, view?, format: jsonl\|csv, attributes?, reason?, idempotency_key? }` | `{ task_id }` → `{ url, rows, expires_at }` |
 | `crm_changes_since` | Read the visible, policy-redacted team change feed by commit-ordered decimal cursor. Omit cursor to start now; use from=beginning only for retained-history replay. | `{ cursor?: string, from?: "beginning", object_types?: array, kinds?: array, limit?: integer }` | `{ changes: Change[], next_cursor, has_more }` |
-| `crm_webhook_set` | Register (upsert by URL) an HMAC-signed webhook receiving coalesced change batches **from now on** (never historical replay). Owner-only + approval. Intended for integration code, not conversational agents: the once-shown secret must never enter model context. | `{ url, events: [record.*\|link.*\|schema.*], active?, rotate_secret? }` | `{ webhook: { id, url, events, active }, secret?: string (creation or rotate only) }` |
-| `crm_webhook_list` | List webhooks (secrets never returned). | `{}` | `{ webhooks }` |
-| `crm_webhook_delete` | Delete a webhook. | `{ id }` | `{ deleted: true }` |
+| `crm_webhook_set` | Register or update an owner-approved HMAC webhook from now on. Creation or explicit rotation returns secret material once; integration code must keep it out of model context. | `{ url: string, events: array, active?: boolean, rotate_secret?: boolean }` | `{ webhook: { id, url, events, active }, secret?: string (creation or rotate only) }` |
+| `crm_webhook_list` | List all webhooks in the entitled tenant, including inactive delivery errors. Secrets are never returned. | `{}` | `{ webhooks }` |
+| `crm_webhook_delete` | Delete one owner-approved webhook by id inside the entitled tenant. | `{ id: string }` | `{ deleted: true }` |
 <!-- tools:end -->
 
 Webhook wire contract (envelope, signature, retry, catch-up): **normative in [events.md](spec/events.md) §3** — this section only names the tools.
