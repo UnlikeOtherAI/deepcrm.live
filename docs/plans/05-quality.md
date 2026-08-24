@@ -20,7 +20,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 **Depends on:** T35. **Spec:** `docs/schema-engine.md` §6; `docs/mcp-surface.md` §7 (`crm_find_duplicates`).
 
 **Files:**
-- Create `worker/src/jobs/dedup-scan.ts` — for the object type: (1) groups from `record_unique_keys`/`record_match_keys` sharing a hash (pre-rule data), (2) fuzzy rules via `pg_trgm` similarity (≥ 0.5), (3) when `include_semantic`: nearest-neighbour pairs with cosine distance < 0.08; union-find into groups; evidence per pair, redacted; `progress`; one dedup scan per team at a time.
+- Create `worker/src/jobs/dedup-scan.ts` — for the object type: (1) groups from T16 `record_match_lookup_keys` joined only through the **active** rule generation (the unique `record_match_keys` block table cannot contain a duplicate group, and pending/collision-blocked generations are not effective behavior), (2) fuzzy active rules via `pg_trgm` similarity (≥ 0.5), (3) when `include_semantic`: nearest-neighbour pairs with cosine distance < 0.08; union-find into groups; evidence per pair, redacted through the same T16 tenant/visibility/record-policy/batched-attribute-policy seam; `progress`; one dedup scan per team at a time. `record_unique_keys` may contribute the unique evidence kind for a pair found by another method, but is never queried as though its unique index could contain a duplicate group.
 - Tool `crm_find_duplicates` enqueues; result shape per §7.
 - Tests (worker DB): three near-identical people ⇒ one group with two evidence kinds.
 
@@ -43,7 +43,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 **Depends on:** T37. **Spec:** `docs/schema-engine.md` §7 steps 1, 4–7; `docs/mcp-surface.md` §7 (`crm_merge_records`).
 
 **Files:**
-- Create `packages/schema-engine/src/merge/execute.ts` — transaction with locks; re-point `record_links` (both columns), collapse duplicates keeping oldest, cardinality fix-ups, `list_entries` re-point, keys per plan (**keys follow data**, §7.3), losers `merged_into_id`/`deleted_at` **and chained-pointer re-point** (§7.6), `merge` changes with the **normative snapshot shape of §7.7** (repointedLinks/endedLinks/movedKeys/droppedKeys/movedEntries), reindex enqueue for survivor.
+- Create `packages/schema-engine/src/merge/execute.ts` — transaction with locks; re-point `record_links` (both columns), collapse duplicates keeping oldest, cardinality fix-ups, `list_entries` re-point, unique keys per plan (**keys follow data**, §7.3), and recompute T16 block/lookup match rows for the survivor and every changed projection source against current active/replacement generations after data+links finalise (derived match rows are never moved or snapshotted); losers `merged_into_id`/`deleted_at` **and chained-pointer re-point** (§7.6), `merge` changes with the **normative snapshot shape of §7.7** (repointedLinks/endedLinks/movedKeys/droppedKeys/movedEntries), reindex enqueue for survivor.
 - Edit `records` read paths (`getRecord`, `recordAt`, links list): replace T13's `MERGED`-throw with the redirect — a loser id resolves to the survivor with `redirected_from` (one hop, kept true by chained re-pointing; `MERGED` only when the survivor is itself deleted). Update the T13 tests this changes.
 - Service with policy `merge.merge` (approval default — MRTR handled in T42; until then admin-only in tests) + tool.
 - Tests (DB): two people merged — links re-pointed and de-duplicated, loser `crm_record_get` returns survivor with `redirected_from`, unique email moved.
@@ -56,7 +56,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 **Depends on:** T38. **Spec:** `docs/schema-engine.md` §7 step 8.
 
-**Files:** `packages/schema-engine/src/merge/unmerge.ts` — consumes exactly the §7.7 snapshot (repointedLinks back, endedLinks un-ended, moved keys/entries resolved; post-merge survivor changes win; collisions returned as `conflicts`), `unmerge` changes; tool `crm_unmerge`; extend `properties.test.ts` with invariant (d): merge then immediate unmerge ⇒ losers' `data` and active link sets equal their pre-merge state and `conflicts` is empty.
+**Files:** `packages/schema-engine/src/merge/unmerge.ts` — consumes exactly the §7.7 snapshot (repointedLinks back, endedLinks un-ended, moved unique keys/entries resolved; T16 match block/lookup rows recomputed from restored data/links against current generations, never restored from stale rule ids; post-merge survivor changes win; unique/matching-rule/link/list-entry collisions returned as `conflicts` and no live record is left without required block keys), `unmerge` changes; tool `crm_unmerge`; extend `properties.test.ts` with invariant (d): merge then immediate unmerge ⇒ losers' `data`, active link sets, and current active/replacement match rows equal their pre-merge-derived state and `conflicts` is empty.
 
 **Acceptance:** engine property tests green.
 

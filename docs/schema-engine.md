@@ -180,7 +180,12 @@ enum MatchMethod {
 enum MatchAction {
   block
   warn
-  allow
+}
+
+enum MatchingRuleGenerationState {
+  active
+  pending_backfill
+  collision_blocked
 }
 
 enum PolicyScope {
@@ -269,6 +274,7 @@ model ObjectType {
   records            Record[]
   relationsFrom      RelationType[] @relation("RelationFrom")
   relationsTo        RelationType[] @relation("RelationTo")
+  matchingRuleGenerations MatchingRuleGeneration[]
   matchingRules      MatchingRule[]
 
   @@unique([organizationId, teamId, slug])
@@ -334,20 +340,57 @@ model RelationType {
   @@map("relation_types")
 }
 
+model MatchingRuleGeneration {
+  id               String                      @id @default(uuid()) @db.Uuid
+  organizationId   String                      @map("organization_id") @db.Uuid
+  teamId           String                      @map("team_id") @db.Uuid
+  objectTypeId     String                      @map("object_type_id") @db.Uuid
+  state            MatchingRuleGenerationState
+  backfillJobId    String?                     @unique @map("backfill_job_id") @db.Uuid
+  backfillAttempt  Int                         @default(0) @map("backfill_attempt")
+  bootstrapJobId   String?                     @unique @map("bootstrap_job_id") @db.Uuid
+  bootstrapAttempt Int                         @default(0) @map("bootstrap_attempt")
+  processedRecords Int                         @default(0) @map("processed_records")
+  totalRecords     Int?                        @map("total_records")
+  collisionGroups  Int                         @default(0) @map("collision_groups")
+  collisionRecords Int                         @default(0) @map("collision_records")
+  keysReadyAt      DateTime?                   @map("keys_ready_at")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  activatedAt      DateTime?                   @map("activated_at")
+  objectType       ObjectType                  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  rules            MatchingRule[]
+
+  @@index([organizationId, teamId])
+  @@index([objectTypeId, state])
+  @@map("matching_rule_generations")
+}
+// Raw SQL in T16's forward migration is authoritative for generation slots:
+//   CREATE UNIQUE INDEX matching_rule_generations_one_active
+//     ON matching_rule_generations (object_type_id) WHERE state = 'active';
+//   CREATE UNIQUE INDEX matching_rule_generations_one_replacement
+//     ON matching_rule_generations (object_type_id)
+//     WHERE state IN ('pending_backfill', 'collision_blocked');
+
 model MatchingRule {
-  id             String      @id @default(uuid()) @db.Uuid
-  organizationId String      @map("organization_id") @db.Uuid
-  teamId         String      @map("team_id") @db.Uuid
-  objectTypeId   String      @map("object_type_id") @db.Uuid
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @map("organization_id") @db.Uuid
+  teamId         String                 @map("team_id") @db.Uuid
+  objectTypeId   String                 @map("object_type_id") @db.Uuid
+  generationId   String                 @map("generation_id") @db.Uuid
   position       Int
-  attributeSlugs String[]    @map("attribute_slugs")
+  attributeSlugs String[]               @map("attribute_slugs")
   method         MatchMethod
   threshold      Float?
   action         MatchAction
-  createdAt      DateTime    @default(now()) @map("created_at")
-  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  createdAt      DateTime               @default(now()) @map("created_at")
+  generation     MatchingRuleGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  objectType     ObjectType             @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  blockKeys      RecordMatchKey[]
+  lookupKeys     RecordMatchLookupKey[]
 
-  @@index([objectTypeId, position])
+  @@unique([generationId, position])
+  @@index([organizationId, teamId])
+  @@index([objectTypeId, generationId, position])
   @@map("matching_rules")
 }
 
@@ -393,6 +436,7 @@ model Record {
   uniqueKeys     RecordUniqueKey[]
   search         RecordSearch?
   matchKeys      RecordMatchKey[]
+  matchLookupKeys RecordMatchLookupKey[]
   visibilityGrants RecordVisibilityGrant[]
   listEntries    ListEntry[]
 
@@ -462,21 +506,47 @@ model RecordUniqueKey {
 /// Materialised keys for `block`-action matching rules (methods exact and
 /// normalized only), written in the same transaction as the record so the
 /// database enforces the block under concurrency (review C4). This table —
-/// not a shadow key inside records.data — is where normalized matching state
-/// lives, so redaction of `data` can never leak it (review S5.2).
+/// not a shadow key inside records.data — is the active block authority;
+/// nonunique lookup state lives beside it in RecordMatchLookupKey, so redaction
+/// of `data` can never leak either (review S5.2).
 model RecordMatchKey {
-  id             String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  teamId         String @map("team_id") @db.Uuid
-  objectTypeId   String @map("object_type_id") @db.Uuid
-  rulePosition   Int    @map("rule_position")
-  normalizedHash String @map("normalized_hash")
-  recordId       String @map("record_id") @db.Uuid
-  record         Record @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  matchingRuleId String       @map("matching_rule_id") @db.Uuid
+  normalizedHash String       @map("normalized_hash")
+  recordId       String       @map("record_id") @db.Uuid
+  matchingRule   MatchingRule @relation(fields: [matchingRuleId], references: [id], onDelete: Cascade)
+  record         Record       @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
-  @@unique([objectTypeId, rulePosition, normalizedHash])
+  @@unique([matchingRuleId, normalizedHash])
+  // Deliberately an index, not a unique pair: Cartesian multi/compound rules
+  // may materialise several hashes for the same rule and record.
+  @@index([matchingRuleId, recordId])
   @@index([recordId])
+  @@index([organizationId, teamId])
   @@map("record_match_keys")
+}
+
+/// Non-unique materialisation for every exact/normalized matching rule in the
+/// active and replacement-current generations. Warn evaluation and T36
+/// grouping read this table; block enforcement remains solely in
+/// RecordMatchKey.
+model RecordMatchLookupKey {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  teamId         String       @map("team_id") @db.Uuid
+  matchingRuleId String       @map("matching_rule_id") @db.Uuid
+  normalizedHash String       @map("normalized_hash")
+  recordId       String       @map("record_id") @db.Uuid
+  matchingRule   MatchingRule @relation(fields: [matchingRuleId], references: [id], onDelete: Cascade)
+  record         Record       @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([matchingRuleId, normalizedHash, recordId])
+  @@index([matchingRuleId, normalizedHash])
+  @@index([recordId])
+  @@index([organizationId, teamId])
+  @@map("record_match_lookup_keys")
 }
 
 /// Explicit principal list for visibility = users. Grants name HUMANS (UOA
@@ -834,6 +904,31 @@ model IdempotencyReplay {
 }
 ```
 
+T16 owns a **new forward migration** for the matching lifecycle; the committed
+`*_init` migration is immutable. Its executable order is: preflight that every
+object's rule positions are unique and no rule uses `action = allow`; create the
+generation state enum/table and its two partial unique indexes; create one
+generation-zero `active` row per object that currently has rules;
+add/backfill/non-null/FK `matching_rules.generation_id`; add/backfill/non-null/FK
+`record_match_keys.matching_rule_id` by the unambiguous
+`(object_type_id, rule_position)` join; drop the positional block-key columns
+and index; install the rule-id block indexes; create
+`record_match_lookup_keys` and copy every preserved block row into it only as
+temporary continuity; then
+rebuild `MatchAction` as exactly
+`block|warn`. Every backfill step asserts zero null/orphan rows before adding
+its constraint and the migration fails rather than guesses. It preserves all
+existing block rows, but does not claim their legacy hashes have the new exact
+semantics. At worker startup, T16 idempotently enqueues one
+`active_bootstrap` scan for each generation-zero active set that has
+exact/normalized rules. The scan recomputes both lookup and block hashes through
+the registry from final stored data plus T14 projected references, then swaps
+the generation's block rows and sets `keys_ready_at` atomically under namespace
+7. Schema loading fails closed for an active exact/normalized generation whose
+marker is null. The T16 deployment gate drains these scans before matching
+services are enabled, so neither legacy exact semantics nor partial warn rows
+are observable. SQL never attempts to reproduce registry normalization.
+
 ## 3. Attribute type registry (`packages/schema-engine/src/attribute-types/`)
 
 One module per type exporting `AttributeTypeDef`:
@@ -887,7 +982,7 @@ Reserved attribute slugs on every object type (system, not stored in `data`): `i
 
 ## 3a. Schema evolution over live data (R9)
 
-- **Config changes that alter `normalize`** (text normalisation, select option ids) are refused with `SCHEMA_CONFLICT` unless run with a **key-recompute backfill Task** (MRTR states the affected row count) that rewrites `record_unique_keys`/`record_match_keys` hashes — a silent config change would strand every stored hash and make asserts mint duplicates.
+- **Config changes that alter `normalize`** (text normalisation, select option ids) are refused with `SCHEMA_CONFLICT` unless run with a **key-recompute backfill Task** (MRTR states the affected row count) that rewrites `record_unique_keys`, `record_match_keys`, and `record_match_lookup_keys` hashes — a silent config change would strand stored hashes and make asserts or matching results incorrect.
 - **Select/status options are archivable, never deletable while referenced.** An archived option remains a valid *stored* value (reads, filters, history) and an invalid value for *new writes*; `crm_attribute_update` reports the live-value count via MRTR before archiving an option.
 - **Tightening bounds** (`maxLength`, `min`/`max`, `rating.max`) over existing values: MRTR reports violations; stored values are **grandfathered** — they stay valid until the next write touches that attribute on that record.
 - **Raising `sensitivity` past `internal`, or archiving an attribute with values, enqueues a bulk `record.reindex` Task for the object type in the same commit** (MRTR states the record count; the tool result names the Task) — stored search content and embeddings must stop carrying the now-sensitive value (R5a). The same trigger applies to config changes that alter `toSearchText`.
@@ -903,8 +998,8 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink
 4. **Lock** — every topology-changing path (`link`, `unlink`, projection-capable record create/update, delete, restore, and their lifecycle work) first takes the per-team namespace-7 link-topology lock, before any record or key lock. It then takes `lockRecords(tx, ids)` for every record touched, sorted ids; for the create/assert branch of a unique or match key, also the key lock on `hashtext(tenant ∥ attributeId ∥ normalizedHash)`.
 5. **Locked-state validation** — record exists, tenant matches, not deleted; a merged id redirects transitively (`MERGED {redirect_to}` only when the final survivor is itself deleted); `record_reference` targets exist and are live; delete discovers dependents and evaluates `restrict` **after** locks (never before).
 6. **Version** — `expected_version` mismatch ⇒ `VERSION_CONFLICT {current}`. Link/unlink bump `records.version` on **both** endpoints.
-7. **Unique & match keys** — diff and write `record_unique_keys` (hash-indexed) and, for `block` rules, `record_match_keys`. Unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (conflicting id read back in-tx; only if the caller may view it, else the generic form). For `assert`: create runs under a savepoint — on unique violation, roll back to the savepoint and re-run as an update of the conflicting record (bounded to one retry). Match-key violation ⇒ `DUPLICATE_FOUND {candidates}`.
-8. **Matching rules** (create/assert) — `warn` rules evaluated by read (§6), result attached as `duplicates`; `block` rules are enforced by step 7's constraint, not by a read.
+7. **Unique & match keys** — diff and write `record_unique_keys` (hash-indexed); write `record_match_lookup_keys` for every active and replacement-current (`pending_backfill|collision_blocked`) exact/normalized rule; and write `record_match_keys` only for active block rules. Unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (conflicting id read back in-tx; only if the caller may view it, else the generic form). For `assert`: create runs under a savepoint — on unique violation, roll back to the savepoint and re-run as an update of the conflicting record (bounded to one retry). Block-key violation ⇒ visible `DUPLICATE_FOUND {candidates}` or the generic form when the conflicting record is not readable. The block constraint, never a preflight read, remains authoritative under concurrency.
+8. **Matching rules** (create/assert) — active `warn` rules are evaluated by read (§6) after projected links have their final state and before change/enqueue/replay/audit writes; the result is attached as `duplicates`. Both assert branches evaluate against their effective post-assert record and exclude that record itself. A normalised no-op assert still evaluates and persists its deterministic replay result, but writes no record version/change/job/success audit. Active `block` rules are enforced by step 7's constraint. A plain update does not return warnings, but it still maintains lookup/block keys and may fail an active block rule.
 9. **Data** — merge patch into `records.data`; recompute `display_name` from the primary attribute (whose sensitivity may not exceed `internal` — enforced at schema define/update); a no-op patch (normalised diff empty) writes nothing and does not bump `version`.
 10. **Links** — apply extracted link ops and explicit `link`/`unlink`: cardinality enforced by ending conflicting active links (`active_until = now`), which the result reports (`ended_links`). Cardinality caps: `many_to_one` ⇒ at most one active outgoing link per `(from, relation)`; `one_to_many` ⇒ at most one active incoming link per `(to, relation)`; `one_to_one` ⇒ both; `many_to_many` ⇒ neither. Links backing a **multi** `record_reference` get `position` = the target's index in the submitted array (contiguous, 0-based, per §2 `RecordLink.position`); when an update diff ends an interior link, the surviving links are renumbered to close the gap so positions stay contiguous. Direct links (`crm_link`) and links backing scalar references always have `position = null`. Links created for a reference **replace** projection carry empty edge data (`data = {}`) — a re-point must not silently overwrite operator-set edge attributes — and links that survive the diff **retain** their existing edge data.
 11. **Change intents** — form the change rows (insert deferred to step 13, after seq allocation): one `set`/`unset` row per attribute, in deterministic ascending-slug order; on create, the `create` marker row first, then the per-attribute `set` rows for every stored attribute of the initial state (defaults included) — **every** row of the create, marker included, carries `resulting_version = 1`; **two rows per link/unlink (one per endpoint, shared `group_id`)**, each carrying its own endpoint's post-write version as `resulting_version`; delete/restore/merge rows carry `snapshot` (§7). `snapshot` is engine-internal: it is **never** serialized into any tool result, feed event or webhook.
@@ -918,7 +1013,7 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink
 
 ### 4b. `assert`
 
-Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming the rule). **Multi-value match attributes:** the match key is the **first element** of the submitted array; if any *other* element resolves to a different record, fail with `DUPLICATE_FOUND` listing every candidate — the agent's cue to merge. Lookup by `(attribute_id, normalizedHash)` → update if found (redirecting through `merged_into_id`), else create via the savepoint path of step 7. Returns `{record, created}`.
+Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming the rule). **Multi-value match attributes:** the match key is the **first element** of the submitted array; if any *other* element resolves to a different record, fail with `DUPLICATE_FOUND` listing every candidate — the agent's cue to merge. Lookup by `(attribute_id, normalizedHash)` → update if found (redirecting through `merged_into_id`), else create via the savepoint path of step 7. Returns `{record, created, duplicates?}`; a no-op update branch still returns the active warn candidates under step 8.
 
 ### 4c′. Visibility interactions (normative)
 
@@ -929,14 +1024,14 @@ Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming t
 
 ### 4c. `delete` / `restore`
 
-Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unlink` end; `cascade` soft-deletes `*_to_one` dependents, every cascaded delete change sharing a `group_id`; `restrict` ⇒ `DELETE_RESTRICTED {link_id}`), **releases unique and match keys** (recorded in the delete change's `snapshot`), and writes the `delete` change. `restore` reverses within the retention window, restoring the cascade set by `group_id` and re-claiming keys — a key taken meanwhile ⇒ `RESTORE_CONFLICT {attribute, held_by}` with an MRTR confirmation offering restore-without-the-conflicting-value.
+Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unlink` end; `cascade` soft-deletes `*_to_one` dependents, every cascaded delete change sharing a `group_id`; `restrict` ⇒ `DELETE_RESTRICTED {link_id}`), **releases unique, block-match, and lookup-match keys**, and writes the `delete` change. The snapshot records unique keys only; matching rows are derived and never capture generation/rule ids. `restore` reverses within the retention window, restoring the cascade set by `group_id` and re-claiming unique keys while recomputing match rows against the current active/replacement generations — a unique/active-block key taken meanwhile ⇒ `RESTORE_CONFLICT {attribute, held_by}` with an MRTR confirmation offering restore-without-the-conflicting-value.
 
 ### 4d. `erase` — the right-to-erasure operation (deepsignal policy-asks §3)
 
 `crm_record_erase {id, reason, suppress?: boolean = true}` — owner-only by default (policy `record.erase`), audited, and the **one documented exception to change-log immutability**. `reason` is a **closed enum** (`gdpr_request | retention_policy | legal_order | other`) so nothing personal can ride into the audit trail through it; audit `metadata` for erase carries ids and counts only (R26).
 
 1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`, `registry_id`), write a `suppression_entries` row (`reason: erasure`, channel `all`) from the normalized hash **before** anything is scrubbed.
-2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/match keys deleted, search row deleted, visibility grants deleted, active links ended — **and, in the same transaction, `record_links.data` on every link (active or ended) touching the record, and `list_entries.data` on every entry pointing at it, are cleared** (R12). Enqueue `record.reindex_neighbours` so linked records' search content and embeddings stop carrying the erased `display_name` (R5b).
+2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/block-match/lookup-match keys deleted, search row deleted, visibility grants deleted, active links ended — **and, in the same transaction, `record_links.data` on every link (active or ended) touching the record, and `list_entries.data` on every entry pointing at it, are cleared** (R12). Enqueue `record.reindex_neighbours` so linked records' search content and embeddings stop carrying the erased `display_name` (R5b).
 3. History scrub: every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
 4. The record row remains as a tombstone: `ERASED` on direct reads, never restorable, never hard-deleted by retention — the tombstone is what proves erasure happened.
 5. One `record.erase` audit row; the change feed emits a **typed `record.erased` event** (not a generic delete) — consumers holding copies (webhook receivers, feed pullers, export takers) are contractually obliged to erase their copies on it (events.md §1; R26).
@@ -1125,13 +1220,224 @@ in §3a.
 
 ## 6. Matching rules
 
-`{attribute_slugs, method, threshold?, action}` ordered by `position`, validated at `crm_matching_rule_set`:
+The public input is exactly
+`{attributes, method: exact|normalized|fuzzy, threshold?, action: block|warn}`;
+array order assigns contiguous zero-based `position`. `allow` is not a public or
+stored action: an ordered allow exception cannot safely override a database
+unique constraint, so pretending otherwise would make concurrent behavior
+depend on a preflight read.
 
-- **`block` requires `method ∈ {exact, normalized}`** — a block must be enforceable by the database. Each block rule materialises a compound key (`sha256` of the rule's normalized attribute values joined with `\x1f`) into `record_match_keys`, written in the write transaction; the unique constraint is what blocks, so concurrent duplicates cannot race past it (review C4). Setting a block rule over existing data runs a backfill Task and reports pre-existing collisions rather than failing.
-- **`fuzzy` may only `warn`**, `threshold ≥ 0.5`, allowed on `text`/`personal_name`/`domain` only; evaluated as `similarity(display_name, $) ≥ threshold` served by the trigram index, capped at the top 20 candidates per write.
-- `warn` rules with `exact|normalized` are evaluated by lookup against the `record_unique_keys`/`record_match_keys` hashes.
+- **`block` requires `method ∈ {exact, normalized}`** and every participating
+  attribute's registry definition must have `supportsUnique = true`.
+  `timestamp_system`, link-external JSON, and any type without a canonical
+  exact stored representation are not exact-eligible; `normalized` additionally
+  requires a non-null registry normalizer. The write transaction materialises the
+  active rule's keys into `record_match_keys`; its unique
+  `(matching_rule_id, normalized_hash)` constraint is the authority, so two
+  concurrent duplicates cannot both commit (review C4).
+- Exact/normalized eligibility is closed and identical in v1:
+  `text|number|boolean|date|datetime|select|status|email|phone|url|domain|registry_id|personal_name|actor_reference|record_reference`.
+  Block rules are the subset whose registry definition also has
+  `supportsUnique = true`; notably `record_reference` and `status` may warn but
+  cannot block. Adding another type is a registry-contract change with matching
+  key tests, never a runtime fallback.
+- **`normalized`** calls the registry normalizer for every scalar element and
+  is invalid at schema-define time for a type whose normalizer is null.
+  **`exact`** is allowed only on exact-eligible stored/reference types and uses
+  the canonical stored JSON value without applying that normalizer.
+  Missing/null attributes and empty multi arrays yield no key. A
+  multi value contributes one element per stably de-duplicated member; a
+  compound rule takes the Cartesian product in declared attribute order,
+  de-duplicates tuples, and refuses more than 256 tuples for one rule/record
+  with `LIMIT_EXCEEDED {limit: 256}`. Each key is
+  `sha256(canonicalJson(tuple))`; delimiter-joined strings are forbidden
+  because distinct tuples can contain the delimiter and collide before hash.
+- Every active or replacement-current (`pending_backfill|collision_blocked`)
+  exact/normalized rule also materialises
+  those tuples into non-unique `record_match_lookup_keys`. Warn evaluation and
+  T36 grouping use this table; `record_unique_keys` remains the assertion and
+  per-attribute uniqueness authority, while `record_match_keys` remains the
+  active-block authority.
+- **`fuzzy` may only `warn`**, has threshold `0.5..1`, and names exactly one
+  `text|personal_name|domain` attribute which is the object's active primary
+  attribute. It evaluates `similarity(display_name, submittedSearchText)` via
+  `records_display_name_trgm`; allowing an arbitrary non-primary field while
+  querying `display_name` would be a false contract.
 
-Result: `candidates: [{record, rule_position, evidence}]`. Evidence values are redacted for the caller (`{kind, attribute, matched: true}` when the attribute is not viewable — review S4.4). The engine never merges on its own.
+`findMatches(tx, tenant, ctx, schema, {objectTypeId, recordId})` evaluates only
+the active generation against the record's effective post-write data (including
+T14 link-backed references), excludes `recordId`, and returns at most 20 rows
+per rule. Exact/normalized candidates come from lookup-key equality; fuzzy
+candidates use similarity descending. Output ordering is rule position,
+fuzzy score descending (null last), then record id. One candidate represents
+one `(rule, record)` pair, so `rule_position` is never ambiguous; its evidence
+is ordered by the rule's attribute order.
+
+Candidate SQL composes T15 `rowAccess` before ranking/limit. Thus tenant,
+visibility, live/unmerged state, and `record.view` policy can neither leak nor
+starve the visible top 20. Attribute evidence is decided from one batched policy
+load, including record-scoped rules—never one query per candidate/attribute.
+`Candidate.record` is the already-visible, policy-safe `RecordSummary` only;
+candidate data, owner, visibility, grants, and raw matching keys never cross the
+service boundary.
+Visible evidence is
+`{kind, attribute, matched: true, value, score?}`; when `attribute.view` is
+denied or approval-required it is exactly `{kind, attribute, matched: true}`.
+No normalized value, hash, submitted record data, or raw tool arguments are
+logged. A block collision with an invisible record still blocks but becomes
+generic `DUPLICATE_FOUND`; a visible collision returns
+`DUPLICATE_FOUND {candidates}`. Matching only retrieves structural candidates:
+fuzzy is deterministic retrieval and may warn, never block, judge, merge, or
+invoke a language model.
+
+### 6a. Replacement, backfill, and activation
+
+Rules are immutable rows grouped under a `MatchingRuleGeneration`, which alone
+owns lifecycle authority, task identity, progress, collision counts, and state
+`active|pending_backfill|collision_blocked`. An object type has exactly zero or
+one active generation and at most one replacement generation in either pending
+state, enforced by the two partial unique indexes plus application checks while
+holding the per-team namespace-7 link-topology transaction lock. Individual
+rules never carry or infer lifecycle state from position. Schema loads join the
+generation table: public/evaluation maps contain active rules only, while a
+separate internal replacement map contains `pending_backfill` and
+`collision_blocked` exact/normalized rules solely for key write-through;
+pending warnings are never emitted and pending blocks never enforce.
+`crm://schema` therefore continues to describe effective active behavior.
+Loading an active generation with exact/normalized rules and null
+`keys_ready_at` fails closed until the rollout bootstrap finishes; an empty,
+fuzzy-only, or newly activated fully materialised generation sets the marker in
+its creation/activation transaction.
+
+`setMatchingRules(tx, tenant, actor, objectSlug, {rules, retryBackfill})` returns
+`{rules, activation}` where `activation` is either
+`{state:'active', taskId:null}` or
+`{state:'pending_backfill', taskId}` or
+`{state:'collision_blocked', taskId, group_count, record_count}`. An identical active request is a true
+no-op: no version, audit, or job. A new set activates immediately when the
+object has no live records, the set is empty, or the set is fuzzy-only. Otherwise the same
+transaction creates one pending generation, leaves the old generation active,
+enqueues `match-key-backfill`, records its queue id on the generation,
+increments `schema_version` once, stores no raw
+record values in job/audit metadata, and writes the terminal
+`schema.matching_rules.set` audit after the enqueue. A repeated identical
+pending request returns the same status/job. An identical
+`collision_blocked` request with `retryBackfill=false` returns its persisted
+count-only status; with `retryBackfill=true` it reuses the generation, resets
+only its progress and collision counters, moves it back to
+`pending_backfill`, and enqueues a new job;
+a different replacement request deletes the collision-blocked generation and
+its derived rows before creating the new one. For `pending_backfill`, a
+queued/running job makes a different request fail `SCHEMA_CONFLICT {detail:
+'matching_rule_backfill_in_progress'}`; after a conditional tenant-scoped
+cancel or terminal technical failure, the identical request starts a new
+attempt only when `retryBackfill=true`, and a different request may supersede
+the generation. Generation
+deletion relies on the declared cascading generation→rule→key FKs (or performs
+that same child-first order explicitly); it never leaves orphan keys. Template
+batch application may create
+active rules directly because it assigns rules only to an object created in the
+same transaction and therefore containing no records.
+
+The job payload is exactly
+`{organizationId, teamId, objectTypeId, generationId, actor,
+onBehalfOf, requestId, provenance, attempt}` and uses idempotency key
+`match-key-backfill:<teamId>:<objectTypeId>:<generationId>:<attempt>`. Every
+retry after a completed/cancelled/terminally failed job increments
+`backfill_attempt`, creates a new queue row, and replaces `backfill_job_id`; a
+completed queue key is never mistaken for a fresh attempt. The handler parses
+the payload, re-resolves every tenant/object/generation id, and scans live,
+unmerged records by id in bounded 500-row batches. Each batch transaction takes
+namespace 7 before sorted record locks, then hydrates projected references from
+a final locked reread and replaces each record's lookup rows. It reports
+`{scanned,total}` progress and stops cleanly when its conditional progress write
+says the job was cancelled.
+Record writes and every T14 projection/direct-link/cascade/delete/restore path
+refresh lookup rows for all affected projection-source records in both the
+active and replacement-current generations, so batches cannot miss concurrent
+changes.
+Materialisation always happens after link mutation and a final locked reread of
+stored data plus active projected links. It refreshes the source record and any
+far-end/source record whose projected reference changed because a cardinality
+replacement, cascade, unlink, delete, or restore ended/reactivated a link.
+Restore never trusts matching-rule ids captured in an old delete snapshot: it
+recomputes block and lookup rows against the generations that are active or
+replacement-current at restore time.
+
+Upgrade bootstrap is a separate mode, not a fake replacement attempt. A trusted
+`createMatchingBootstrapContext` factory requires the deployment's real
+`DEEPCRM_BOOTSTRAP_UOA_USER_ID` and constructs the complete authoritative
+context seed: tenant; `app:'deepcrm:migration'`; empty `actChain`;
+`actor:{type:'system',id:'deepcrm:migration:t16'}`; `onBehalfOf` with that stable
+UOA subject and `role:null`; migration run/tool/request provenance; and
+`requestId` (the handler supplies `now` from its clock). Worker startup enqueues
+`{mode:'active_bootstrap', organizationId, teamId, objectTypeId, generationId,
+context, attempt}` under
+`match-key-bootstrap:<teamId>:<objectTypeId>:<generationId>:<attempt>` for every
+generation-zero active set with exact/normalized rules. Initial enqueue records
+attempt `0` and the queue id in the generation's dedicated
+`bootstrap_attempt/bootstrap_job_id` fields.
+Queued/running returns the same job. A terminal failed/cancelled job leaves
+`keys_ready_at` null and is retried only when the deployment runner is invoked
+with `retryBootstrap=true`; that transition increments the persisted attempt,
+records a newly enqueued job, and never reuses a completed queue key. A
+completed job with a null readiness marker is an invariant failure and stays
+fail-closed rather than guessing. It uses the same locked
+batch materialiser to stage canonical exact/normalized lookup rows. Its final
+namespace-7 transaction re-reads the generation, replaces every legacy active
+block row from that staged canonical materialisation, sets `keys_ready_at`,
+stores the count-only queue result, and then writes one terminal
+`schema.matching_rules.bootstrap` audit with that complete context's system
+actor, UOA `on_behalf_of`, request id, and migration provenance. The final
+conditional update predicates tenant, generation id, active state, null
+`keys_ready_at`, payload attempt, persisted bootstrap attempt, and the claimed
+queue job id; a stale leased attempt cannot publish keys or readiness. It never
+cuts over a generation. No DB operation follows the audit. The rollout must drain these
+idempotent jobs before enabling T16 services; subsequent worker starts observe
+the completed queue state and do not repeat it.
+
+Initial and explicit-retry bootstrap enqueue each run in a namespace-7
+transaction: enqueue and persist the exact job/attempt first, then write one
+terminal `schema.matching_rules.bootstrap_queued` audit with count-free
+`{attempt,retry}` metadata and the same trusted context. A queued/running reuse
+is a no-op with no audit. Polling/draining occurs in later transactions; nothing
+is written after an audit in its transaction.
+
+After the last batch the handler takes namespace 7, rechecks that this exact
+generation remains `pending_backfill` **and** that `backfill_attempt` and
+`backfill_job_id` equal the payload attempt and claimed job, then groups pending
+block hashes. A stale leased attempt returns the typed terminalized/no-mutation
+outcome and cannot block or activate the newer attempt.
+Collisions atomically change the generation to `collision_blocked`, persist its
+final processed/total/group/record counts, and produce the completed domain result
+`{state:'collisions', group_count, record_count}` containing counts only and no
+record ids, values, hashes, or per-rule oracle; the old generation remains
+active and replacement lookup rows remain for an idempotent retry after
+cleanup. This domain-state transition does not bump `schema_version` because
+the effective active set and replacement write-through set are unchanged, but
+it ends with one `schema.matching_rules.backfill_blocked` audit. Technical failures leave the
+generation `pending_backfill` and use normal queue retry semantics without a
+schema bump or audit. If collision-free, the handler materialises block rows,
+atomically deletes the old active generation, changes the replacement to
+active, records `activated_at` and `keys_ready_at`, increments `schema_version` exactly once,
+stores the job result before audit, then writes one terminal
+`schema.matching_rules.activate` audit using the initiating actor/UOA reference
+and provenance. No database statement or lock follows either terminal audit.
+Replaying a completed record create/assert returns the candidates stored in its
+idempotency result; it never re-evaluates a newer matching state.
+
+Versioning is exact: creating a cache-visible pending generation bumps once; a
+collision or retry does not; successful cutover bumps once. Every bump and its
+metadata transition share one transaction, and every transaction that audits
+performs queue/result/version writes before the terminal audit.
+
+T16 extends the worker/queue seam so a handler may terminalise its own job in
+the same transaction as a terminal audited state change. Queue `complete`
+accepts the structural transaction client; the matching handler writes the
+conditional result before `writeAudit` and returns a typed `terminalized`
+outcome. `startWorker` performs no fallback `complete`, `fail`, query, or lock
+for that outcome. If the transaction rolls back before audit commits, the
+handler throws and the ordinary lease/failure path remains authoritative.
 
 ## 7. Merge — `planMerge` + `executeMerge`
 
@@ -1139,13 +1445,13 @@ Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id
 
 1. Lock all records (sorted). Same object type, same tenant, none deleted; merged inputs rejected.
 2. Per attribute: chosen value = `field_choices[slug]` if given — **for multi attributes the chosen record's list wins wholesale, no union** (R3a) — else survivor's non-null, else newest non-null among losers (by last `set` change). Default for `isMulti` without a choice: **the survivor's list in its stored order, then losers' unseen values appended in their order — never interleaved** (order is data; R3b). A `field_choices` id outside the merge set ⇒ `VALIDATION_FAILED`.
-3. **Keys follow data, no exceptions** (review M5): a loser's unique key moves to the survivor only when its value is present in the survivor's post-merge `data` (union for multi; explicit `field_choices` replacement for single). Keys whose values did not survive are dropped and recorded in the snapshot.
+3. **Keys follow data, no exceptions** (review M5): a loser's unique key moves to the survivor only when its value is present in the survivor's post-merge `data` (union for multi; explicit `field_choices` replacement for single). Keys whose values did not survive are dropped and recorded in the snapshot. Match block/lookup rows are derived rather than moved: after data and links reach their final state, delete loser rows and recompute the survivor plus every projection-source record changed by link re-pointing against the current active/replacement generations. An active block collision aborts the merge with the same visibility-safe `DUPLICATE_FOUND` contract.
 4. Links: re-point losers' `record_links` rows to the survivor (one edge write each — projections are computed, §4a, so no third-party records are touched); duplicates on `(relation_type, from, to)` collapse keeping the oldest; a `*_to_one` conflict keeps the survivor's own link and ends the loser's. Every re-point/end writes its paired change rows.
 5. List entries re-pointed; duplicates dropped and recorded.
 6. Losers: `merged_into_id = survivor`, `deleted_at = now`; **every existing row whose `merged_into_id` is a loser is re-pointed to the survivor**, so redirects stay one hop after chained merges (review M4). One `merge` change on the survivor carries the snapshot; one on each loser.
-7. **Snapshot shape (normative — the producer writes exactly what unmerge consumes, review B38):** `{ survivorBefore: data, losers: [{ id, data, uniqueKeys }], repointedLinks: [{ linkId, originalFrom, originalTo }], endedLinks: [linkId], movedKeys: [{ attributeId, normalizedHash, fromRecordId }], droppedKeys: […], movedEntries: [{ listId, recordId }] }`. Snapshots are engine-internal, never serialized outward, and live as long as their change row (removed only by retention hard-delete of the record).
+7. **Snapshot shape (normative — the producer writes exactly what unmerge consumes, review B38):** `{ survivorBefore: data, losers: [{ id, data, uniqueKeys }], repointedLinks: [{ linkId, originalFrom, originalTo }], endedLinks: [linkId], movedKeys: [{ attributeId, normalizedHash, fromRecordId }], droppedKeys: […], movedEntries: [{ listId, recordId }] }`. Match block/lookup rows are deliberately absent because a later rule-generation cutover makes captured rule ids stale; they are recomputed from restored data/links. Snapshots are engine-internal, never serialized outward, and live as long as their change row (removed only by retention hard-delete of the record).
 8. Reads by a loser id resolve the redirect and return the survivor with `redirected_from`; `MERGED {redirect_to}` is raised only when the survivor is itself deleted.
-9. `crm_unmerge(merge_change_id)`: restore losers' `data` and keys from the snapshot; re-point `repointedLinks` back and un-end `endedLinks`; remove keys/entries the merge moved where the survivor did not hold them pre-merge; changes made to the survivor **after** the merge win, and every collision (a key or link the survivor now legitimately holds) is returned in `conflicts: [{kind, attribute?, link_id?, held_by}]` rather than silently dropped (review C5). Clear the losers' `merged_into_id` and recompute chained pointers.
+9. `crm_unmerge(merge_change_id)`: restore losers' `data` and unique keys from the snapshot; re-point `repointedLinks` back and un-end `endedLinks`; remove keys/entries the merge moved where the survivor did not hold them pre-merge; then recompute match block/lookup rows for every restored/affected record against the current active/replacement generations. Changes made to the survivor **after** the merge win, and every collision (a unique key, active block rule, or link the survivor now legitimately holds) is returned in `conflicts: [{kind: unique_key|matching_rule|link|list_entry, attribute?, rule_position?, link_id?, held_by}]` rather than silently dropped (review C5). A record whose current block keys cannot be reclaimed is not exposed as live with missing enforcement rows. Clear the losers' `merged_into_id` and recompute chained pointers only for records whose restoration invariants succeeded.
 
 ## 8. Search document
 

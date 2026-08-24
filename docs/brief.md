@@ -214,7 +214,7 @@ All tables carry `id uuid`, `organization_id`, `team_id`, `created_at`, `updated
 
 **`record_changes`** — append-only. `record_id`, `attribute_id | relation_type_id`, `kind ∈ {set, unset, link, unlink, create, merge, restore}`, `old_value`, `new_value`, `actor` (type,id), `provenance` (`runId`, `toolCallId`, `requestId` from `X-Nessie-Context`), `reason?` (the agent's stated reason, captured from the tool argument), `occurred_at`. Indexed by `(record_id, occurred_at desc)` and `(organization_id, team_id, occurred_at desc)` for the global change feed.
 
-**`matching_rules`** — per object type: ordered list of `{ attributes: [...], method: exact | normalized | fuzzy(threshold), weight }`, `action ∈ {block, warn, allow}` on create (Salesforce matching rule + duplicate rule, merged into one metadata row).
+**`matching_rules`** — immutable, generation-scoped ordered lists of `{ attributes: [...], method: exact | normalized | fuzzy(threshold) }`, `action ∈ {block, warn}` on create/assert (Salesforce matching rule + duplicate rule, merged into one metadata model). A replacement over live rows stays pending while its derived lookup/block keys backfill; the old generation remains authoritative until collision-free atomic activation.
 
 **`views`** — saved queries: `object_type_id`, `name`, `filter` (the same filter JSON the query tool takes), `sort`, `columns`. **`lists`** + **`list_entries`** — a list is a curated set of records (any object type, or mixed) and can define its own attributes; entries carry `data` validated against them (Attio's lists/entries).
 
@@ -263,7 +263,7 @@ Templates are *suggestions the agent can change*: rename, add, archive, re-stage
 ### 5.8 Dedup & merge
 
 - **Prevent:** unique attributes block at write; matching rules with `action = warn` return `duplicates: [...]` alongside a successful create so the agent sees them; `action = block` refuses with candidates.
-- **Find:** `crm_find_duplicates(object_type, scope?)` runs as a Task: exact/normalised matches from `record_unique_keys` and matching rules, plus *semantic candidates* from embedding proximity over `display_name`+key attributes, returned with per-pair evidence. The engine never auto-merges.
+- **Find:** `crm_find_duplicates(object_type, scope?)` runs as a Task: exact/normalised groups from active matching-rule lookup rows (a unique-attribute row may add evidence to a pair found by another method), plus *semantic candidates* from embedding proximity over `display_name`+key attributes, returned with per-pair evidence. The engine never auto-merges.
 - **Merge:** `crm_merge_records(survivor_id, merged_ids[1..n], field_choices?, reason)`. Under locks on all records: per-attribute survivor value (default: survivor's non-null, else newest non-null — the agent may override per field, as in Salesforce), multi-valued attributes unioned, all `record_links` re-pointed (duplicates collapsed), list entries re-pointed, activities re-linked, `merged_into_id` set on the losers (they become redirect tombstones: any read by old id returns the survivor with `redirected_from`), one `merge` change row carrying the full pre-merge snapshot so **`crm_unmerge`** can restore within the retention window. Merge is approval-gated by policy by default (§6.3).
 
 ### 5.9 Permissions

@@ -152,8 +152,8 @@ export const RelationTypeDetail = z.object({
 export const MatchingRule = z.object({
   attributes: z.array(Slug).min(1).max(4),
   method: z.enum(['exact','normalized','fuzzy']),
-  threshold: z.number().min(0.3).max(1).optional().describe('fuzzy only; trigram similarity'),
-  action: z.enum(['block','warn','allow']),
+  threshold: z.number().min(0.5).max(1).optional().describe('fuzzy only; trigram similarity'),
+  action: z.enum(['block','warn']),
 })
 export const SchemaSnapshot = z.object({
   schema_version: z.number().int(),
@@ -196,7 +196,8 @@ export const LinkOut = z.object({
 export const Candidate = z.object({
   record: RecordSummary, rule_position: z.number().int().nullable(),
   evidence: z.array(z.object({ kind: z.enum(['unique','exact','normalized','fuzzy','semantic']),
-    attribute: Slug.nullable(), value: z.unknown(), score: z.number().optional() })),
+    attribute: Slug.nullable(), matched: z.literal(true), value: z.unknown().optional(),
+    score: z.number().optional() })),
 })
 export const Change = z.object({
   id: Uuid, seq: z.string().describe('per-team, commit-ordered decimal cursor value'),
@@ -326,8 +327,15 @@ export const CrmRelationTypeDefine = { in: z.object({ slug: Slug,
   out: RelationTypeDetail }
 export const CrmRelationTypeArchive = { in: z.object({ relation_type: Slug, reason: Reason }),
   out: z.object({ archived: z.literal(true), links: z.number().int() }) }
-export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug, rules: z.array(MatchingRule).max(10) }),
-  out: z.object({ rules: z.array(MatchingRule) }) }
+export const MatchingRuleActivation = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('active'), taskId: z.null() }),
+  z.object({ state: z.literal('pending_backfill'), taskId: z.string() }),
+  z.object({ state: z.literal('collision_blocked'), taskId: z.string(),
+    group_count: z.number().int(), record_count: z.number().int() }),
+])
+export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug,
+  rules: z.array(MatchingRule).max(10), retry_backfill: z.boolean().default(false) }),
+  out: z.object({ rules: z.array(MatchingRule), activation: MatchingRuleActivation }) }
 export const CrmTemplateApply = { in: z.object({ template: Slug.describe('a slug from crm://templates; unknown ⇒ UNKNOWN_TEMPLATE') }),
   out: z.object({ added: z.object({ object_types: z.array(Slug), attributes: z.array(z.string()),
     relation_types: z.array(Slug) }) }) }
@@ -352,7 +360,8 @@ export const CrmRecordUpdate = { in: z.object({ id: Uuid, data: RecordData.descr
 export const CrmRecordAssert = { in: z.object({ object_type: Slug,
   match_attribute: Slug.describe('a unique attribute present in data'), data: RecordData,
   links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...WriteCommon }),
-  out: z.object({ record: RecordOut, created: z.boolean() }) }
+  out: z.object({ record: RecordOut, created: z.boolean(),
+    duplicates: z.array(Candidate).optional() }) }
 export const CrmRecordGet = { in: z.object({ id: Uuid.optional(), object_type: Slug.optional(),
   match_attribute: Slug.optional(), value: z.unknown().optional(),
   include_links: z.boolean().default(false), include_timeline: z.number().int().min(0).max(50).default(0)
@@ -475,7 +484,8 @@ export const CrmMergeRecords = { in: z.object({ survivor_id: Uuid, merged_ids: z
   out: z.object({ record: RecordOut, merge_change_id: Uuid, repointed_links: z.number().int(), ended_links: z.array(Uuid) }) }
 export const CrmUnmerge = { in: z.object({ merge_change_id: Uuid, reason: z.string().min(1).max(500) }),
   out: z.object({ restored: z.array(Uuid),
-    conflicts: z.array(z.object({ kind: z.enum(['unique_key','link','list_entry']), attribute: Slug.optional(),
+    conflicts: z.array(z.object({ kind: z.enum(['unique_key','matching_rule','link','list_entry']),
+      attribute: Slug.optional(), rule_position: z.number().int().optional(),
       link_id: Uuid.optional(), held_by: Uuid.optional() })) }) }
 const QualityBucket = z.object({ count: z.number().int(),
   items: z.array(z.object({ record: RecordSummary, detail: z.string() })).max(100),

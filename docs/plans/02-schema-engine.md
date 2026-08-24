@@ -240,11 +240,135 @@ pnpm exec turbo run test --filter=@deepcrm/api
 **Depends on:** T15. **Spec:** `docs/schema-engine.md` §6.
 
 **Files:**
-- Create `packages/schema-engine/src/matching/evaluate.ts` — `findMatches(tx, …)` → `Candidate[]`: `exact`/`normalized` warn rules via key-hash lookups, `fuzzy` via `similarity(display_name, $) >= threshold` (≥ 0.5, top 20); evidence redacted per §6.
-- Edit `records/write.ts` — step 7/8: block rules enforced via `record_match_keys` unique violation ⇒ `DUPLICATE_FOUND { candidates }`; warn ⇒ attach `duplicates`. `crm_matching_rule_set` validation (block ⇒ exact/normalized only; fuzzy ⇒ warn, threshold ≥ 0.5) in `schema/mutate.ts`; setting a block rule enqueues `match-key-backfill`.
-- Tests (DB): company fuzzy-name warn rule: creating "Asahi Europe " when "asahi europe" exists returns `duplicates` with evidence; person email block rule refuses **including under two concurrent creates** (the match-key constraint, not a read, is what blocks).
+- Add a new forward Prisma migration; never edit `*_init`. Follow the executable
+  §2 sequence: preflight unique positions/no stored `allow`; create
+  `MatchingRuleGeneration`, `keysReadyAt`, dedicated
+  `bootstrapAttempt/bootstrapJobId`, and
+  `active|pending_backfill|collision_blocked`
+  state plus the one-active/one-replacement partial unique indexes; create one
+  generation-zero active row per existing object rule set; backfill and constrain
+  `matching_rules.generation_id`; backfill `record_match_keys.matching_rule_id`
+  through the unambiguous old position join, replace its positional columns and
+  indexes with the stable rule FK/indexes; create nonunique
+  `RecordMatchLookupKey` and seed it from preserved block rows as temporary
+  continuity only; rebuild
+  `MatchAction` to `block|warn`. Add
+  `packages/db/test/db/matching-migration.test.ts` proving fresh deploy and
+  upgrade preservation, exact FKs/indexes, and zero orphan rows.
+- Create `packages/schemas/src/matching.ts` and export the exact §6
+  `MatchingRule`, activation, candidate, and evidence contracts; synchronize
+  `errors.ts` and the record create/assert result schemas. Threshold is
+  `0.5..1`; `allow` is rejected; redacted evidence omits value/score but always
+  carries `matched:true`.
+- Extract matching-rule schema mutation from the already-full
+  `schema/mutate.ts` into responsibility-named `schema/matching-rules.ts`;
+  extend `schema/tx.ts`, `schema/load.ts`, and exports. Implement the generation
+  state machine, explicit `retryBackfill`, and exact return
+  `{rules, activation}` from §6a. Active maps
+  alone evaluate/enforce; a separate internal replacement map exists only for
+  dual lookup-key materialisation. Schema set policy stays `schema.define`.
+- Create `matching/keys.ts` for exact/normalized eligibility, canonical tuple
+  hashing, stable multi Cartesian expansion capped at 256, active/replacement
+  lookup refresh, active block insertion, and collision mapping. Move the old
+  match-key responsibility out of `records/unique-keys.ts`. Create
+  `matching/evaluate.ts` with
+  `findMatches(tx, tenant, ctx, schema, {objectTypeId, recordId})` exactly as §6:
+  T15 `rowAccess` before top-20-per-rule ranking, batched record-scoped
+  attribute policy, deterministic order, and a redacted `RecordSummary` only.
+- Edit `records/write.ts` so create and both assert branches refresh keys after
+  the final projection state, exclude self, attach `duplicates`, and keep active
+  block constraints authoritative; ordinary update maintains keys but does not
+  return warnings. After every projection/direct-link/cascade/delete/restore,
+  refresh all affected projection-source/far-end records from a final locked
+  reread. Use the record writer's touched ids and `api/src/services/links.ts` for
+  the direct-link orchestration so the already-full engine link files do not
+  gain unrelated code. Restore recomputes current-generation keys rather than
+  replaying snapshot rule ids.
+- Create `worker/src/jobs/match-key-backfill.ts`,
+  `worker/src/matching-bootstrap.ts`, and register the handler. The deployment
+  runner enqueues/drains generation-zero work before API enablement and accepts
+  `--retry-terminal` only to drive the internal `retryBootstrap=true`
+  transition. It requires `DEEPCRM_BOOTSTRAP_UOA_USER_ID`, constructs the full
+  trusted §6a context, and fails on unset/empty input; add the variable to
+  `.env.example` and the worker-facing env boundary. Parse the exact
+  tenant/generation/actor/provenance/attempt replacement payload. Also enqueue
+  the separate count-free `active_bootstrap` payload with the §6a
+  migration-scoped system actor/request/provenance idempotently at worker
+  startup for generation-zero sets. Persist its attempt/job identity on the
+  generation, suffix its key with `:<attempt>`, and expose only the deployment
+  runner's explicit `retryBootstrap` transition for terminal failed/cancelled
+  jobs. The rollout gate drains it before T16 services are enabled. In either
+  mode scan 500 live records per id-keyset batch:
+  take namespace 7 before sorted record locks, hydrate T14 references from a
+  final locked reread, replace that record's lookup rows, and conditionally
+  publish progress/cancel. Replacement mode implements collision-blocked or
+  atomic activation outcomes. Bootstrap must stage registry-derived canonical
+  exact/normalized lookup rows, then atomically replace every legacy block row
+  and set `keysReadyAt` under namespace 7; complete its queue result then write
+  the terminal `schema.matching_rules.bootstrap` audit, with no DB call after
+  audit. Schema loading fails closed while the marker is null. Each replacement
+  attempt has a new queue id and idempotency
+  key ending in `:<attempt>`; technical retry never masquerades as a completed
+  attempt. Collision result is exactly
+  `{state:'collisions', group_count, record_count}` with no record ids, hashes,
+  values, or per-rule oracle. Enqueue/progress/result precede the
+  terminal set/blocked/activate audit, and no DB operation follows audit.
+- Extend `packages/queue` completion typing and `worker/src/index.ts` with the
+  §6a typed `terminalized` handler outcome. A matching handler completes its job
+  inside the final audited transaction; the worker wrapper performs no later
+  completion/failure query for that outcome. Keep all other handlers' behavior
+  unchanged and add worker unit tests for both paths.
+- Split API result/replay/candidate mapping from the near-limit `records.ts`
+  into `api/src/services/record-results.ts`; persist `duplicates` in the
+  idempotency result and replay it byte-for-byte. Extend `services/schema.ts`,
+  `services/records.ts`, `services/links.ts`, and narrow DB tests for tenant,
+  visibility, record policy, attribute evidence policy, generic hidden block,
+  no N+1, audit-last, and cross-tenant behavior. No MCP tool is registered here:
+  T23 remains the registration owner and consumes these stable service/contracts.
+- Tests: fresh migration and an upgrade fixture whose generation-zero block rows
+  are preserved and whose bootstrap job replaces active block and lookup rows
+  before service enablement; include legacy `exact` values that normalize equal
+  but are canonically different and prove only canonical-equal values block.
+  Prove bootstrap queued/running reuse, failed/cancelled→explicit retry creates a
+  new attempt/job, stale claimed attempt cannot swap or mark ready, and
+  completed+null-marker fails closed. Test exact vs
+  normalized; tuple separator safety; scalar/multi/compound
+  Cartesian 256/+1; missing/null/empty; rule/generation replacement without
+  stale positions; old active enforcement through pending/collision; worker
+  restart/cancel/supersede; projection/direct-link/cascade/restore refresh;
+  delete release and current-generation restore conflict; visible/redacted and
+  invisible/generic candidates; fuzzy company warning; create/assert duplicates
+  including no-op assert; replay stability; and two concurrent normalized email
+  creates where exactly one commits because of the unique block constraint.
+  Instrument bootstrap/collision/activation terminal transactions to prove the
+  queue result precedes audit and no DB operation follows audit; also prove a
+  stale replacement attempt cannot collide or activate after a newer attempt is
+  stored.
 
-**Acceptance:** tests green.
+**Acceptance:** with the documented local Postgres and exported `DATABASE_URL`,
+run verbatim:
+
+```bash
+pnpm --filter @deepcrm/db exec prisma migrate deploy
+pnpm prisma:generate
+DEEPCRM_BOOTSTRAP_UOA_USER_ID=usr_dev pnpm --filter @deepcrm/worker exec tsx src/matching-bootstrap.ts
+pnpm lint
+pnpm typecheck
+pnpm exec turbo run test --filter=@deepcrm/schemas --filter=@deepcrm/db --filter=@deepcrm/schema-engine --filter=@deepcrm/api --filter=@deepcrm/worker
+pnpm verify
+git diff --check
+```
+
+The DB, engine, API, and worker reports must show their matching suites actually
+ran (no skip from a missing `DATABASE_URL`). Then run a temporary direct
+service/worker harness—T16 has no HTTP/MCP endpoint yet—and print one JSON object
+proving: fuzzy warn create and assert; one-success/one-block concurrent email;
+hidden collision with no id/candidate; old-active→pending→collision-blocked and
+retry→active; projection refresh; replayed candidates unchanged; cross-tenant
+zero leakage; terminal audit ordering. Delete only its exact temporary tenant
+and file and verify zero residue/process/listener. T23 later adds and manually
+tests `crm_matching_rule_set`, `crm_record_create`, and `crm_record_assert` over
+MCP; T16 must not register them early.
 
 ---
 

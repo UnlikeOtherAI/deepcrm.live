@@ -42,6 +42,11 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 
 - `pnpm dev` → API with `tsx watch` (polling — the volume has no fsevents) + embedded worker.
 - `pnpm lint`, `pnpm typecheck`, `pnpm build` (lint-gated), `pnpm test` (Turbo; export `DATABASE_URL` or DB suites skip).
+- After deploying the T16 matching-generation migration and before enabling the
+  API, set the real operator UOA subject in `DEEPCRM_BOOTSTRAP_UOA_USER_ID` and
+  run `pnpm --filter @deepcrm/worker exec tsx src/matching-bootstrap.ts`;
+  use `--retry-terminal` only after correcting a terminal failed/cancelled
+  bootstrap. Production runs the compiled equivalent before container startup.
 - After starting/restarting the API verify `GET http://localhost:5656/health` returns `{ "ok": true }`.
 
 ## Docs discipline

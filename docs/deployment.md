@@ -15,7 +15,11 @@ Dedicated Postgres because the shared instance lacks `vector` (same reason nessi
 ## Files
 
 - `infrastructure/compose/docker-compose.prod.yml` — the three services, `env_file: /srv/deepcrm/.env`, healthcheck `wget -qO- http://localhost:5656/health`.
-- `infrastructure/compose/redeploy.sh` — `docker compose build && docker compose run --rm api pnpm --filter @deepcrm/db prisma migrate deploy && docker compose up -d`.
+- `infrastructure/compose/redeploy.sh` — build, run Prisma migrations, run the
+  compiled T16 matching bootstrap to completion, and only then start the API and
+  worker containers. A terminal failed/cancelled bootstrap fails deployment;
+  after correcting the cause, an operator explicitly reruns it with
+  `--retry-terminal` so a new durable attempt/job id is used.
 - `Dockerfile.app` — multi-stage: `pnpm install --frozen-lockfile` → `pnpm build` (lint-gated) → runtime image with `api/dist`, `worker/dist`, `packages/*/dist`, generated Prisma client. Copies `eslint.config.js`, `tsconfig.base.json`, `turbo.json`, `scripts/` into the build stage (the build invokes them).
 
 ## Caddy
@@ -34,6 +38,10 @@ DNS: Cloudflare, DNS-only `A api.deepcrm.live → 178.105.82.46`. TLS automatic.
 
 All variables in [architecture.md](architecture.md) §6, plus `DEEPCRM_TRUSTED_PROXY_HOPS=1`, `REQUIRE_AUTH=true`, `DEEPCRM_API_PUBLIC_URL=https://api.deepcrm.live`, `DEEPCRM_API_PORT=5656`, `DATABASE_URL=postgresql://deepcrm:…@deepcrm-postgres:5432/deepcrm`.
 
+The T16 bootstrap runner additionally requires
+`DEEPCRM_BOOTSTRAP_UOA_USER_ID`, set to the stable UOA subject of the deployment
+operator. It is attribution, not a local identity/profile record or credential.
+
 App keys: generate with `node scripts/generate-app-key.mjs nessie` → prints the key once and the `name:sha256hex` line to put in `DEEPCRM_APP_KEYS`. Hand the key to the Nessie deployment as its DeepCRM product credential (mirrors `DEEPSIGNAL_MCP_APP_KEY`).
 
 ## First deploy
@@ -46,7 +54,14 @@ App keys: generate with `node scripts/generate-app-key.mjs nessie` → prints th
 
 ## Migrations
 
-`packages/db/prisma/migrations/*` are immutable. `redeploy.sh` runs `prisma migrate deploy` before starting containers. Index creation on `records`, `record_changes`, `record_search` must be `CONCURRENTLY` in raw SQL (lint enforced).
+`packages/db/prisma/migrations/*` are immutable. `redeploy.sh` runs
+`prisma migrate deploy`, then `node worker/dist/matching-bootstrap.js`, before
+starting containers. The bootstrap is normally idempotent; `--retry-terminal`
+is required to replace a terminal failed/cancelled attempt. It recomputes T16
+generation-zero canonical match keys and refuses to enable matching schema loads
+until the audited atomic swap completes. Index creation on `records`,
+`record_changes`, `record_search` must be `CONCURRENTLY` in raw SQL (lint
+enforced).
 
 ## Backups
 
