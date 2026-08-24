@@ -60,7 +60,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T51 — Suppression store
+### T51 ✅ — Suppression store
 
 **Depends on:** T50. **Spec:** `docs/schema-engine.md` §4d (suppression paragraph); `docs/spec/contracts.md` (`CrmSuppression*`).
 
