@@ -19,6 +19,7 @@ import type { ActorContext } from '@deepcrm/schemas'
 import { z } from 'zod'
 import type { AppDeps } from '../deps.js'
 import { registerResources } from './resources.js'
+import { registerPrompts } from './prompts.js'
 import { registerSchemaTools } from './tools/schema.js'
 import { registerRecordTools } from './tools/records.js'
 import { registerLinkTools } from './tools/links.js'
@@ -162,6 +163,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   registerSearchTools(server, ctx, deps)
   registerQualityTools(server, ctx, deps)
   registerResources(server, ctx, deps)
+  registerPrompts(server)
   registerTaskMethods(server, ctx, deps)
 
   server.server.setRequestHandler(ServerDiscoverRequestSchema, async () => {
