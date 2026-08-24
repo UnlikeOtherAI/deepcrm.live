@@ -56,7 +56,7 @@
             { "id": "done", "label": "Done", "category": "won", "position": 2 },
             { "id": "cancelled", "label": "Cancelled", "category": "lost", "position": 3 } ] } },
         { "slug": "due_at", "name": "Due", "description": "Deadline.", "type": "datetime", "is_indexed": true },
-        { "slug": "assignee", "name": "Assignee", "description": "Who owns the task (human or agent).", "type": "actor_reference", "is_indexed": true },
+        { "slug": "assignee", "name": "Assignee", "description": "Who owns the task (human or agent).", "type": "actor_reference" },
         { "slug": "priority", "name": "Priority", "description": "Urgency.", "type": "select", "default_value": "normal",
           "config": { "type": "select", "options": [ { "id": "low", "label": "Low" }, { "id": "normal", "label": "Normal" }, { "id": "high", "label": "High" }, { "id": "urgent", "label": "Urgent" } ] } }
       ]
