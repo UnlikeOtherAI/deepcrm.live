@@ -25,6 +25,7 @@ function makeDeps(ok: boolean): AppDeps {
     clock: () => new Date(),
     ids: () => 'id_test',
     version: '0.0.0',
+    maxBulkRows: 10_000,
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
@@ -67,12 +68,14 @@ describe('createAppDeps', () => {
       DATABASE_URL: 'postgresql://unused',
       NODE_ENV: 'test',
       DEEPCRM_ORG_ALLOWLIST: ' org_a,org_b, org_a ',
+      DEEPCRM_MAX_BULK_ROWS: '321',
       DEEPCRM_SECRET_KEYRING_B64: keyring,
     }))
 
     expect(deps.orgAllowlist).not.toBeNull()
     if (deps.orgAllowlist === null) throw new Error('expected an organization allowlist')
     expect([...deps.orgAllowlist]).toEqual(['org_a', 'org_b'])
+    expect(deps.maxBulkRows).toBe(321)
     expect(deps.writeAudit).toBe(writeAudit)
     await deps.db.$disconnect()
   })

@@ -23,6 +23,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
     clock: () => new Date(),
     ids: () => crypto.randomUUID(),
     version: '0.0.0',
+    maxBulkRows: 10_000,
     orgAllowlist,
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),

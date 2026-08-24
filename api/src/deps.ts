@@ -11,6 +11,7 @@ export type AppDeps = {
   clock: () => Date
   ids: () => string
   version: string
+  maxBulkRows: number
   orgAllowlist: ReadonlySet<string> | null
   linkWriter: LinkWriter
   historyCursor: HistoryCursorCodec
@@ -34,6 +35,7 @@ export function createAppDeps(env: Env): AppDeps {
     clock: () => new Date(),
     ids: () => randomUUID(),
     version: '0.0.0',
+    maxBulkRows: env.DEEPCRM_MAX_BULK_ROWS,
     orgAllowlist: parseOrgAllowlist(env.DEEPCRM_ORG_ALLOWLIST),
     linkWriter: createProjectionLinkWriter(),
     historyCursor: createHistoryCursorCodec(secretBox),

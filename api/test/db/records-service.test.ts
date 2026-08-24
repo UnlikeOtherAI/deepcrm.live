@@ -37,6 +37,7 @@ const deps: AppDeps = {
   clock: () => fixedNow,
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
+  maxBulkRows: 10_000,
   orgAllowlist: null,
   linkWriter: throwingLinkWriter,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
