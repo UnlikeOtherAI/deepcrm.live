@@ -88,7 +88,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T34 — Webhooks and delivery job
+### T34 ✅ — Webhooks and delivery job
 
 **Depends on:** T33. **Spec:** `docs/spec/events.md` §3–§4 (envelope, signature, retry table, DeliveryTarget seam — implement the seam, ship only the webhook target); `docs/architecture.md` §4 (`safeFetch`).
 
