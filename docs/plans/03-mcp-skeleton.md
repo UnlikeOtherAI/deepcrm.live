@@ -74,7 +74,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T24 — Link tools
+### T24 ✅ — Link tools
 
 **Depends on:** T23. **Spec:** `docs/mcp-surface.md` §4.
 
