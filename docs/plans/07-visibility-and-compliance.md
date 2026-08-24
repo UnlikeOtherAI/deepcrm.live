@@ -30,7 +30,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T49 — Visibility gate in the engine
+### T49 ✅ — Visibility gate in the engine
 
 **Depends on:** T48. **Spec:** `docs/schema-engine.md` §4 step 1, §4c′; `docs/auth-and-tenancy.md` §4a.
 
