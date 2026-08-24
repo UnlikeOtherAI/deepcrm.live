@@ -203,6 +203,7 @@ async function updateRecordInternal(
       duplicates: await matchingDuplicates(tx, ctx, schema, objectType.id, record.id),
     }
   }
+  await tx.$executeRaw`SAVEPOINT record_update`
   const persisted = await tx.record.updateMany({
     where: { ...tenantWhere(ctx.tenant), id: record.id },
     data: {
@@ -218,7 +219,21 @@ async function updateRecordInternal(
   const links = validated.linkOps.length === 0
     ? { changes: [], touchedRecordIds: [] }
     : await linkWriter.apply(tx, ctx, schema, record.id, validated.linkOps)
+  if (changes.length === 0 && links.changes.length === 0 && links.touchedRecordIds.length === 0) {
+    await tx.$executeRaw`ROLLBACK TO SAVEPOINT record_update`
+    await tx.$executeRaw`RELEASE SAVEPOINT record_update`
+    const result: RecordWriteResult = {
+      record: output(record), created: false, changed: false, changes: [], sequences: [], touchedRecordIds: [],
+      duplicates: [],
+    }
+    if (!includeDuplicates) return result
+    return {
+      ...result,
+      duplicates: await matchingDuplicates(tx, ctx, schema, objectType.id, record.id),
+    }
+  }
   await refreshMatchingRecords(tx, ctx.tenant, schema, [record.id, ...links.touchedRecordIds])
+  await tx.$executeRaw`RELEASE SAVEPOINT record_update`
   const result = await finish(tx, ctx, updated, changes, false, links, input.reason)
   const duplicates = includeDuplicates
     ? await matchingDuplicates(tx, ctx, schema, objectType.id, record.id)

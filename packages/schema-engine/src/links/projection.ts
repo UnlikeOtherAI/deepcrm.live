@@ -202,7 +202,7 @@ async function project(
       data: { activeUntil: ctx.now },
     });
   const changes: ChangeIntent[] = [];
-  const touched = new Set<string>([recordId]);
+  const touched = new Set<string>();
   const source = await tx.record.findFirst({
     where: { ...tenantWhere(ctx.tenant), id: recordId },
     select: { version: true },
@@ -233,6 +233,7 @@ async function project(
       ),
     );
     touched.add(link.toRecordId);
+    touched.add(recordId);
   }
   const moving = active.filter((link) => {
     const next = operation.targetIds.indexOf(link.toRecordId);
@@ -259,6 +260,51 @@ async function project(
           },
           data: { position },
         });
+        const targetVersion = await version(tx, ctx, targetId);
+        const groupId = crypto.randomUUID();
+        const moved = { ...present, position };
+        changes.push(
+          intentChange(
+            recordId,
+            "unlink",
+            relationType.id,
+            present,
+            source.version,
+            groupId,
+          ),
+        );
+        changes.push(
+          intentChange(
+            targetId,
+            "unlink",
+            relationType.id,
+            present,
+            targetVersion,
+            groupId,
+          ),
+        );
+        changes.push(
+          intentChange(
+            recordId,
+            "link",
+            relationType.id,
+            moved,
+            source.version,
+            groupId,
+          ),
+        );
+        changes.push(
+          intentChange(
+            targetId,
+            "link",
+            relationType.id,
+            moved,
+            targetVersion,
+            groupId,
+          ),
+        );
+        touched.add(recordId);
+        touched.add(targetId);
       }
       continue;
     }
@@ -304,6 +350,7 @@ async function project(
       ),
     );
     touched.add(targetId);
+    touched.add(recordId);
   }
   return { changes, touchedRecordIds: [...touched].sort() };
 }
