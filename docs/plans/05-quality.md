@@ -28,7 +28,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T37 — Merge planner (pure)
+### T37 ✅ — Merge planner (pure)
 
 **Depends on:** T36. **Spec:** `docs/schema-engine.md` §7 steps 2–3.
 
