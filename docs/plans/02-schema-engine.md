@@ -33,7 +33,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ---
 
-### T11 — Templates and tenant provisioning
+### T11 ✅ — Templates and tenant provisioning
 
 **Depends on:** T10. **Spec:** `docs/schema-engine.md` §9; `docs/spec/templates/system.json` and `standard_crm.json` (copy verbatim).
 
