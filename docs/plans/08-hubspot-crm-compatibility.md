@@ -40,7 +40,7 @@ Every task below must preserve these invariants in its implementation and tests:
 The final manual MCP acceptance is T68. Earlier task acceptances prove their
 own unit, DB, worker and harness contracts; they are not substitutes for T68.
 
-### T57 — Semantic metadata foundation and forward migration
+### T57 ✅ — Semantic metadata foundation and forward migration
 
 **Depends on:** T56. **Spec:** this file; `docs/schema-engine.md` §§2–5;
 `docs/spec/contracts.md`; `docs/mcp-surface.md` §§1–2, §5–§6.
