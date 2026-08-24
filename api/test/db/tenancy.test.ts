@@ -1,6 +1,6 @@
 import { createDb, writeAudit } from '@deepcrm/db'
 import { devPrincipal } from '@deepcrm/mcp-inbound'
-import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { parseSecretBox, type Principal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -29,6 +29,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     secretBox: parseSecretBox(keyring),
+    embedder: new FakeEmbedder('api-test'),
     writeAudit,
   }
 }

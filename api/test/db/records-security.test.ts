@@ -1,7 +1,7 @@
 import {
   createDb, dropTenant, seedTenant, writeAudit, type PolicyAction, type PolicyResourceType,
 } from '@deepcrm/db'
-import type { LinkWriter } from '@deepcrm/schema-engine'
+import { FakeEmbedder, type LinkWriter } from '@deepcrm/schema-engine'
 import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -31,6 +31,7 @@ const noLinks: LinkWriter = {
 }
 const deps: AppDeps = {
   db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000,
+  embedder: new FakeEmbedder('api-test'),
   orgAllowlist: null, linkWriter: noLinks,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),

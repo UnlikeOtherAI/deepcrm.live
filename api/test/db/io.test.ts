@@ -6,7 +6,7 @@ import {
   writeAudit,
   type Prisma as PrismaTypes,
 } from '@deepcrm/db'
-import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -35,6 +35,7 @@ const deps: AppDeps = {
   historyCursor: createHistoryCursorCodec(secretBox),
   queryCursor: createQueryCursorCodec(secretBox),
   secretBox,
+  embedder: new FakeEmbedder('api-test'),
   writeAudit,
 }
 
@@ -246,4 +247,3 @@ describe('change feed', () => {
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
   })
 })
-

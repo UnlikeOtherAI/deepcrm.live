@@ -1,5 +1,5 @@
 import { createDb, writeAudit, type Db } from '@deepcrm/db'
-import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { parseSecretBox } from '@deepcrm/schemas'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
@@ -31,6 +31,7 @@ function makeDeps(ok: boolean): AppDeps {
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     secretBox: parseSecretBox(keyring),
+    embedder: new FakeEmbedder('api-test'),
     writeAudit,
   }
 }

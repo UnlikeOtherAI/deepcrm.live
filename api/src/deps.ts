@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { createDb, writeAudit, type Db } from '@deepcrm/db'
-import { createProjectionLinkWriter, type LinkWriter } from '@deepcrm/schema-engine'
+import {
+  createProjectionLinkWriter,
+  FakeEmbedder,
+  LedgerEmbedder,
+  type Embedder,
+  type LinkWriter,
+} from '@deepcrm/schema-engine'
 import { parseSecretBox, type SecretBox } from '@deepcrm/schemas'
 import type { Env } from './env.js'
 import { createHistoryCursorCodec, type HistoryCursorCodec } from './services/history-cursor.js'
@@ -17,6 +23,7 @@ export type AppDeps = {
   historyCursor: HistoryCursorCodec
   queryCursor: QueryCursorCodec
   secretBox: SecretBox
+  embedder: Embedder
   writeAudit: typeof writeAudit
 }
 
@@ -42,6 +49,20 @@ export function createAppDeps(env: Env): AppDeps {
     historyCursor: createHistoryCursorCodec(secretBox),
     queryCursor: createQueryCursorCodec(secretBox),
     secretBox,
+    embedder: env.LEDGER_PROXY_TOKEN === undefined
+      ? new FakeEmbedder(env.DEEPCRM_EMBEDDING_MODEL)
+      : new LedgerEmbedder({
+          publicUrl: requiredLedgerUrl(env),
+          token: env.LEDGER_PROXY_TOKEN,
+          model: env.DEEPCRM_EMBEDDING_MODEL,
+        }),
     writeAudit,
   }
+}
+
+function requiredLedgerUrl(env: Env): string {
+  if (env.LEDGER_PUBLIC_URL === undefined) {
+    throw new Error('LEDGER_PUBLIC_URL is required when LEDGER_PROXY_TOKEN is set')
+  }
+  return env.LEDGER_PUBLIC_URL
 }

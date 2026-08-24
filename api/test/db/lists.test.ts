@@ -1,5 +1,5 @@
 import { createDb, dropTenant, seedTenant, writeAudit, type TenantRef } from '@deepcrm/db'
-import { applyTemplate, createProjectionLinkWriter, loadSchema } from '@deepcrm/schema-engine'
+import { applyTemplate, createProjectionLinkWriter, FakeEmbedder, loadSchema } from '@deepcrm/schema-engine'
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -27,6 +27,7 @@ const secretBox = parseSecretBox(Buffer.from(JSON.stringify({
 const deps: AppDeps = {
   db, clock: () => now, ids: () => crypto.randomUUID(), version: '0.0.0', maxBulkRows: 10_000,
   orgAllowlist: null, linkWriter: createProjectionLinkWriter(), secretBox,
+  embedder: new FakeEmbedder('api-test'),
   historyCursor: createHistoryCursorCodec(secretBox), queryCursor: createQueryCursorCodec(secretBox),
   writeAudit,
 }

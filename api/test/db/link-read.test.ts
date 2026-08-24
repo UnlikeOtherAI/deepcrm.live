@@ -1,5 +1,5 @@
 import { createDb, dropTenant, seedTenant, writeAudit, type Db } from '@deepcrm/db'
-import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -23,6 +23,7 @@ const deps: AppDeps = {
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
   maxBulkRows: 10_000,
+  embedder: new FakeEmbedder('api-test'),
   orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(),
   historyCursor: createHistoryCursorCodec(secretBox),

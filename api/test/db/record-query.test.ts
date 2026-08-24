@@ -1,5 +1,5 @@
 import { canonicalJson, createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
-import { applyTemplate, createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { applyTemplate, createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -36,6 +36,7 @@ const deps: AppDeps = {
   ),
   queryCursor: cursor,
   secretBox: parseSecretBox(keyring('test-v1', { 'test-v1': localKey })),
+  embedder: new FakeEmbedder('api-test'),
   writeAudit,
 }
 

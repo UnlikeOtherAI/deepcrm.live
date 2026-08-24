@@ -1,5 +1,5 @@
 import { createDb, dropTenant, seedTenant, writeAudit, type PolicyResourceType } from '@deepcrm/db'
-import { createProjectionLinkWriter } from '@deepcrm/schema-engine'
+import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
 import { ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -28,6 +28,7 @@ const deps: AppDeps = {
   historyCursor: createHistoryCursorCodec(parseSecretBox(encodedKeyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(encodedKeyring)),
   secretBox: parseSecretBox(encodedKeyring),
+  embedder: new FakeEmbedder('api-test'),
   writeAudit,
 }
 

@@ -5,7 +5,6 @@ import type { JobHandler, WorkerDeps } from '@deepcrm/worker'
 import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
 import { assertRecordWithIntegration } from './services/records.js'
 import { standardRecordWrite } from './services/record-write-integration.js'
-import { FakeEmbedder, LedgerEmbedder, type Embedder } from '@deepcrm/schema-engine'
 
 const env = parseEnv(process.env)
 
@@ -57,19 +56,7 @@ async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<
     )
     return { created: result.created }
   }
-  await loaded.startWorker(deps, createHandlers(recordAssert, createEmbedder(), deps.secretBox), signal)
-}
-
-function createEmbedder(): Embedder {
-  if (env.LEDGER_PROXY_TOKEN === undefined) return new FakeEmbedder(env.DEEPCRM_EMBEDDING_MODEL)
-  if (env.LEDGER_PUBLIC_URL === undefined) {
-    throw new Error('LEDGER_PUBLIC_URL is required when LEDGER_PROXY_TOKEN is set')
-  }
-  return new LedgerEmbedder({
-    publicUrl: env.LEDGER_PUBLIC_URL,
-    token: env.LEDGER_PROXY_TOKEN,
-    model: env.DEEPCRM_EMBEDDING_MODEL,
-  })
+  await loaded.startWorker(deps, createHandlers(recordAssert, deps.embedder, deps.secretBox), signal)
 }
 
 async function main(): Promise<void> {

@@ -1,5 +1,6 @@
 import {
   createProjectionLinkWriter,
+  FakeEmbedder,
 } from '@deepcrm/schema-engine'
 import {
   dropTenant,
@@ -38,6 +39,7 @@ export function linkDeps(db: Db): AppDeps {
     historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     secretBox: parseSecretBox(keyring),
+    embedder: new FakeEmbedder('api-test'),
     writeAudit,
   }
 }

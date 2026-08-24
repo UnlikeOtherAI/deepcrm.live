@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   canonicalJson, createDb, dropTenant, seedTenant, writeAudit, type PolicyAction,
 } from '@deepcrm/db'
-import type { LinkWriter } from '@deepcrm/schema-engine'
+import { FakeEmbedder, type LinkWriter } from '@deepcrm/schema-engine'
 import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -38,6 +38,7 @@ const deps: AppDeps = {
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
   maxBulkRows: 10_000,
+  embedder: new FakeEmbedder('api-test'),
   orgAllowlist: null,
   linkWriter: throwingLinkWriter,
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
