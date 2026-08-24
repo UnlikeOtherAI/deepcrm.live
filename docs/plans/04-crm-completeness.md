@@ -2,7 +2,7 @@
 
 Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the worker reindex job with `last_activity_at`, the change feed and webhooks. After this phase the CRM is usable end to end by an agent.
 
-### T27 — Activities and notes
+### T27 ✅ — Activities and notes
 
 **Depends on:** T26. **Spec:** `docs/mcp-surface.md` §6 (`crm_activity_log`, `crm_note_add`); `docs/schema-engine.md` §9 system types.
 
