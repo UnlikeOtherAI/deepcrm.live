@@ -2,7 +2,7 @@
 
 Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and-tenancy.md`, and exposes the schema, record and link tools with a harness that pins the surface to the docs.
 
-### T19 — Inbound auth package
+### T19 ✅ — Inbound auth package
 
 **Depends on:** T18. **Spec:** `docs/auth-and-tenancy.md` §1–§2.
 
