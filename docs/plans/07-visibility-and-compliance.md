@@ -110,7 +110,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T55 — Schema evolution semantics (R9, R5a)
+### T55 ✅ — Schema evolution semantics (R9, R5a)
 
 **Depends on:** T48. **Spec:** `docs/schema-engine.md` §3a.
 
