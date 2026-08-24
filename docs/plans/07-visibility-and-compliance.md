@@ -86,7 +86,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T53 — Webhook subscribing principal + per-app provenance
+### T53 ✅ — Webhook subscribing principal + per-app provenance
 
 **Depends on:** T52. **Spec:** `docs/spec/events.md` §1 (webhook principal, value-free push); `docs/auth-and-tenancy.md` §1 (`DEEPCRM_APPS` registry, `X-App-Context` alias, `act` chain).
 
