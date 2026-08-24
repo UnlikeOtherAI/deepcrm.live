@@ -29,7 +29,7 @@ Steps: DNS record; rsync; `/srv/deepcrm/.env` (generate `DEEPCRM_APP_KEYS` for `
 
 ---
 
-### T45 — Prompts
+### T45 ✅ — Prompts
 
 **Depends on:** T42. **Spec:** `docs/mcp-surface.md` §9.
 
