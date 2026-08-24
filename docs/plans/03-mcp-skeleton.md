@@ -49,7 +49,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T22 — Schema tools
+### T22 ✅ — Schema tools
 
 **Depends on:** T21. **Spec:** `docs/mcp-surface.md` §1, §2; `docs/spec/contracts.md` (`tools.ts` schema section — copy the Crm* pairs into `packages/schemas/src/tools.ts` as they land).
 
