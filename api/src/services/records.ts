@@ -21,7 +21,7 @@ import {
 } from '@deepcrm/schema-engine'
 import { Candidate, ErrorCode, RecordOut as RecordOutSchema, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
-import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
+import { type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import {
   asInlineLinkPolicyError,
   createInlineLinkAuthorizer,
@@ -30,18 +30,22 @@ import {
   reauthorizeAssertReplay,
 } from './record-inline-links.js'
 import {
+  authorizeRecordWrite,
   attributePolicies,
   commonArgs,
   metadataArgs,
   objectIdScopes,
   objectScopes,
+  recordAuditMetadata,
   recordPolicy,
   recordScopes,
+  writeRecordDeniedAudit,
 } from './record-write-authorization.js'
 import { recordBoundary } from './record-boundary.js'
 import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } from './record-results.js'
 import { requireVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
+import { standardRecordWrite, type RecordWriteIntegration } from './record-write-integration.js'
 type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule'>
 type CommonWriteInput = { idempotencyKey?: string; reason?: string }
 export type CreateRecordServiceInput = CreateRecordInput & CommonWriteInput
@@ -165,53 +169,6 @@ async function storeReplay(
   })
   if (updated.count !== 1) throw new ServiceError(ErrorCode.INTERNAL, 'Idempotency result was not stored')
 }
-function auditMetadata(ctx: ActorContext): Prisma.InputJsonObject {
-  return {
-    app: ctx.app,
-    actChain: ctx.actChain,
-    provenance: ctx.provenance,
-  }
-}
-async function writeDeniedAudit(
-  deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
-): Promise<void> {
-  await deps.db.$transaction((tx) => deps.writeAudit(tx, {
-    organizationId: ctx.tenant.organizationId,
-    teamId: ctx.tenant.teamId,
-    actorType: ctx.actor.type,
-    actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
-    action: descriptor.tool,
-    resourceType: 'record',
-    resourceId: descriptor.resourceId,
-    outcome: 'denied',
-    reason: descriptor.reason ?? null,
-    metadata: auditMetadata(ctx),
-    requestId: ctx.requestId,
-    ipAddress: null,
-    userAgent: null,
-  }))
-}
-async function authorize(
-  deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
-  requests: readonly PolicyRequest[],
-): Promise<void> {
-  const checked = await Promise.all(requests.map(async (request) => ({
-    request,
-    decision: await checkPolicy(deps.db, ctx, request),
-  })))
-  const hardDenied = checked.find(({ decision }) => !decision.allowed && !decision.requiresApproval)
-  const rejected = hardDenied ?? checked.find(({ decision }) => (
-    !decision.allowed || decision.requiresApproval
-  ))
-  if (rejected === undefined) return
-  await writeDeniedAudit(deps, ctx, descriptor)
-  throw new ServiceError(
-    rejected.decision.requiresApproval ? ErrorCode.APPROVAL_REQUIRED : ErrorCode.POLICY_DENIED,
-    'Record operation is not permitted',
-    { resource: rejected.request.resourceType, action: rejected.request.action },
-  )
-}
 async function enqueueChanges(
   tx: RecordServiceTx, ctx: ActorContext, result: RecordWriteResult,
 ): Promise<void> {
@@ -252,7 +209,7 @@ async function runWrite(
   operation: (tx: RecordServiceTx) => Promise<RecordWriteResult>,
   replayAuthorizer?: (tx: RecordServiceTx, result: RecordServiceResult) => Promise<void>,
 ): Promise<RecordServiceResult> {
-  if (authorization !== null) await authorize(deps, ctx, descriptor, authorization)
+  if (authorization !== null) await authorizeRecordWrite(deps, ctx, descriptor, authorization)
   const hash = argumentHash(descriptor.args)
   try {
     return await deps.db.$transaction(async (tx) => {
@@ -285,7 +242,7 @@ async function runWrite(
         resourceId: result.record.id,
         outcome: 'success',
         reason: descriptor.reason ?? null,
-        metadata: auditMetadata(ctx),
+        metadata: recordAuditMetadata(ctx),
         requestId: ctx.requestId,
         ipAddress: null,
         userAgent: null,
@@ -293,7 +250,7 @@ async function runWrite(
       return result
     })
   } catch (error) {
-    if (isInlineLinkPolicyError(error)) await writeDeniedAudit(deps, ctx, descriptor)
+    if (isInlineLinkPolicyError(error)) await writeRecordDeniedAudit(deps, ctx, descriptor)
     throw error
   }
 }
@@ -304,14 +261,15 @@ async function inlineAuthorizer(
   return createInlineLinkAuthorizer(tx, ctx, schema)
 }
 
-export async function createRecord(
+async function createRecordOperation(
   deps: AppDeps, ctx: ActorContext, input: CreateRecordServiceInput,
+  integration: RecordWriteIntegration,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const schema = await loadSchema(deps.db, ctx.tenant)
     const { reason, idempotencyKey, ...engineInput } = input
     const descriptor: WriteDescriptor = {
-      tool: 'crm_record_create', action: 'create',
+      tool: integration.tool, action: 'create',
       scopes: objectScopes(ctx, schema, input.objectType),
       args: { objectType: input.objectType, data: input.data, ...metadataArgs(input), ...commonArgs(input) },
       idempotencyKey, reason, resourceId: null,
@@ -326,19 +284,34 @@ export async function createRecord(
     } catch (error) {
       if (error instanceof ServiceError && (
         error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
-      )) await writeDeniedAudit(deps, ctx, descriptor)
+      )) await writeRecordDeniedAudit(deps, ctx, descriptor)
       throw error
     }
     return runWrite(
       deps, ctx, descriptor, authorization, await loadDuplicateEvaluator(deps.db, ctx), schema,
       async (tx) => {
         const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
-        return engineCreateRecord(
+        const result = await engineCreateRecord(
           tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter,
         )
+        await integration.afterWrite(tx)
+        return result
       },
     )
   })
+}
+
+export function createRecord(
+  deps: AppDeps, ctx: ActorContext, input: CreateRecordServiceInput,
+): Promise<RecordServiceResult> {
+  return createRecordOperation(deps, ctx, input, standardRecordWrite('crm_record_create'))
+}
+
+export function createRecordWithIntegration(
+  deps: AppDeps, ctx: ActorContext, input: CreateRecordServiceInput,
+  integration: RecordWriteIntegration,
+): Promise<RecordServiceResult> {
+  return createRecordOperation(deps, ctx, input, integration)
 }
 
 export async function updateRecord(
@@ -369,7 +342,7 @@ export async function updateRecord(
     } catch (error) {
       if (error instanceof ServiceError && (
         error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
-      )) await writeDeniedAudit(deps, ctx, descriptor)
+      )) await writeRecordDeniedAudit(deps, ctx, descriptor)
       throw error
     }
     return runWrite(deps, ctx, descriptor, authorization, null, schema, async (tx) => {
@@ -379,8 +352,9 @@ export async function updateRecord(
   })
 }
 
-export async function assertRecord(
+async function assertRecordOperation(
   deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput,
+  integration: RecordWriteIntegration,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const schema = await loadSchema(deps.db, ctx.tenant)
@@ -393,7 +367,7 @@ export async function assertRecord(
       ...commonArgs(input),
     }
     const descriptor: WriteDescriptor = {
-      tool: 'crm_record_assert', action: 'create', scopes, args,
+      tool: integration.tool, action: 'create', scopes, args,
       idempotencyKey, reason, resourceId: null,
     }
     const onResolved = async (resolution: AssertResolvedAction): Promise<void> => {
@@ -407,7 +381,7 @@ export async function assertRecord(
         ...descriptor, action: resolution.action,
         scopes: resolvedScopes, resourceId: resolution.recordId,
       }
-      await authorize(deps, ctx, resolved, [
+      await authorizeRecordWrite(deps, ctx, resolved, [
         recordPolicy(resolution.action, resolvedScopes),
         ...attributePolicies(schema, resolution.objectTypeId, input.data, resolvedScopes),
       ])
@@ -418,7 +392,7 @@ export async function assertRecord(
     } catch (error) {
       if (error instanceof ServiceError && (
         error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
-      )) await writeDeniedAudit(deps, ctx, descriptor)
+      )) await writeRecordDeniedAudit(deps, ctx, descriptor)
       throw error
     }
     return runWrite(
@@ -430,9 +404,11 @@ export async function assertRecord(
       schema,
       async (tx) => {
         const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
-        return engineAssertRecord(
+        const result = await engineAssertRecord(
           tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter, onResolved,
         )
+        await integration.afterWrite(tx)
+        return result
       },
       async (tx, result) => {
         try {
@@ -445,6 +421,19 @@ export async function assertRecord(
       },
     )
   })
+}
+
+export function assertRecord(
+  deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput,
+): Promise<RecordServiceResult> {
+  return assertRecordOperation(deps, ctx, input, standardRecordWrite('crm_record_assert'))
+}
+
+export function assertRecordWithIntegration(
+  deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput,
+  integration: RecordWriteIntegration,
+): Promise<RecordServiceResult> {
+  return assertRecordOperation(deps, ctx, input, integration)
 }
 
 async function changeDeletedState(

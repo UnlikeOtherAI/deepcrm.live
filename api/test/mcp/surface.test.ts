@@ -13,8 +13,6 @@ const NOT_YET: string[] = [
   'crm_view_save',
   'crm_view_run',
   'crm_view_delete',
-  'crm_activity_log',
-  'crm_note_add',
   'crm_record_timeline',
   'crm_task_create',
   'crm_task_update',
@@ -36,12 +34,6 @@ const NOT_YET: string[] = [
   'crm_webhook_set',
   'crm_webhook_list',
   'crm_webhook_delete',
-]
-
-const DEFERRED_RECORD_TOOLS = [
-  'crm_records_bulk_assert',
-  'crm_records_count',
-  'crm_records_get_many',
 ]
 
 function numberedSection(markdown: string, section: number): string {
@@ -96,13 +88,7 @@ describe('documented MCP tool surface', () => {
     const documentedNames = Array.from(toolsBySection.values()).flat()
     expect(new Set(documentedNames).size, 'documented tool names are unique').toBe(documentedNames.length)
 
-    const futureSectionNames = [5, 6, 7, 8].flatMap((section) => {
-      const names = toolsBySection.get(section)
-      if (names === undefined) throw new Error(`MCP surface section ${section} was not parsed`)
-      return names
-    })
     expect(new Set(NOT_YET).size, 'NOT_YET entries are unique').toBe(NOT_YET.length)
-    expect(sorted(NOT_YET)).toEqual(sorted([...DEFERRED_RECORD_TOOLS, ...futureSectionNames]))
 
     const listed = (await client.listTools()).tools.map((tool) => tool.name)
     const documented = new Set(documentedNames)
@@ -112,6 +98,8 @@ describe('documented MCP tool surface', () => {
 
     expect(new Set(listed).size, 'listed tool names are unique').toBe(listed.length)
     expect(sorted(listed.filter((name) => !documented.has(name))), 'listed tools are documented').toEqual([])
+    expect(sorted(NOT_YET), 'NOT_YET is exactly the documented tools not registered')
+      .toEqual(sorted(documentedNames.filter((name) => !listedSet.has(name))))
     expect(sorted(implemented.filter((name) => !listedSet.has(name))), 'implemented tools are listed').toEqual([])
     expect(sorted(listed), 'NOT_YET tracks the only documented tools not registered').toEqual(sorted(implemented))
   })
