@@ -47,7 +47,7 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 
 ---
 
-### T12 — Record validation and normalisation
+### T12 ✅ — Record validation and normalisation
 
 **Depends on:** T11. **Spec:** `docs/schema-engine.md` §4 steps 2–3.
 
