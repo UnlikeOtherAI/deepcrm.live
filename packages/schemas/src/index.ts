@@ -7,6 +7,7 @@ export { ActorType, Cursor, ExpectedVersion, IdempotencyKey, IsoDate, IsoDateTim
 export * from './attribute-values.js'
 export * from './attribute-config.js'
 export * from './schema-specs.js'
+export * from './semantic-foundation.js'
 export * from './tools-schema.js'
 export * from './tools-records.js'
 export * from './tools-links.js'

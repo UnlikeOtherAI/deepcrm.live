@@ -94,6 +94,15 @@ enum AttributeType {
   json
 }
 
+enum AttributeValueSource {
+  stored
+  formula
+  rollup
+  relation_sync
+  score
+  system
+}
+
 enum Sensitivity {
   public
   internal
@@ -237,6 +246,37 @@ enum JobStatus {
   cancelled
 }
 
+enum PipelineStageCategory {
+  open
+  won
+  lost
+  neutral
+}
+
+enum DerivationRefreshState {
+  ready
+  pending
+  refreshing
+  failed
+}
+
+enum ListKind {
+  static
+  dynamic
+}
+
+enum ListRefreshState {
+  ready
+  refreshing
+  failed
+}
+
+enum FileLinkTargetType {
+  record
+  activity
+  event
+}
+
 // ───────────────────────── metadata ─────────────────────────
 
 model ObjectType {
@@ -262,6 +302,9 @@ model ObjectType {
   relationsTo             RelationType[]           @relation("RelationTo")
   matchingRuleGenerations MatchingRuleGeneration[]
   matchingRules           MatchingRule[]
+  attributeGroups         AttributeGroup[]
+  pipelines               Pipeline[]
+  eventTypes              EventType[]
 
   @@unique([organizationId, teamId, slug])
   @@index([organizationId, teamId, kind])
@@ -269,61 +312,180 @@ model ObjectType {
 }
 
 model Attribute {
-  id             String            @id @default(uuid()) @db.Uuid
-  organizationId String            @map("organization_id") @db.Uuid
-  teamId         String            @map("team_id") @db.Uuid
-  objectTypeId   String?           @map("object_type_id") @db.Uuid
-  listId         String?           @map("list_id") @db.Uuid
-  slug           String
-  name           String
-  description    String
-  type           AttributeType
-  config         Json              @default("{}")
-  isMulti        Boolean           @default(false) @map("is_multi")
-  isRequired     Boolean           @default(false) @map("is_required")
-  isUnique       Boolean           @default(false) @map("is_unique")
-  isSystem       Boolean           @default(false) @map("is_system")
-  isIndexed      Boolean           @default(false) @map("is_indexed")
-  sensitivity    Sensitivity       @default(internal)
-  defaultValue   Json?             @map("default_value")
-  position       Int               @default(0)
-  archivedAt     DateTime?         @map("archived_at")
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
-  objectType     ObjectType?       @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
-  list           List?             @relation(fields: [listId], references: [id], onDelete: Cascade)
-  uniqueKeys     RecordUniqueKey[]
+  id               String                          @id @default(uuid()) @db.Uuid
+  organizationId   String                          @map("organization_id") @db.Uuid
+  teamId           String                          @map("team_id") @db.Uuid
+  objectTypeId     String?                         @map("object_type_id") @db.Uuid
+  listId           String?                         @map("list_id") @db.Uuid
+  groupId          String?                         @map("group_id") @db.Uuid
+  slug             String
+  name             String
+  description      String
+  type             AttributeType
+  valueSource      AttributeValueSource            @default(stored) @map("value_source")
+  config           Json                            @default("{}")
+  isMulti          Boolean                         @default(false) @map("is_multi")
+  isRequired       Boolean                         @default(false) @map("is_required")
+  isUnique         Boolean                         @default(false) @map("is_unique")
+  isSystem         Boolean                         @default(false) @map("is_system")
+  isIndexed        Boolean                         @default(false) @map("is_indexed")
+  sensitivity      Sensitivity                     @default(internal)
+  defaultValue     Json?                           @map("default_value")
+  position         Int                             @default(0)
+  archivedAt       DateTime?                       @map("archived_at")
+  createdAt        DateTime                        @default(now()) @map("created_at")
+  updatedAt        DateTime                        @updatedAt @map("updated_at")
+  objectType       ObjectType?                     @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  list             List?                           @relation(fields: [listId], references: [id], onDelete: Cascade)
+  group            AttributeGroup?                 @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  derivation       AttributeDerivation?
+  derivationInputs AttributeDerivationDependency[] @relation("DerivationInputAttribute")
+  uniqueKeys       RecordUniqueKey[]
 
   @@unique([objectTypeId, slug])
   @@unique([listId, slug])
+  @@unique([groupId, position])
   @@index([organizationId, teamId])
   @@map("attributes")
 }
 
+model AttributeGroup {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  objectTypeId   String      @map("object_type_id") @db.Uuid
+  slug           String
+  name           String
+  description    String      @default("")
+  position       Int         @default(0)
+  archivedAt     DateTime?   @map("archived_at")
+  createdByType  ActorType   @map("created_by_type")
+  createdById    String      @map("created_by_id")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  attributes     Attribute[]
+
+  @@unique([organizationId, teamId, objectTypeId, slug])
+  @@unique([objectTypeId, position])
+  @@index([organizationId, teamId])
+  @@map("attribute_groups")
+}
+
 model RelationType {
-  id                      String       @id @default(uuid()) @db.Uuid
-  organizationId          String       @map("organization_id") @db.Uuid
-  teamId                  String       @map("team_id") @db.Uuid
+  id                      String                          @id @default(uuid()) @db.Uuid
+  organizationId          String                          @map("organization_id") @db.Uuid
+  teamId                  String                          @map("team_id") @db.Uuid
   slug                    String
-  fromObjectTypeId        String?      @map("from_object_type_id") @db.Uuid // null = any
-  toObjectTypeId          String?      @map("to_object_type_id") @db.Uuid // null = any
-  forwardName             String       @map("forward_name")
-  inverseName             String       @map("inverse_name")
-  description             String       @default("")
+  fromObjectTypeId        String?                         @map("from_object_type_id") @db.Uuid // null = any
+  toObjectTypeId          String?                         @map("to_object_type_id") @db.Uuid // null = any
+  forwardName             String                          @map("forward_name")
+  inverseName             String                          @map("inverse_name")
+  description             String                          @default("")
   cardinality             Cardinality
-  onDelete                OnDelete     @default(unlink) @map("on_delete")
-  edgeAttributes          Json         @default("[]") @map("edge_attributes") // AttributeSpec[] for link.data
-  projectionAttributeSlug String?      @map("projection_attribute_slug") // set when backing a record_reference attribute
-  isSystem                Boolean      @default(false) @map("is_system")
-  archivedAt              DateTime?    @map("archived_at")
-  createdAt               DateTime     @default(now()) @map("created_at")
-  updatedAt               DateTime     @updatedAt @map("updated_at")
-  fromObjectType          ObjectType?  @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
-  toObjectType            ObjectType?  @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
+  maxActiveEdgesFrom      Int?                            @map("max_active_edges_from")
+  maxActiveEdgesTo        Int?                            @map("max_active_edges_to")
+  edgeLimitConfig         Json                            @default("{}") @map("edge_limit_config")
+  onDelete                OnDelete                        @default(unlink) @map("on_delete")
+  edgeAttributes          Json                            @default("[]") @map("edge_attributes") // AttributeSpec[] for link.data
+  projectionAttributeSlug String?                         @map("projection_attribute_slug") // set when backing a record_reference attribute
+  isSystem                Boolean                         @default(false) @map("is_system")
+  archivedAt              DateTime?                       @map("archived_at")
+  createdAt               DateTime                        @default(now()) @map("created_at")
+  updatedAt               DateTime                        @updatedAt @map("updated_at")
+  fromObjectType          ObjectType?                     @relation("RelationFrom", fields: [fromObjectTypeId], references: [id], onDelete: Cascade)
+  toObjectType            ObjectType?                     @relation("RelationTo", fields: [toObjectTypeId], references: [id], onDelete: Cascade)
   links                   RecordLink[]
+  derivationDependencies  AttributeDerivationDependency[]
 
   @@unique([organizationId, teamId, slug])
   @@map("relation_types")
+}
+
+model Pipeline {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @map("organization_id") @db.Uuid
+  teamId         String               @map("team_id") @db.Uuid
+  objectTypeId   String               @map("object_type_id") @db.Uuid
+  slug           String
+  name           String
+  description    String               @default("")
+  isDefault      Boolean              @default(false) @map("is_default")
+  archivedAt     DateTime?            @map("archived_at")
+  createdByType  ActorType            @map("created_by_type")
+  createdById    String               @map("created_by_id")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+  objectType     ObjectType           @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  stages         PipelineStage[]
+  history        RecordStageHistory[]
+
+  @@unique([organizationId, teamId, slug])
+  @@unique([objectTypeId, slug])
+  @@index([organizationId, teamId, objectTypeId])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id             String                @id @default(uuid()) @db.Uuid
+  organizationId String                @map("organization_id") @db.Uuid
+  teamId         String                @map("team_id") @db.Uuid
+  pipelineId     String                @map("pipeline_id") @db.Uuid
+  slug           String
+  name           String
+  position       Int
+  probability    Float?
+  category       PipelineStageCategory @default(open)
+  archivedAt     DateTime?             @map("archived_at")
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+  pipeline       Pipeline              @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  history        RecordStageHistory[]
+
+  @@unique([pipelineId, slug])
+  @@unique([pipelineId, position])
+  @@index([organizationId, teamId])
+  @@map("pipeline_stages")
+}
+
+model AttributeDerivation {
+  attributeId      String                          @id @map("attribute_id") @db.Uuid
+  organizationId   String                          @map("organization_id") @db.Uuid
+  teamId           String                          @map("team_id") @db.Uuid
+  valueSource      AttributeValueSource            @map("value_source")
+  config           Json                            @default("{}")
+  materialized     Boolean                         @default(true)
+  refreshState     DerivationRefreshState          @default(ready) @map("refresh_state")
+  refreshErrorCode String?                         @map("refresh_error_code")
+  lastRefreshedAt  DateTime?                       @map("last_refreshed_at")
+  createdAt        DateTime                        @default(now()) @map("created_at")
+  updatedAt        DateTime                        @updatedAt @map("updated_at")
+  attribute        Attribute                       @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  dependencies     AttributeDerivationDependency[]
+
+  @@index([organizationId, teamId, valueSource])
+  @@index([organizationId, teamId, refreshState])
+  @@map("attribute_derivations")
+}
+
+model AttributeDerivationDependency {
+  id                String              @id @default(uuid()) @db.Uuid
+  organizationId    String              @map("organization_id") @db.Uuid
+  teamId            String              @map("team_id") @db.Uuid
+  attributeId       String              @map("attribute_id") @db.Uuid
+  sourceAttributeId String?             @map("source_attribute_id") @db.Uuid
+  relationTypeId    String?             @map("relation_type_id") @db.Uuid
+  sourceKind        String              @map("source_kind")
+  sourcePath        String[]            @default([]) @map("source_path")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  derivation        AttributeDerivation @relation(fields: [attributeId], references: [attributeId], onDelete: Cascade)
+  sourceAttribute   Attribute?          @relation("DerivationInputAttribute", fields: [sourceAttributeId], references: [id], onDelete: Cascade)
+  relationType      RelationType?       @relation(fields: [relationTypeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId])
+  @@index([sourceAttributeId])
+  @@index([relationTypeId])
+  @@map("attribute_derivation_dependencies")
 }
 
 model MatchingRuleGeneration {
@@ -422,11 +584,37 @@ model Record {
   matchLookupKeys   RecordMatchLookupKey[]
   visibilityGrants  RecordVisibilityGrant[]
   listEntries       ListEntry[]
+  stageHistory      RecordStageHistory[]
+  fileLinks         FileLink[]              @relation("FileRecordLinks")
+  subjectEvents     Event[]
 
   @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
   @@index([organizationId, teamId, objectTypeId, lastActivityAt])
   @@index([mergedIntoId])
   @@map("records")
+}
+
+model RecordStageHistory {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  teamId         String        @map("team_id") @db.Uuid
+  recordId       String        @map("record_id") @db.Uuid
+  pipelineId     String        @map("pipeline_id") @db.Uuid
+  stageId        String        @map("stage_id") @db.Uuid
+  startedAt      DateTime      @map("started_at")
+  endedAt        DateTime?     @map("ended_at")
+  changeId       String?       @map("change_id") @db.Uuid
+  actorType      ActorType     @map("actor_type")
+  actorId        String        @map("actor_id")
+  requestId      String        @map("request_id")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  record         Record        @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  pipeline       Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage          PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, pipelineId, stageId, startedAt])
+  @@index([recordId, pipelineId, startedAt])
+  @@map("record_stage_history")
 }
 
 // Added by raw SQL in the same migration (Prisma cannot express them):
@@ -653,21 +841,28 @@ model RecordSearch {
 // ───────────────────────── lists & views ─────────────────────────
 
 model List {
-  id             String      @id @default(uuid()) @db.Uuid
-  organizationId String      @map("organization_id") @db.Uuid
-  teamId         String      @map("team_id") @db.Uuid
-  slug           String
-  name           String
-  description    String      @default("")
-  objectTypeId   String?     @map("object_type_id") @db.Uuid // null = mixed
-  createdByType  ActorType   @map("created_by_type")
-  createdById    String      @map("created_by_id")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
-  attributes     Attribute[]
-  entries        ListEntry[]
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @map("organization_id") @db.Uuid
+  teamId            String           @map("team_id") @db.Uuid
+  kind              ListKind         @default(static)
+  slug              String
+  name              String
+  description       String           @default("")
+  objectTypeId      String?          @map("object_type_id") @db.Uuid // null = mixed
+  definition        Json?
+  evaluationVersion Int              @default(0) @map("evaluation_version")
+  refreshState      ListRefreshState @default(ready) @map("refresh_state")
+  refreshErrorCode  String?          @map("refresh_error_code")
+  lastEvaluatedAt   DateTime?        @map("last_evaluated_at")
+  createdByType     ActorType        @map("created_by_type")
+  createdById       String           @map("created_by_id")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  attributes        Attribute[]
+  entries           ListEntry[]
 
   @@unique([organizationId, teamId, slug])
+  @@index([organizationId, teamId, kind, refreshState])
   @@map("lists")
 }
 
@@ -704,6 +899,120 @@ model View {
 
   @@unique([organizationId, teamId, slug])
   @@map("views")
+}
+
+// ───────────────────────── files & immutable events ─────────────────────────
+
+model FileObject {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  teamId         String     @map("team_id") @db.Uuid
+  provider       String
+  providerKey    String     @map("provider_key")
+  filename       String
+  mimeType       String     @map("mime_type")
+  sizeBytes      BigInt     @map("size_bytes")
+  checksumSha256 String?    @map("checksum_sha256")
+  metadata       Json       @default("{}")
+  createdByType  ActorType  @map("created_by_type")
+  createdById    String     @map("created_by_id")
+  onBehalfOf     String?    @map("on_behalf_of")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  links          FileLink[]
+
+  @@unique([organizationId, teamId, provider, providerKey])
+  @@index([organizationId, teamId, createdAt(sort: Desc)])
+  @@map("file_objects")
+}
+
+model FileLink {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  teamId         String             @map("team_id") @db.Uuid
+  fileId         String             @map("file_id") @db.Uuid
+  targetType     FileLinkTargetType @map("target_type")
+  recordId       String?            @map("record_id") @db.Uuid
+  eventId        String?            @map("event_id") @db.Uuid
+  purpose        String
+  metadata       Json               @default("{}")
+  createdByType  ActorType          @map("created_by_type")
+  createdById    String             @map("created_by_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  file           FileObject         @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  record         Record?            @relation("FileRecordLinks", fields: [recordId], references: [id], onDelete: Cascade)
+  event          Event?             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, targetType])
+  @@index([recordId])
+  @@index([eventId])
+  @@map("file_links")
+}
+
+model EventType {
+  id                  String      @id @default(uuid()) @db.Uuid
+  organizationId      String      @map("organization_id") @db.Uuid
+  teamId              String      @map("team_id") @db.Uuid
+  slug                String
+  name                String
+  description         String      @default("")
+  subjectObjectTypeId String?     @map("subject_object_type_id") @db.Uuid
+  propertySchema      Json        @default("{}") @map("property_schema")
+  archivedAt          DateTime?   @map("archived_at")
+  createdByType       ActorType   @map("created_by_type")
+  createdById         String      @map("created_by_id")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+  subjectObjectType   ObjectType? @relation(fields: [subjectObjectTypeId], references: [id], onDelete: SetNull)
+  events              Event[]
+
+  @@unique([organizationId, teamId, slug])
+  @@index([organizationId, teamId])
+  @@map("event_types")
+}
+
+model Event {
+  id                  String     @id @default(uuid()) @db.Uuid
+  organizationId      String     @map("organization_id") @db.Uuid
+  teamId              String     @map("team_id") @db.Uuid
+  eventTypeId         String     @map("event_type_id") @db.Uuid
+  source              String
+  externalId          String     @map("external_id")
+  occurredAt          DateTime   @map("occurred_at")
+  subjectRecordId     String?    @map("subject_record_id") @db.Uuid
+  actorType           ActorType? @map("actor_type")
+  actorId             String?    @map("actor_id")
+  properties          Json       @default("{}")
+  correctionOfEventId String?    @map("correction_of_event_id") @db.Uuid
+  createdByType       ActorType  @map("created_by_type")
+  createdById         String     @map("created_by_id")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  eventType           EventType  @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  subjectRecord       Record?    @relation(fields: [subjectRecordId], references: [id], onDelete: SetNull)
+  correctionOf        Event?     @relation("EventCorrections", fields: [correctionOfEventId], references: [id], onDelete: SetNull)
+  corrections         Event[]    @relation("EventCorrections")
+  fileLinks           FileLink[]
+
+  @@unique([organizationId, teamId, eventTypeId, source, externalId])
+  @@index([organizationId, teamId, occurredAt(sort: Desc)])
+  @@index([subjectRecordId, occurredAt(sort: Desc)])
+  @@map("events")
+}
+
+model MigrationReport {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  teamId         String?  @map("team_id") @db.Uuid
+  migrationName  String   @map("migration_name")
+  code           String
+  resourceType   String   @map("resource_type")
+  resourceId     String?  @map("resource_id")
+  details        Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([migrationName, code])
+  @@index([organizationId, teamId])
+  @@map("migration_reports")
 }
 
 // ───────────────────────── policy, approvals, audit ─────────────────────────
@@ -797,31 +1106,31 @@ model AuditLog {
 // ───────────────────────── jobs, webhooks, idempotency ─────────────────────────
 
 model QueueJob {
-  id             String    @id @default(uuid()) @db.Uuid
+  id                 String    @id @default(uuid()) @db.Uuid
   // Null ONLY for system jobs (retention). Every client-addressable job
   // (bulk, dedup, export) carries both; tasks/get and tasks/cancel resolve by
   // (id, tenant) and answer NOT_FOUND on mismatch (review S1.1).
-  organizationId String?   @map("organization_id") @db.Uuid
-  teamId         String?   @map("team_id") @db.Uuid
-  type           String
+  organizationId     String?   @map("organization_id") @db.Uuid
+  teamId             String?   @map("team_id") @db.Uuid
+  type               String
   // Lanes: delivery/reindex run in a high-priority pool bulk jobs cannot
   // starve; claim uses FOR UPDATE SKIP LOCKED with a lease — locked_at older
   // than the lease is reclaimable (review M7).
-  priority       Int       @default(0)
-  payload        Json
-  idempotencyKey String?   @unique @map("idempotency_key")
-  status         JobStatus @default(queued)
-  attempts       Int       @default(0)
-  maxAttempts    Int       @default(5) @map("max_attempts")
-  visibleAt      DateTime  @default(now()) @map("visible_at")
-  lockedAt       DateTime? @map("locked_at")
-  lockedBy       String?   @map("locked_by")
-  lastError      String?   @map("last_error")
-  result         Json?
-  progress       Json?
+  priority           Int       @default(0)
+  payload            Json
+  idempotencyKey     String?   @unique @map("idempotency_key")
+  status             JobStatus @default(queued)
+  attempts           Int       @default(0)
+  maxAttempts        Int       @default(5) @map("max_attempts")
+  visibleAt          DateTime  @default(now()) @map("visible_at")
+  lockedAt           DateTime? @map("locked_at")
+  lockedBy           String?   @map("locked_by")
+  lastError          String?   @map("last_error")
+  result             Json?
+  progress           Json?
   exportDownloadedAt DateTime? @map("export_downloaded_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   @@index([status, visibleAt])
   @@index([organizationId, teamId, type, createdAt(sort: Desc)])

@@ -987,6 +987,52 @@ Reserved attribute slugs on every object type (system, not stored in `data`): `i
 - **Tightening bounds** (`maxLength`, `min`/`max`, `rating.max`) over existing values: MRTR reports violations; stored values are **grandfathered** — they stay valid until the next write touches that attribute on that record.
 - **Raising `sensitivity` past `internal`, or archiving an attribute with values, enqueues a bulk `record.reindex` Task for the object type in the same commit** (MRTR states the record count; the tool result names the Task) — stored search content and embeddings must stop carrying the now-sensitive value (R5a). The same trigger applies to config changes that alter `toSearchText`.
 
+## 3b. Semantic metadata foundation (T57)
+
+The Phase 8 compatibility packages are metadata over the generic engine. The
+following tables are generic runtime metadata and may be used by sales, service
+or commerce templates without creating template-named storage:
+
+- `Attribute.value_source` is the authority for whether a value is ordinary
+  stored data or non-writable derived/system state. `stored` values live in
+  `records.data` and are writable through the normal record path. `formula`,
+  `rollup`, `relation_sync` and `score` values are read-only to callers and have
+  one `attribute_derivations` row with deterministic config, dependency edges,
+  refresh state and materialisation policy. `system` is read-only and virtual
+  unless its owning service explicitly materialises it. Direct writes to any
+  non-`stored` source fail with `READ_ONLY_ATTRIBUTE`.
+- `attribute_groups` are display/schema metadata only. They order and label
+  attributes inside an object type. Archiving or reordering a group never changes
+  record data, sensitivity, visibility or policy.
+- `pipelines`, `pipeline_stages` and `record_stage_history` model lifecycle
+  state generically. A pipeline belongs to one object type; a stage has stable
+  slug, position, optional probability and category. Stage membership is not
+  guessed from arbitrary status fields: services append immutable stage
+  intervals to `record_stage_history`. Existing status attributes remain
+  ordinary `stored` attributes until an explicit mapped migration writes stages.
+- `lists.kind`, `lists.definition`, `evaluation_version`, `refresh_state`,
+  `refresh_error_code` and `last_evaluated_at` reserve dynamic-list state.
+  Static lists remain authoritative through `list_entries`; dynamic membership is
+  a derived cache and cannot masquerade as complete when `refresh_state != ready`.
+- `file_objects` store provider/key, metadata, checksum, size and creator; they
+  never store blobs or signed URLs. `file_links` attach files to a record-like
+  activity, a record or an event using a typed purpose.
+- `event_types` define immutable event vocabularies and typed property schemas.
+  `events` are append-only facts keyed by `(tenant, event_type, source,
+  external_id)`; correction is a new event linked by `correction_of_event_id`,
+  never an update/delete.
+- `migration_reports` records redacted, machine-readable migration facts when a
+  mapping cannot be decided automatically. The T57 migration fails before DDL if
+  a legacy status attribute claims a pipeline mapping that cannot be resolved; it
+  never writes a sentinel stage or guesses from labels.
+
+All rows above carry `(organization_id, team_id)` except nullable
+`migration_reports` rows for pre-tenant migration findings. They are read through
+the same tenant, visibility and policy gates as records/resources once exposed.
+Audit rows, task results, webhook payloads and logs may name ids, counts and
+error codes from these tables, but not raw file/event payloads or derived source
+values.
+
 ## 4. Write path — `applyWrite(tx, ctx, schema, op)`
 
 Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` (ReadCommitted) with explicit advisory locks. **Advisory locks use the two-int form** `pg_advisory_xact_lock(namespace, hashtext(tenantId ∥ key))` with a fixed namespace constant per concern (`1` records, `2` unique/match keys, `3` provisioning, `4` webhooks, `5` audit, `6` idempotency, `7` link topology), so concerns and tenants never false-share a 32-bit bucket.
@@ -1001,7 +1047,7 @@ Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink
 7. **Unique & match keys** — diff and write `record_unique_keys` (hash-indexed); write `record_match_lookup_keys` for every active and replacement-current (`pending_backfill|collision_blocked`) exact/normalized rule; and write `record_match_keys` only for active block rules. Unique violation ⇒ `DUPLICATE_FOUND {attribute, record_id}` (conflicting id read back in-tx; only if the caller may view it, else the generic form). For `assert`: create runs under a savepoint — on unique violation, roll back to the savepoint and re-run as an update of the conflicting record (bounded to one retry). Block-key violation ⇒ visible `DUPLICATE_FOUND {candidates}` or the generic form when the conflicting record is not readable. The block constraint, never a preflight read, remains authoritative under concurrency.
 8. **Matching rules** (create/assert) — active `warn` rules are evaluated by read (§6) after projected links have their final state and before change/enqueue/replay/audit writes; the result is attached as `duplicates`. Both assert branches evaluate against their effective post-assert record and exclude that record itself. A normalised no-op assert still evaluates and persists its deterministic replay result, but writes no record version/change/job/success audit. Active `block` rules are enforced by step 7's constraint. A plain update does not return warnings, but it still maintains lookup/block keys and may fail an active block rule.
 9. **Data** — merge patch into `records.data`; recompute `display_name` from the primary attribute (whose sensitivity may not exceed `internal` — enforced at schema define/update); a no-op patch (normalised diff empty) writes nothing and does not bump `version`.
-10. **Links** — apply extracted link ops and explicit `link`/`unlink`: cardinality enforced by ending conflicting active links (`active_until = now`), which the result reports (`ended_links`). Cardinality caps: `many_to_one` ⇒ at most one active outgoing link per `(from, relation)`; `one_to_many` ⇒ at most one active incoming link per `(to, relation)`; `one_to_one` ⇒ both; `many_to_many` ⇒ neither. Links backing a **multi** `record_reference` get `position` = the target's index in the submitted array (contiguous, 0-based, per §2 `RecordLink.position`); when an update diff ends an interior link, the surviving links are renumbered to close the gap so positions stay contiguous. Direct links (`crm_link`) and links backing scalar references always have `position = null`. Links created for a reference **replace** projection carry empty edge data (`data = {}`) — a re-point must not silently overwrite operator-set edge attributes — and links that survive the diff **retain** their existing edge data.
+10. **Links** — apply extracted link ops and explicit `link`/`unlink`: cardinality enforced by ending conflicting active links (`active_until = now`), which the result reports (`ended_links`). Cardinality caps: `many_to_one` ⇒ at most one active outgoing link per `(from, relation)`; `one_to_many` ⇒ at most one active incoming link per `(to, relation)`; `one_to_one` ⇒ both; `many_to_many` ⇒ neither. T57 directional limits (`max_active_edges_from`, `max_active_edges_to`, and label-specific limits in `edge_limit_config`) are stricter caps applied after cardinality/projection ownership; they can only further restrict, never loosen, a cardinality rule. Enforcement uses the topology lock key `(team_id, relation_type_id, label || '', bounded_endpoint_record_id)` so concurrent writes for the constrained side serialize before counting active edges. Links backing a **multi** `record_reference` get `position` = the target's index in the submitted array (contiguous, 0-based, per §2 `RecordLink.position`); when an update diff ends an interior link, the surviving links are renumbered to close the gap so positions stay contiguous. Direct links (`crm_link`) and links backing scalar references always have `position = null`. Links created for a reference **replace** projection carry empty edge data (`data = {}`) — a re-point must not silently overwrite operator-set edge attributes — and links that survive the diff **retain** their existing edge data.
 11. **Change intents** — form the change rows (insert deferred to step 13, after seq allocation): one `set`/`unset` row per attribute, in deterministic ascending-slug order; on create, the `create` marker row first, then the per-attribute `set` rows for every stored attribute of the initial state (defaults included) — **every** row of the create, marker included, carries `resulting_version = 1`; **two rows per link/unlink (one per endpoint, shared `group_id`)**, each carrying its own endpoint's post-write version as `resulting_version`; delete/restore/merge rows carry `snapshot` (§7). `snapshot` is engine-internal: it is **never** serialized into any tool result, feed event or webhook.
 12. **Feed sequence block** — `UPDATE teams SET feed_seq = feed_seq + n WHERE id = $1 RETURNING feed_seq` where `n` is the number of change intents; commit-ordered by the row lock (see the Team model comment). Every change row then carries the full `{ …, resultingVersion, seq }` shape and is inserted with a final, non-null seq.
 13. **Changes, enqueue, idempotency result** — insert the change rows; `record.reindex {recordId}` (idempotency `reindex:<recordId>:<lastSeq>`) for every touched record, and `change.deliver {teamId}` (idempotency `deliver:<teamId>:<floor(now/30s)>`, `visibleAt = now + 30 s`) when the team has active webhooks; fill the reserved idempotency row's `result` (step 0) **in this same commit**, so "applied" and "replayable" are atomic (never stored after commit).
