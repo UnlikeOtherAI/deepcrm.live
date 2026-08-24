@@ -29,15 +29,27 @@ export type LinkOut = {
 }
 export type ListedLink = { link: LinkOut; relatedRecordId: string }
 
-async function anchor(tx: RecordTx, ctx: ActorContext, recordId: string): Promise<void> {
+async function anchor(tx: RecordTx, ctx: ActorContext, recordId: string): Promise<string> {
   const record = await tx.record.findFirst({
     where: { ...tenantWhere(ctx.tenant), id: recordId },
     select: { id: true, deletedAt: true, mergedIntoId: true },
   })
-  if (record === null || record.deletedAt !== null)
+  if (record === null)
     throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
-  if (record.mergedIntoId !== null)
-    throw new ServiceError(ErrorCode.MERGED, 'Record has been merged', { redirect_to: record.mergedIntoId })
+  if (record.mergedIntoId === null) {
+    if (record.deletedAt !== null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+    return recordId
+  }
+  const survivor = await tx.record.findFirst({
+    where: { ...tenantWhere(ctx.tenant), id: record.mergedIntoId },
+    select: { id: true, deletedAt: true, mergedIntoId: true },
+  })
+  if (survivor === null || survivor.deletedAt !== null || survivor.mergedIntoId !== null) {
+    throw new ServiceError(ErrorCode.MERGED, 'Merged record survivor is unavailable', {
+      redirect_to: record.mergedIntoId,
+    })
+  }
+  return survivor.id
 }
 
 function relationTypeId(schema: LoadedSchema, slug: string | undefined): string | undefined {
@@ -54,7 +66,7 @@ export async function listLinks(
   schema: LoadedSchema,
   input: ListLinksInput,
 ): Promise<readonly ListedLink[]> {
-  await anchor(tx, ctx, input.recordId)
+  const anchorId = await anchor(tx, ctx, input.recordId)
   const direction = input.direction ?? 'both'
   const relationId = relationTypeId(schema, input.relationType)
   const links = await tx.recordLink.findMany({
@@ -62,9 +74,9 @@ export async function listLinks(
       ...tenantWhere(ctx.tenant),
       ...(relationId === undefined ? {} : { relationTypeId: relationId }),
       ...(input.includeHistory === true ? {} : { activeUntil: null }),
-      ...(direction === 'from' ? { fromRecordId: input.recordId } : {}),
-      ...(direction === 'to' ? { toRecordId: input.recordId } : {}),
-      ...(direction === 'both' ? { OR: [{ fromRecordId: input.recordId }, { toRecordId: input.recordId }] } : {}),
+      ...(direction === 'from' ? { fromRecordId: anchorId } : {}),
+      ...(direction === 'to' ? { toRecordId: anchorId } : {}),
+      ...(direction === 'both' ? { OR: [{ fromRecordId: anchorId }, { toRecordId: anchorId }] } : {}),
     },
     select: {
       id: true, relationTypeId: true, fromRecordId: true, toRecordId: true, data: true,
@@ -85,6 +97,6 @@ export async function listLinks(
       activeFrom: link.activeFrom, activeUntil: link.activeUntil,
       createdByType: link.createdByType, createdById: link.createdById, createdAt: link.createdAt,
     },
-    relatedRecordId: link.fromRecordId === input.recordId ? link.toRecordId : link.fromRecordId,
+    relatedRecordId: link.fromRecordId === anchorId ? link.toRecordId : link.fromRecordId,
   }))
 }

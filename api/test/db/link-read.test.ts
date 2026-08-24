@@ -311,18 +311,17 @@ describe('link read service', () => {
     } })).toBe(before + 1)
   })
 
-  it('rejects invalid input without exposing a merged anchor as an active record', async () => {
+  it('rejects invalid input and resolves a merged anchor to its survivor', async () => {
     const target = await fixture()
     const invalid = await caught(listRecordLinks(deps, context(target), {
       recordId: target.anchorId, limit: 0,
     }))
     expect(invalid.code).toBe(ErrorCode.VALIDATION_FAILED)
-    const merged = await caught(listRecordLinks(deps, context(target), {
+    const merged = await listRecordLinks(deps, context(target), {
       recordId: target.mergedId,
-    }))
+    })
     expect(merged).toMatchObject({
-      code: ErrorCode.MERGED,
-      details: { redirect_to: target.outgoingId },
+      links: [{ related: { id: target.anchorId } }],
     })
   })
 })

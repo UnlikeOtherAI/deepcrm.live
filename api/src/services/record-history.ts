@@ -27,6 +27,7 @@ import {
 import { recordBoundary } from './record-boundary.js'
 import {
   findVisibleLiveRecords,
+  resolveVisibleRecord,
   requireVisibleRecord,
   type VisibleRecord,
 } from './record-visibility.js'
@@ -349,8 +350,9 @@ export async function recordAt(
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const id = recordId(input.recordId)
     const at = historyTime(input.at)
-    const visibility = await buildHistoryAccess(deps, ctx, 'crm_record_at', id)
-    const result = await engineRecordAt(deps.db, ctx.tenant, id, at, visibility)
+    const resolved = await resolveVisibleRecord(deps.db, ctx, id)
+    const visibility = await buildHistoryAccess(deps, ctx, 'crm_record_at', resolved.record.id)
+    const result = await engineRecordAt(deps.db, ctx.tenant, resolved.record.id, at, visibility)
     return { record_at: result }
   })
 }

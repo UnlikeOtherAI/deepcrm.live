@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   canonicalJson, tenantWhere, type Db, type PolicyAction, type Prisma,
 } from '@deepcrm/db'
-import { enqueue, type QueueEnqueueTx } from '@deepcrm/queue'
+import type { QueueEnqueueTx } from '@deepcrm/queue'
 import {
   assertRecord as engineAssertRecord,
   createRecord as engineCreateRecord,
@@ -42,6 +42,7 @@ import {
   writeRecordDeniedAudit,
 } from './record-write-authorization.js'
 import { recordBoundary } from './record-boundary.js'
+import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
 import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } from './record-results.js'
 import { requireVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
@@ -167,39 +168,6 @@ async function storeReplay(
   })
   if (updated.count !== 1) throw new ServiceError(ErrorCode.INTERNAL, 'Idempotency result was not stored')
 }
-async function enqueueChanges(
-  tx: RecordServiceTx, ctx: ActorContext, result: RecordWriteResult,
-): Promise<void> {
-  const lastSeq = result.sequences.at(-1)
-  if (lastSeq === undefined || result.touchedRecordIds.length === 0) {
-    throw new ServiceError(ErrorCode.INTERNAL, 'Changed record result is incomplete')
-  }
-  for (const recordId of result.touchedRecordIds) {
-    await enqueue(tx, {
-      organizationId: ctx.tenant.organizationId,
-      teamId: ctx.tenant.teamId,
-      type: 'record.reindex',
-      payload: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId, recordId },
-      idempotencyKey: `reindex:${recordId}:${lastSeq}`,
-      priority: 100,
-    })
-  }
-  const activeWebhooks = await tx.webhook.count({
-    where: { ...tenantWhere(ctx.tenant), active: true },
-  })
-  if (activeWebhooks === 0) return
-  const bucket = Math.floor(ctx.now.getTime() / 30_000)
-  await enqueue(tx, {
-    organizationId: ctx.tenant.organizationId,
-    teamId: ctx.tenant.teamId,
-    type: 'change.deliver',
-    payload: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId },
-    idempotencyKey: `deliver:${ctx.tenant.teamId}:${bucket}`,
-    visibleAt: new Date(ctx.now.getTime() + 30_000),
-    priority: 100,
-    maxAttempts: 6,
-  })
-}
 async function runWrite(
   deps: AppDeps, ctx: ActorContext, descriptor: WriteDescriptor,
   authorization: readonly PolicyRequest[] | null,
@@ -227,7 +195,9 @@ async function runWrite(
         created: initial.created, changed: initial.changed,
         ...(initial.duplicates === undefined ? {} : { duplicates: initial.duplicates }),
       }
-      if (engineResult.changed) await enqueueChanges(serviceTx, ctx, engineResult)
+      if (engineResult.changed) await enqueueRecordMutationEffects(
+        serviceTx, ctx, engineResult.sequences, engineResult.touchedRecordIds,
+      )
       await storeReplay(serviceTx, ctx, reservation, result)
       if (!engineResult.changed) return result
       await deps.writeAudit(serviceTx, {

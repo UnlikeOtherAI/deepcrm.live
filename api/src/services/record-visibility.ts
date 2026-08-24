@@ -2,6 +2,7 @@ import { tenantWhere, type Db, type Prisma } from '@deepcrm/db'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 export type VisibleRecord = { id: string; objectTypeId: string }
+export type ResolvedVisibleRecord = { record: VisibleRecord; redirectedFrom?: string }
 
 function visibleWhere(ctx: ActorContext): Prisma.RecordWhereInput {
   return {
@@ -54,6 +55,35 @@ export async function requireVisibleRecord(
   const record = await findVisibleRecord(db, ctx, recordId)
   if (record === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   return record
+}
+
+export async function resolveVisibleRecord(
+  db: Db,
+  ctx: ActorContext,
+  recordId: string,
+): Promise<ResolvedVisibleRecord> {
+  const original = await requireVisibleRecord(db, ctx, recordId)
+  const state = await db.record.findFirst({
+    where: { ...tenantWhere(ctx.tenant), id: original.id },
+    select: { mergedIntoId: true },
+  })
+  if (state === null || state.mergedIntoId === null) return { record: original }
+  const survivor = await requireVisibleRecord(db, ctx, state.mergedIntoId)
+  const survivorState = await db.record.findFirst({
+    where: { ...tenantWhere(ctx.tenant), id: survivor.id },
+    select: { deletedAt: true, erasedAt: true, mergedIntoId: true },
+  })
+  if (
+    survivorState === null
+    || survivorState.deletedAt !== null
+    || survivorState.erasedAt !== null
+    || survivorState.mergedIntoId !== null
+  ) {
+    throw new ServiceError(ErrorCode.MERGED, 'Merged record survivor is unavailable', {
+      redirect_to: survivor.id,
+    })
+  }
+  return { record: survivor, redirectedFrom: recordId }
 }
 
 export async function redactInvisibleDuplicate(

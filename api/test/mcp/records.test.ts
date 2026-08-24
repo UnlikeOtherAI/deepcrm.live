@@ -53,6 +53,15 @@ beforeAll(async () => {
   } })
   await db.policyRule.create({ data: {
     organizationId: team.organizationId, teamId: team.id, scope: 'team', scopeId: team.id,
+    resourceType: 'merge', action: 'merge', effect: 'allow', priority: 100,
+    requiresApproval: false, createdById: 'records-mcp',
+    bindings: { create: [
+      { actorType: 'agent', actorId: 'agent:dev:agent_dev' },
+      { actorType: 'role', actorId: 'owner' },
+    ] },
+  } })
+  await db.policyRule.create({ data: {
+    organizationId: team.organizationId, teamId: team.id, scope: 'team', scopeId: team.id,
     resourceType: 'link', action: 'link', effect: 'allow', priority: 100, requiresApproval: false, createdById: 'records-mcp',
     bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }, { actorType: 'role', actorId: 'owner' }] },
   } })
@@ -69,6 +78,30 @@ beforeAll(async () => {
 afterAll(async () => { await closeServer(); await db.$disconnect() })
 
 describe('record MCP tools', () => {
+  it('merges duplicates and resolves a loser id to the survivor', async () => {
+    const survivor = structured(await call('crm_record_create', {
+      object_type: 'person',
+      data: { name: { full: `Merge survivor ${runKey}` }, emails: [`merge-a-${runKey}@example.test`] },
+    }))
+    const loser = structured(await call('crm_record_create', {
+      object_type: 'person',
+      data: { name: { full: `Merge loser ${runKey}` }, emails: [`merge-b-${runKey}@example.test`] },
+    }))
+    const survivorId = z.object({ record: z.object({ id: z.string().uuid() }) }).parse(survivor).record.id
+    const loserId = z.object({ record: z.object({ id: z.string().uuid() }) }).parse(loser).record.id
+    const merged = structured(await call('crm_merge_records', {
+      survivor_id: survivorId, merged_ids: [loserId], reason: 'same person',
+    }))
+    expect(merged).toMatchObject({
+      record: { id: survivorId }, merge_change_id: expect.any(String),
+      repointed_links: 0, ended_links: [],
+    })
+    expect(merged).not.toHaveProperty('snapshot')
+    expect(structured(await call('crm_record_get', { id: loserId }))).toMatchObject({
+      record: { id: survivorId, redirected_from: loserId },
+    })
+  })
+
   it('creates, reads, queries, histories, deletes and restores records', async () => {
     const company = structured(await call('crm_record_create', { object_type: 'company', data: { name: 'Asahi', domains: ['asahi.eu'] } }))
     const companyId = z.object({ record: z.object({ id: z.string().uuid() }) }).parse(company).record.id

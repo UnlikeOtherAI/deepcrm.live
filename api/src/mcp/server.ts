@@ -27,6 +27,7 @@ import { registerActivityTools } from './tools/activity.js'
 import { registerPipelineTools } from './tools/pipeline.js'
 import { registerIoTools } from './tools/io.js'
 import { registerSearchTools } from './tools/search.js'
+import { registerQualityTools } from './tools/quality.js'
 import { configureToolRuntime, logToolEntry } from './tools/register.js'
 import { registerTaskMethods } from './tasks.js'
 
@@ -159,6 +160,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   registerPipelineTools(server, ctx, deps)
   registerIoTools(server, ctx, deps)
   registerSearchTools(server, ctx, deps)
+  registerQualityTools(server, ctx, deps)
   registerResources(server, ctx, deps)
   registerTaskMethods(server, ctx, deps)
 

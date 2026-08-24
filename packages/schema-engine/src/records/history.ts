@@ -265,11 +265,27 @@ export async function recordAt(
   if (Number.isNaN(at.getTime())) throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Invalid history time')
   const record = await tx.record.findFirst({
     where: { ...tenantWhere(tenant), id: recordId },
-    select: { id: true },
+    select: { id: true, mergedIntoId: true },
   })
   if (record === null) throw notFound()
+  let resolvedId = record.id
+  if (record.mergedIntoId !== null) {
+    const survivor = await tx.record.findFirst({
+      where: { ...tenantWhere(tenant), id: record.mergedIntoId },
+      select: { id: true, deletedAt: true, erasedAt: true, mergedIntoId: true },
+    })
+    if (
+      survivor === null || survivor.deletedAt !== null
+      || survivor.erasedAt !== null || survivor.mergedIntoId !== null
+    ) {
+      throw new ServiceError(ErrorCode.MERGED, 'Merged record survivor is unavailable', {
+        redirect_to: record.mergedIntoId,
+      })
+    }
+    resolvedId = survivor.id
+  }
   const rows = await tx.recordChange.findMany({
-    where: { ...tenantWhere(tenant), recordId, occurredAt: { lte: at } },
+    where: { ...tenantWhere(tenant), recordId: resolvedId, occurredAt: { lte: at } },
     orderBy: [{ occurredAt: 'asc' }, { seq: 'asc' }],
   })
   let exists = false
@@ -285,7 +301,7 @@ export async function recordAt(
   if (!created || !exists || latest === undefined) throw notFound()
   return {
     data: replayData(rows, options),
-    links: await historicalLinks(tx, tenant, recordId, at, rows, options),
+    links: await historicalLinks(tx, tenant, resolvedId, at, rows, options),
     version_at: latest.resultingVersion,
     as_of: at.toISOString(),
   }

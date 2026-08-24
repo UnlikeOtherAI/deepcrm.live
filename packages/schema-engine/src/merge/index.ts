@@ -8,3 +8,13 @@ export {
   type MergeSchema,
   type UniqueKeyMove,
 } from './plan.js'
+export { executeMerge } from './execute.js'
+export type {
+  ExecuteMergeInput,
+  ExecuteMergeResult,
+  MergeRecordResult,
+  MergePlanAuthorization,
+  MergePlanAuthorizer,
+  MergeSnapshot,
+  MergeUniqueKeySnapshot,
+} from './types.js'

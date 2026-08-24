@@ -84,7 +84,7 @@ describe('listLinks', () => {
     expect(await db.$transaction((tx) => listLinks(tx, ctx, schema, { recordId: person.id }))).toEqual([])
   })
 
-  it('rejects cross-tenant, deleted, and merged anchors before reading links', async () => {
+  it('rejects cross-tenant and deleted anchors while redirecting a merged anchor', async () => {
     const target = await setup()
     const foreign = await setup()
     await expect(db.$transaction((tx) => listLinks(tx, target.ctx, target.schema, {
@@ -100,6 +100,6 @@ describe('listLinks', () => {
     await db.record.update({ where: { id: merged.person.id }, data: { mergedIntoId: company.id } })
     await expect(db.$transaction((tx) => listLinks(tx, merged.ctx, merged.schema, {
       recordId: merged.person.id,
-    }))).rejects.toMatchObject({ code: ErrorCode.MERGED, details: { redirect_to: company.id } })
+    }))).resolves.toEqual([])
   })
 })

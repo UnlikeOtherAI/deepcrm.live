@@ -23,7 +23,7 @@ import type { AppDeps } from '../deps.js'
 import { loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { recordTimeline, type RecordTimelineResult } from './timeline.js'
-import { findVisibleLiveRecords, requireVisibleRecord } from './record-visibility.js'
+import { findVisibleLiveRecords, resolveVisibleRecord } from './record-visibility.js'
 import { buildRedactionMatrix, redactForActor, type RecordOut } from './redact.js'
 
 export type GetRecordInput = {
@@ -161,10 +161,15 @@ export function asQueryRecord(row: {
   return { ...row, data: row.data }
 }
 
-async function visibleRecord(deps: AppDeps, ctx: ActorContext, id: string): Promise<QueryRecord> {
-  await requireVisibleRecord(deps.db, ctx, id)
+async function visibleRecord(
+  deps: AppDeps, ctx: ActorContext, id: string,
+): Promise<{ record: QueryRecord; redirectedFrom?: string }> {
+  const resolved = await resolveVisibleRecord(deps.db, ctx, id)
   const row = await deps.db.record.findFirst({
-    where: { ...tenantWhere(ctx.tenant), id, deletedAt: null, mergedIntoId: null, erasedAt: null },
+    where: {
+      ...tenantWhere(ctx.tenant), id: resolved.record.id,
+      deletedAt: null, mergedIntoId: null, erasedAt: null,
+    },
     select: {
       id: true, objectTypeId: true, data: true, displayName: true, ownerType: true, ownerId: true,
       visibility: true, createdOnBehalfOf: true, origin: true, version: true, lastActivityAt: true,
@@ -172,7 +177,10 @@ async function visibleRecord(deps: AppDeps, ctx: ActorContext, id: string): Prom
     },
   })
   if (row === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
-  return asQueryRecord(row)
+  return {
+    record: asQueryRecord(row),
+    ...(resolved.redirectedFrom === undefined ? {} : { redirectedFrom: resolved.redirectedFrom }),
+  }
 }
 
 async function resolveUnique(
@@ -280,7 +288,8 @@ export async function getRecord(
     const recordId = target.kind === 'id'
       ? target.id
       : await resolveUnique(deps, ctx, schema, target)
-    const primary = await visibleRecord(deps, ctx, recordId)
+    const resolved = await visibleRecord(deps, ctx, recordId)
+    const primary = resolved.record
     const objectType = schema.objectTypesById.get(primary.objectTypeId)
     if (objectType === undefined || objectType.archivedAt !== null) {
       throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Record object type is not active')
@@ -321,7 +330,10 @@ export async function getRecord(
       return decision.allowed && !decision.requiresApproval
     })
     const matrix = buildRedactionMatrix(evaluator, ctx, schema, [primary, ...permittedRelated])
-    const record = redactForActor(ctx, schema, primary, matrix)
+    const presented = redactForActor(ctx, schema, primary, matrix)
+    const record = resolved.redirectedFrom === undefined
+      ? presented
+      : { ...presented, redirected_from: resolved.redirectedFrom }
     const timeline = timelineLimit === 0 ? undefined : (await recordTimeline(deps, ctx, {
       id: primary.id,
       limit: timelineLimit,

@@ -26,7 +26,7 @@ import {
   type PolicyScopeRef,
 } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
-import { findVisibleLiveRecords, requireVisibleRecord } from './record-visibility.js'
+import { findVisibleLiveRecords, resolveVisibleRecord } from './record-visibility.js'
 
 export type LinkListInput = {
   recordId: string
@@ -330,7 +330,7 @@ export async function listRecordLinks(
 ): Promise<LinkListResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const normalized = normalize(input)
-    const anchorVisible = await requireVisibleRecord(deps.db, ctx, normalized.recordId)
+    const anchorVisible = (await resolveVisibleRecord(deps.db, ctx, normalized.recordId)).record
     const anchorState = await deps.db.record.findFirst({
       where: { ...tenantWhere(ctx.tenant), id: anchorVisible.id },
       select: { id: true, objectTypeId: true, displayName: true, erasedAt: true },
@@ -342,7 +342,7 @@ export async function listRecordLinks(
     const cursor = openCursor(deps.secretBox, input.cursor, ctx, normalized)
     const schema = await loadSchema(deps.db, ctx.tenant)
     const entries = (await listLinks(deps.db, ctx, schema, {
-      recordId: normalized.recordId,
+      recordId: anchorVisible.id,
       ...(normalized.relationType === undefined ? {} : { relationType: normalized.relationType }),
       direction: normalized.direction,
       includeHistory: normalized.includeHistory,
