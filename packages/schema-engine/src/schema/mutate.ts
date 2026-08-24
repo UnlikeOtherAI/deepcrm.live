@@ -39,6 +39,7 @@ function audit(
   action: string,
   resourceType: string,
   resourceId: string | null,
+  reason: string | null = null,
 ): Promise<unknown> {
   return writeAudit(tx, {
     organizationId: tenant.organizationId,
@@ -50,7 +51,7 @@ function audit(
     resourceType,
     resourceId,
     outcome: 'success',
-    reason: null,
+    reason,
     metadata: null,
     requestId: actor.requestId,
     ipAddress: null,
@@ -286,11 +287,17 @@ async function defineRelationTypeInternal(
   return created
 }
 
-export async function archiveObjectType(tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string) {
+export async function archiveObjectType(
+  tx: Tx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  slug: string,
+  reason?: string,
+) {
   const target = await object(tx, tenant, slug)
   const archived = await tx.objectType.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
   await bumpSchemaVersion(tx, tenant)
-  await audit(tx, tenant, actor, 'archive', 'object_type', archived.id)
+  await audit(tx, tenant, actor, 'archive', 'object_type', archived.id, reason ?? null)
   return archived
 }
 
@@ -369,6 +376,7 @@ export async function archiveAttribute(
   actor: AuditActor,
   objectSlug: string,
   slug: string,
+  reason?: string,
 ) {
   const objectType = await object(tx, tenant, objectSlug)
   const target = await tx.attribute.findFirst({
@@ -377,7 +385,7 @@ export async function archiveAttribute(
   if (target === null) throw unknownAttribute(slug)
   const archived = await tx.attribute.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
   await bumpSchemaVersion(tx, tenant)
-  await audit(tx, tenant, actor, 'archive', 'attribute', archived.id)
+  await audit(tx, tenant, actor, 'archive', 'attribute', archived.id, reason ?? null)
   return archived
 }
 
@@ -416,17 +424,43 @@ export async function updateRelationType(
   return updated
 }
 
-export async function archiveRelationType(tx: Tx, tenant: TenantRef, actor: AuditActor, slug: string) {
+export async function archiveRelationType(
+  tx: Tx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  slug: string,
+  reason?: string,
+) {
   const target = await tx.relationType.findFirst({ where: { ...tenantWhere(tenant), slug, archivedAt: null } })
   if (target === null) throw schemaConflict('unknown_relation_type')
   const archived = await tx.relationType.update({ where: { id: target.id }, data: { archivedAt: new Date() } })
   await bumpSchemaVersion(tx, tenant)
-  await audit(tx, tenant, actor, 'archive', 'relation_type', archived.id)
+  await audit(tx, tenant, actor, 'archive', 'relation_type', archived.id, reason ?? null)
   return archived
 }
 
 export const defineObjectType = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
   defineObjectTypeInternal(tx, tenant, actor, input, true)
+
+export async function defineObjectTypeWithAttributes(
+  tx: Tx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  input: ObjectInput & { attributes?: AttributeSpecValue[] },
+) {
+  const created = await defineObjectTypeBatch(tx, tenant, actor, input)
+  for (const attribute of input.attributes ?? []) {
+    await defineAttributeBatch(tx, tenant, actor, { ...attribute, objectType: input.slug })
+  }
+  if (input.primaryAttribute !== undefined) {
+    await updateObjectTypeBatch(tx, tenant, actor, input.slug, {
+      primaryAttribute: input.primaryAttribute,
+    })
+  }
+  await bumpSchemaVersion(tx, tenant)
+  await audit(tx, tenant, actor, 'define', 'object_type', created.id)
+  return created
+}
 export const defineObjectTypeBatch = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: ObjectInput) =>
   defineObjectTypeInternal(tx, tenant, actor, input, false)
 export const defineAttribute = (tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput) =>

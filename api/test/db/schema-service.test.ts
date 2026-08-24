@@ -1,4 +1,4 @@
-import { createDb, dropTenant, seedTenant, writeAudit, type PolicyEffect } from '@deepcrm/db'
+import { createDb, dropTenant, seedTenant, writeAudit, type PolicyAction, type PolicyEffect } from '@deepcrm/db'
 import { createProjectionLinkWriter, defineObjectType } from '@deepcrm/schema-engine'
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -65,6 +65,7 @@ async function addSchemaRule(
   target: Tenant,
   effect: PolicyEffect,
   requiresApproval = false,
+  action: PolicyAction = 'define',
 ): Promise<void> {
   await db.policyRule.create({
     data: {
@@ -73,7 +74,7 @@ async function addSchemaRule(
       scope: 'team',
       scopeId: target.teamId,
       resourceType: 'schema',
-      action: 'define',
+      action,
       effect,
       priority: 0,
       requiresApproval,
@@ -163,6 +164,20 @@ describe('schema service transaction and policy seam', () => {
     await addSchemaRule(target, 'deny', true)
     const before = await metadataState(target)
 
+    await expect(defineSchemaObject(deps, ctx, {
+      slug: 'account', singularName: 'Account', pluralName: 'Accounts', description: 'An account',
+    })).rejects.toMatchObject({ code: 'APPROVAL_REQUIRED' })
+    expect(await metadataState(target)).toEqual(before)
+  })
+
+  it('allow rules requiring approval block schema view and define before schema work', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await addSchemaRule(target, 'allow', true, 'view')
+    await addSchemaRule(target, 'allow', true, 'define')
+    const before = await metadataState(target)
+
+    await expect(getSchema(deps, ctx)).rejects.toMatchObject({ code: 'APPROVAL_REQUIRED' })
     await expect(defineSchemaObject(deps, ctx, {
       slug: 'account', singularName: 'Account', pluralName: 'Accounts', description: 'An account',
     })).rejects.toMatchObject({ code: 'APPROVAL_REQUIRED' })

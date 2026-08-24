@@ -18,6 +18,8 @@ import {
 import type { ActorContext } from '@deepcrm/schemas'
 import { z } from 'zod'
 import type { AppDeps } from '../deps.js'
+import { registerResources } from './resources.js'
+import { registerSchemaTools } from './tools/schema.js'
 import { configureToolRuntime, logToolEntry } from './tools/register.js'
 
 const PROTOCOL_VERSION = '2026-07-28'
@@ -140,6 +142,8 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
     description: 'Internal disabled registration used to initialise the MCP tool registry.',
   }, async () => ({ content: [] }))
   bootstrap.disable()
+  registerSchemaTools(server, ctx, deps)
+  registerResources(server, ctx, deps)
 
   server.server.setRequestHandler(ServerDiscoverRequestSchema, async () => {
     const result = {
@@ -160,8 +164,5 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
     return result
   })
 
-  // The context is deliberately captured by the per-request server. Tool
-  // groups registered in T22+ close over it; no tenant identifier is accepted.
-  void ctx
   return server
 }

@@ -1,13 +1,16 @@
 export {
   loadSchema,
+  type LoadedAttribute,
   loadSchemaForMatchingBootstrap,
   type LoadedObjectType,
+  type LoadedRelationType,
   type LoadedSchema,
 } from './load.js'
 export type { RecordTx, SchemaTx } from './tx.js'
 export {
   archiveAttribute, archiveObjectType, archiveRelationType, cancelMatchingRules, defineAttribute,
-  defineObjectType, defineRelationType, finalizeMatchingBackfill, finalizeMatchingBootstrap,
+  defineObjectType, defineObjectTypeWithAttributes, defineRelationType, finalizeMatchingBackfill,
+  finalizeMatchingBootstrap,
   retryMatchingRules,
   setMatchingRules, updateAttribute, updateObjectType, updateRelationType,
 } from './mutate.js'

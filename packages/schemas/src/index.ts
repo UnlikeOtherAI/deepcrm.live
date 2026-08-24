@@ -7,6 +7,7 @@ export { ActorType, Cursor, ExpectedVersion, IdempotencyKey, IsoDate, IsoDateTim
 export * from './attribute-values.js'
 export * from './attribute-config.js'
 export * from './schema-specs.js'
+export * from './tools-schema.js'
 export * from './matching.js'
 export * from './filter.js'
 export * from './mrtr.js'
