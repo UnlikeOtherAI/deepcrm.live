@@ -111,7 +111,10 @@ describe('record write engine', () => {
     }, noLinks))
     expect(replacement.created).toBe(true)
     await expect(db.$transaction((tx) => restoreRecord(tx, ctx, schema, first.record.id, deleted.record.version, noLinks)))
-      .rejects.toMatchObject({ code: ErrorCode.RESTORE_CONFLICT })
+      .rejects.toMatchObject({
+        code: ErrorCode.RESTORE_CONFLICT,
+        details: { attribute: 'emails', held_by: replacement.record.id },
+      })
   })
 
   it('assert updates the existing unique record', async () => {

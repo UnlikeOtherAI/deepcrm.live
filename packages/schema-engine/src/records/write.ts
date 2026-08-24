@@ -243,7 +243,9 @@ export async function restoreRecord(
   if (objectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema metadata is inconsistent')
   try { await syncUniqueKeys(tx, schema, objectType, record.id, data(record.data)) } catch (error) {
     if (error instanceof ServiceError && error.code === ErrorCode.DUPLICATE_FOUND) {
-      throw new ServiceError(ErrorCode.RESTORE_CONFLICT, 'Record cannot be restored', { attribute: 'unique', held_by: error.details['record_id'] })
+      throw new ServiceError(ErrorCode.RESTORE_CONFLICT, 'Record cannot be restored', {
+        attribute: error.details['attribute'], held_by: error.details['record_id'],
+      })
     }
     throw error
   }

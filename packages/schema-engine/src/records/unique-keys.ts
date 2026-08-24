@@ -34,7 +34,7 @@ function normalizedValues(
   return values.map((item) => normalize(item) ?? canonicalJson(item))
 }
 
-type UniqueKey = { attributeId: string; normalizedHash: string; normalizedValue: string }
+type UniqueKey = { attributeId: string; attributeSlug: string; normalizedHash: string; normalizedValue: string }
 
 function uniqueKeys(objectType: LoadedObjectType, data: Record<string, JsonValue>): UniqueKey[] {
   const keys: UniqueKey[] = []
@@ -45,7 +45,12 @@ function uniqueKeys(objectType: LoadedObjectType, data: Record<string, JsonValue
       data[attribute.slug], attribute.isMulti, (item) => type.normalize(item, attribute.config),
     )
     for (const value of values) {
-      keys.push({ attributeId: attribute.id, normalizedHash: keyHash(value), normalizedValue: value })
+      keys.push({
+        attributeId: attribute.id,
+        attributeSlug: attribute.slug,
+        normalizedHash: keyHash(value),
+        normalizedValue: value,
+      })
     }
   }
   return keys.sort((left, right) => `${left.attributeId}:${left.normalizedHash}`.localeCompare(`${right.attributeId}:${right.normalizedHash}`))
@@ -109,7 +114,7 @@ export async function syncUniqueKeys(
       const conflict = await findUniqueRecord(
         tx, { organizationId: objectType.organizationId, teamId: schema.teamId }, key.attributeId, key.normalizedHash,
       )
-      if (conflict !== null) throw duplicate(key.attributeId, conflict)
+      if (conflict !== null) throw duplicate(key.attributeSlug, conflict)
     }
     throw error
   }
