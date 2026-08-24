@@ -235,7 +235,7 @@ pnpm exec turbo run test --filter=@deepcrm/api
 
 ---
 
-### T16 — Matching rules on create/assert
+### T16 ✅ — Matching rules on create/assert
 
 **Depends on:** T15. **Spec:** `docs/schema-engine.md` §6.
 
