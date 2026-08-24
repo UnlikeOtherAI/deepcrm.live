@@ -230,7 +230,14 @@ describe('direct link service', () => {
     for (const change of changes) {
       expect(change.resultingVersion).toBe(records.find((record) => record.id === change.recordId)?.version)
     }
-    expect(await db.queueJob.count({ where: target.tenant })).toBe(2)
+    const jobs = await db.queueJob.findMany({
+      where: { ...target.tenant, type: 'record.reindex' }, select: { payload: true },
+    })
+    expect(jobs).toHaveLength(2)
+    expect(jobs.map((job) => job.payload)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recordId: target.people[0] }),
+      expect.objectContaining({ recordId: target.companies[0] }),
+    ]))
     await expect(db.idempotencyReplay.findFirstOrThrow({
       where: { ...target.tenant, key: 'edge-link' },
     })).resolves.toMatchObject({ result })

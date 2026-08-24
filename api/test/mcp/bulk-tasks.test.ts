@@ -7,7 +7,7 @@ import {
   GetTaskResultSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
-import { applyTemplate } from '@deepcrm/schema-engine'
+import { applyTemplate, FakeEmbedder } from '@deepcrm/schema-engine'
 import { BulkAssertResult } from '@deepcrm/schemas'
 import { startWorker } from '@deepcrm/worker'
 import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
@@ -130,7 +130,7 @@ describe('bulk assert MCP Task', () => {
     const controller = new AbortController()
     const worker = startWorker(
       { ...deps, writeAudit, ids: () => crypto.randomUUID() },
-      createHandlers(recordAssert),
+      createHandlers(recordAssert, new FakeEmbedder('bulk-test-v1')),
       controller.signal,
     )
     const stored = await waitForJob(created.task.taskId)
