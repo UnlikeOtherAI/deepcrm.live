@@ -18,7 +18,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T20 — `/mcp` transport plugin and OAuth metadata route
+### T20 ✅ — `/mcp` transport plugin and OAuth metadata route
 
 **Depends on:** T19. **Spec:** `docs/mcp-surface.md` §0.1; `docs/auth-and-tenancy.md` §1; deepsignal `api/src/mcp-http.ts` (pattern).
 
