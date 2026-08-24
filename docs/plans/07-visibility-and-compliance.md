@@ -4,13 +4,24 @@ Outcome: the DeepSignal policy asks — round one **and the accepted round-two a
 
 Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surface.test.ts` (they are documented before they exist); T50–T53 remove them as they land; the phase ends with `NOT_YET = []` again.
 
-### T48 — Schema migration: visibility, suppression, origin, erase
+### T48 — Compliance schema verification and search-model index
 
-**Depends on:** T42. **Spec:** `docs/schema-engine.md` §2 — the full compliance block: `Visibility`, `SuppressionKind/Channel/Reason`, `RecordVisibilityGrant`, `SuppressionEntry` (channel, subReason, expiresAt), `PrincipalLastSeen`, `Record.visibility/createdOnBehalfOf/origin/erasedAt`, `Team.rejectedOrigins/requireOrigin/teamVisibilityOnlyApps`, `Webhook.subscribingUoaUserId`, the `registry_id` attribute type, `record_search_model` index, `PolicyAction.erase`, `PolicyResourceType.suppression`.
+**Depends on:** T42. **Spec:** `docs/schema-engine.md` §2. The immutable
+T03 init migration already contains `Visibility`, `SuppressionKind/Channel/Reason`,
+`RecordVisibilityGrant`, `SuppressionEntry`, `PrincipalLastSeen`, all record/team/
+webhook compliance columns, `registry_id`, `PolicyAction.erase`, and
+`PolicyResourceType.suppression`. T48 must not add or recreate those landed
+definitions. The only deferred database object is `record_search_model`.
 
 **Files:**
-- Edit `packages/db/prisma/schema.prisma` — apply exactly the §2 additions; new migration `visibility_compliance` (additive only; `lint:migrations` passes — no non-CONCURRENTLY indexes on the guarded tables outside init except none needed here).
-- Edit `packages/db/src/policy-defaults.json` — sync from `docs/spec/policy-defaults.json` (the `record.erase` and `suppression.*` rows).
+- Add one migration named `_record_search_model` containing only
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS record_search_model ON record_search
+  (embedding_model)`. Do not edit the immutable init
+  migration or generate duplicate compliance columns/enums/tables.
+- Verify `packages/db/prisma/schema.prisma` still matches the complete §2 block
+  and `packages/db/src/policy-defaults.json` is byte-equivalent to the normative
+  defaults, including `record.erase` and `suppression.*`; drift is a contract
+  failure, not a second compatibility copy.
 - Edit `scripts/lint-tenant-where.mjs` — add `recordVisibilityGrant`, `suppressionEntry` to the model list.
 - Edit `api/test/mcp/surface.test.ts` — add the six §7a tools to `NOT_YET`.
 - Backfill note: `records.created_on_behalf_of` is nullable; pre-existing rows (none in prod pre-launch) stay null and evaluate as `team`-visible only.
@@ -24,7 +35,12 @@ Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surf
 **Depends on:** T48. **Spec:** `docs/schema-engine.md` §4 step 1, §4c′; `docs/auth-and-tenancy.md` §4a.
 
 **Files:**
-- Create `packages/schema-engine/src/records/visibility.ts` — `canSee(ctx, record)` (pure); `visibilityWhere(ctx)` — the SQL fragment (`visibility = 'team' OR created_on_behalf_of = $ OR EXISTS (grant)`) composed into `compileQuery`, search, timeline, links-list, dedup-scan and `changesSince`.
+- Create `packages/schema-engine/src/records/visibility.ts` — `canSee(ctx, record)`
+  (pure) and the shared visibility/policy SQL builder extracted from T15's
+  `query/access.ts`. Update `query/compile.ts` to import the shared seam and
+  remove `query/access.ts`; query SQL and tests must remain byte-equivalent.
+  Compose the shared predicate into search, timeline, links-list, dedup-scan and
+  `changesSince` as those paths exist.
 - Edit `records/write.ts` — step 1 gate on every touched record (`NOT_FOUND` on fail); `visibility`/`visible_to` handling on create/update (grants diffed like links; `visible_to` implies `users`); merge requires all-visible, survivor keeps most-restrictive + union of grants; the owner-recovery path (widening an unseen record) is `record.edit` + approval with the owner bypassing only the *gate*, not redaction.
 - Edit `unique-keys.ts` / `matching` — `DUPLICATE_FOUND` against an invisible record returns the generic form (no id, no candidates).
 - Edit `api/src/mcp/tools/records.ts` — `visibility`, `visible_to`, `origin` arguments per contracts.
@@ -108,6 +124,6 @@ Tool bookkeeping: T48 adds the six §7a tools to `NOT_YET` in `api/test/mcp/surf
 
 **Depends on:** T55. **Spec:** `docs/auth-and-tenancy.md` §3 (searchQuery chokepoint); `docs/schema-engine.md` §5 (`contains` on multi actor/record refs), §7 (merge multi ordering — R3), §8 (embedding_model filter, content assembly order — R14); `docs/spec/contracts.md` (`CrmSearch.similar_to`).
 
-**Files:** `packages/schema-engine/src/search/query.ts` refactored so every raw SQL statement is composed by one audited `searchQuery()` interpolating `tenantWhere` + `visibilityWhere`; semantic queries filter `embedding_model = current`; `similar_to` nearest-neighbour mode; `compile.ts` gains `contains` on multi `actor_reference` (canonical element `@>`) and multi `record_reference` (via `linked_to`); merge planner implements survivor-first-append + wholesale `field_choices` override for multi; `buildSearchContent` implements the §8 assembly order incl. capped `rich_text`. Tests: the testing.md §5 cross-tenant adversarial test; mid-migration mixed models ⇒ only current-model rows rank; "records where actor X is in preferred_subowners" filter works; merged ranked list = survivor order + appended unseen.
+**Files:** `packages/schema-engine/src/search/query.ts` refactored so every raw SQL statement is composed by one audited `searchQuery()` interpolating `tenantWhere` + the T49 visibility/policy predicate; semantic queries filter `embedding_model = current`; `similar_to` nearest-neighbour mode; merge planner implements survivor-first-append + wholesale `field_choices` override for multi; `buildSearchContent` implements the §8 assembly order incl. capped `rich_text`. T15 already owns `contains` on multi `actor_reference` (canonical element `@>`) and multi `record_reference` (backing-link `EXISTS`); T56 reuses those compiler paths and does not redefine them. Tests: the testing.md §5 cross-tenant adversarial test; mid-migration mixed models ⇒ only current-model rows rank; "records where actor X is in preferred_subowners" filter still works through the unchanged T15 compiler; merged ranked list = survivor order + appended unseen.
 
 **Acceptance:** `pnpm verify` green; `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md`.

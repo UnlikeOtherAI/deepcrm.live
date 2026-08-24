@@ -32,6 +32,7 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 - Identity: UOA (`authentication.unlikeotherai.com` — its `/llm` guide is the contract source) is the sole authority. **No local user table.** Inbound calls carry a UOA token-exchange delegation (`sub` + `org` + `active` + `act`, verified via `/oauth/jwks.json`) so users never re-login; direct clients use UOA's public MCP OAuth profile. See [docs/spec/uoa-integration.md](docs/spec/uoa-integration.md). Actors are `(actorType ∈ human|agent|system, actorId)`.
 - Inbound MCP auth: bearer = product app key; `X-UOA-Delegation` = user/workspace resource token; `X-Nessie-Context` = RS256 provenance `{agentId, runId, toolCallId, requestId}`. Local dev with `REQUIRE_AUTH=false` serves a dev principal.
 - Embeddings: `EMBEDDING_DIMENSIONS = 1024` in `packages/schemas/src/embedding.ts` is the only place the width appears.
+- Query cursors are authenticated opaque AES-256-GCM envelopes. DeepCRM processes require the versioned `DEEPCRM_SECRET_KEYRING_B64` (`{active, keys}`); there is no unsigned or process-local cursor-key fallback.
 
 ## Ports — NON-NEGOTIABLE
 

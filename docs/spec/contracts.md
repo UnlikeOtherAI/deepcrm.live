@@ -227,7 +227,9 @@ export const TimelineItem = z.discriminatedUnion('kind', [
 ```ts
 export const FilterOp = z.enum(['eq','neq','in','not_in','is_null','is_not_null','contains',
   'starts_with','gt','gte','lt','lte','between'])
+  .describe('comparison operator; valid operators depend on the attribute or system-field type')
 export const SystemField = z.enum(['created_at','updated_at','last_activity_at','display_name','owner'])
+  .describe('read-only record field outside data')
 
 export type Filter =
   | { and: Filter[] } | { or: Filter[] } | { not: Filter }
@@ -237,20 +239,38 @@ export type Filter =
   | { text: string }
 
 export const Filter: z.ZodType<Filter> = z.lazy(() => z.union([
-  z.object({ and: z.array(Filter).min(1) }),
-  z.object({ or: z.array(Filter).min(1) }),
-  z.object({ not: Filter }),
-  z.object({ attribute: Slug, op: FilterOp, value: z.unknown().optional() }),
-  z.object({ system: SystemField, op: FilterOp, value: z.unknown().optional() }),
-  z.object({ linked_to: z.object({ relation: Slug, record_id: Uuid,
-    direction: z.enum(['from','to']).default('from') }) }),
-  z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }),
+  z.object({ and: z.array(Filter).min(1).describe('all child filters must match') }).strict(),
+  z.object({ or: z.array(Filter).min(1).describe('at least one child filter must match') }).strict(),
+  z.object({ not: Filter.describe('child filter whose result is inverted') }).strict(),
+  z.object({
+    attribute: Slug.describe('attribute slug on the selected object type'),
+    op: FilterOp.describe('operator valid for this attribute type'),
+    value: z.unknown().optional().describe('typed operand; omitted only for is_null/is_not_null'),
+  }).strict(),
+  z.object({
+    system: SystemField.describe('system field to compare'),
+    op: FilterOp.describe('operator valid for this system field'),
+    value: z.unknown().optional().describe('typed operand; omitted only for is_null/is_not_null'),
+  }).strict(),
+  z.object({ linked_to: z.object({
+    relation: Slug.describe('active relation type slug'),
+    record_id: Uuid.describe('record id at the requested end of the relation'),
+    direction: z.enum(['from','to']).default('from')
+      .describe('from matches selected records at the link source; to matches them at the target'),
+  }).strict().describe('match records joined to this record by an active link') }).strict(),
+  z.object({ text: z.string().min(1).max(200).describe('full-text match on the search document') }).strict(),
 ])).describe('structured filter; grammar + examples in resource crm://help/filtering. Caps: depth 8, 100 nodes, 16 KiB')
 
 export const Sort = z.array(z.object({
-  attribute: Slug.optional(), system: SystemField.optional(),
-  direction: z.enum(['asc','desc']).default('asc'),
-}).refine(s => !!s.attribute !== !!s.system, 'exactly one of attribute or system')).max(3)
+  attribute: Slug.optional().describe('sortable scalar attribute slug; mutually exclusive with system'),
+  system: SystemField.optional()
+    .describe('sortable system field except owner; mutually exclusive with attribute'),
+  direction: z.enum(['asc','desc']).default('asc').describe('sort direction; nulls are always last'),
+}).strict()
+  .refine(s => !!s.attribute !== !!s.system, 'exactly one of attribute or system')
+  .refine(s => s.system !== 'owner', 'owner is filter-only and cannot be sorted'))
+  .max(3).describe('ordered sort keys; defaults to created_at descending when omitted')
+export type Sort = z.infer<typeof Sort>
 ```
 
 Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
@@ -259,8 +279,14 @@ Op validity by type (enforced by the compiler; `VALIDATION_FAILED` otherwise):
 |---|---|
 | `is_null is_not_null` | all attributes; global null tests, not a type capability |
 | `eq neq in not_in` | every non-`json` type |
-| `contains starts_with` | text, email, url, domain, personal_name, select (multi), rich_text (contains only) |
+| `contains starts_with` | text, email, url, domain, registry_id, personal_name, select (multi); rich_text, multi actor_reference and multi record_reference support `contains` only |
 | `gt gte lt lte between` | number, currency (compares `amount`), percent, rating, date, datetime, timestamp_system, system timestamps |
+
+Multi `actor_reference` membership is canonical JSONB containment; multi
+`record_reference` membership is an active backing-link `EXISTS`, never a JSON
+projection lookup. Rich-text `contains` compiles to the full-text document; T32
+owns document materialisation, so T15 proves its SQL shape but does not claim
+populated full-text results.
 
 ## `tools.ts` — every tool's input and output
 

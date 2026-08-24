@@ -96,13 +96,142 @@ Outcome: object types, attributes, relation types, templates, records, links, hi
 **Depends on:** T14. **Spec:** `docs/schema-engine.md` §5.
 
 **Files:**
-- Create `packages/schemas/src/filter.ts` — copy from `docs/spec/contracts.md` (`filter.ts`).
-- Create `packages/schema-engine/src/query/compile.ts` — `compileQuery(schema, objectType, { filter, sort, cursor, limit })` → `{ sql: Prisma.Sql, countSql }` using `Prisma.sql` fragments: `data->>'slug'` with casts (`::numeric`, `::timestamptz`, `::date`, `::boolean`), `?` / `@>` for multi, `EXISTS (SELECT 1 FROM record_links …)` for `linked_to`, `tsv @@ plainto_tsquery('simple', $)` join for `text`; always `organization_id = $ AND team_id = $ AND object_type_id = $ AND deleted_at IS NULL AND merged_into_id IS NULL`; keyset pagination on `(sortValue, id)`; unsupported op for type ⇒ `VALIDATION_FAILED`.
-- Create `packages/schema-engine/src/query/run.ts` — `queryRecords(tx, tenant, schema, objectType, q)` → `{ records, next_cursor, total? }` (total only when `include_total`).
-- Edit `api/src/services/records.ts` — add `queryRecords` with policy view check + attribute redaction (`redactForActor` in `api/src/services/redact.ts`, create).
-- Tests: unit snapshot of generated SQL for the grammar example in §5; DB test with 30 seeded deals: stage `in`, amount `gte`, sort + cursor paging yields all 30 once.
+- Create `packages/schemas/src/filter.ts` by copying the complete `filter.ts`
+  contract block with its `z`, `Slug` and `Uuid` imports resolved; export it from
+  `packages/schemas/src/index.ts`. Create `packages/schemas/src/filter.test.ts`
+  for recursive parsing, every operator shape, defaults and described fields;
+  compiler tests own the structural caps.
+- Pull forward the general `packages/schemas/src/crypto/secret-box.ts` seam with
+  its focused unit test and root export: parse the versioned AES-256-GCM keyring
+  from `DEEPCRM_SECRET_KEYRING_B64`, and expose typed `seal`/`open` operations
+  with required purpose-bound authenticated additional data. T34 reuses this
+  landed primitive for webhook secrets rather than creating a second one.
+- Create `packages/schema-engine/src/query/access.ts` with the one T15 row-access
+  compiler from §5. It takes `tenant: TenantRef` and `ctx: ActorContext`
+  explicitly, rejects a mismatched pair, and returns a `Prisma.Sql` CTE predicate
+  covering tenant, live/unmerged state, record visibility and exact row-scoped
+  `record.view` policy for human/role/agent channels. Both page and count consume
+  this seam. T49 extracts the general visibility/policy pieces from here for the
+  other read paths; it must not change query semantics.
+- Create `packages/schema-engine/src/query/compile.ts`. Export
+  `QueryCursorState = { values: readonly { isNull: boolean; value: JsonValue }[];
+  id: string }` and `QueryInput` with `filter`, `sort`,
+  `after?: QueryCursorState`, `limit`, and `includeTotal`. The API authenticates
+  and decodes the external cursor before this boundary. Export the exact compiler signature
+  `compileQuery(tenant: TenantRef, ctx: ActorContext, schema: LoadedSchema,
+  objectType: LoadedObjectType, input: QueryInput):
+  { sql: Prisma.Sql; countSql: Prisma.Sql }`. Implement every §5 arity, cap,
+  canonical value, system/object/currency/multi/reference SQL rule, the exact
+  row-access CTE, up to three lexicographic sort keys, explicit null ordering,
+  id tie-breaker and bound cursor. Values stay Prisma parameters; only slugs
+  resolved from `LoadedSchema` may select a quoted expression.
+- Create `packages/schema-engine/src/query/run.ts`. Export
+  `QueryTx = Pick<Db, '$queryRaw' | 'recordLink'>`, `QueryRecord`, `QueryPage`, and
+  `queryRecords(tx: QueryTx, tenant: TenantRef, ctx: ActorContext,
+  schema: LoadedSchema, objectType: LoadedObjectType,
+  input: QueryInput): Promise<QueryPage>`.
+  `QueryPage` returns `next: QueryCursorState | null`, never an unauthenticated
+  cursor string. Fetch `limit + 1`, execute `countSql` only for `includeTotal`, and batch-load
+  active outgoing projection links for the page before calling T14
+  `projectLinksIntoData`; no N+1. Export the public query types/functions from
+  `packages/schema-engine/src/index.ts` without adding a compatibility path.
+- Create `packages/schema-engine/test/query-compile.test.ts` and
+  `packages/schema-engine/test/db/query-run.test.ts`. The unit suite snapshots
+  the corrected §5 example and asserts typed SQL/arity/caps/cursor failures. The
+  DB suite uses `applyTemplate(standard_crm)`, never hand-written metadata, and
+  covers the matrix below.
+- Create `api/src/services/record-query.ts`; do not grow the already-481-line
+  `api/src/services/records.ts`. Export
+  `queryRecords(deps, ctx, { objectType, filter?, sort?, attributes?,
+  includeTotal?, cursor?, limit? })`. It preauthorises object/team `record.view`
+  and every filter/sort attribute's `attribute.view` before engine SQL; a denial
+  writes exactly one denied audit. It loads one page policy evaluator, calls the
+  query-cursor codec to authenticate/decode `cursor`, passes only decoded state
+  to the engine, seals `QueryPage.next`, builds a record×attribute access matrix
+  in memory (including record-scoped attribute rules), then applies output
+  projection only through the shared redactor.
+- Create `api/src/services/query-cursor.ts` with
+  `QueryCursorCodec.seal(state, binding)` and `open(cursor, binding)`. It uses the
+  shared secret box with purpose/AAD `deepcrm.query-cursor.v1`; `binding` is the
+  tool, tenant pair, and canonical full arguments excluding cursor. It maps every
+  malformed envelope, unknown `kid`, authentication failure, binding mismatch or
+  decoded tuple/type mismatch to `VALIDATION_FAILED
+  {detail: 'cursor_mismatch'}` before engine SQL. There is no unsigned or
+  process-local fallback; tests flip ciphertext, tag, binding and `kid`.
+- Edit `api/src/env.ts`, `api/src/deps.ts` and `.env.example` so the versioned
+  `DEEPCRM_SECRET_KEYRING_B64` is parsed once, fail-closed, and a required
+  `queryCursor` codec is present in `AppDeps`. Mechanically add an injected test
+  codec/keyring to `api/test/health.test.ts`, `api/test/db/tenancy.test.ts`,
+  `api/test/db/records-service.test.ts`, `api/test/db/records-security.test.ts`,
+  `api/test/db/schema-service.test.ts`, and `api/test/db/link-fixture.ts`; do not
+  make cursor security optional to avoid fixture edits.
+- Edit `api/src/services/policy.ts` to export
+  `loadPolicyEvaluator(db, ctx, requests): Promise<PolicyEvaluator>`. One
+  tenant-scoped query loads all relevant rules and bindings; the returned pure
+  evaluator applies the existing deny/priority/human+agent semantics to any
+  supplied scope chain. Refactor `checkPolicy` to delegate to the same evaluator,
+  so query redaction does not fork policy logic.
+- Create `api/src/services/redact.ts` with the one pure page seam
+  `buildRedactionMatrix(evaluator, ctx, schema, records,
+  requestedAttributes?)` and pure per-record
+  `redactForActor(ctx, schema, record, matrix, requestedAttributes?)` serialiser.
+  The matrix evaluates current per-record attribute-view policy without another
+  DB call; the serialiser removes denied values, returns sorted
+  `redacted_attributes`, preserves projected T14 references, and produces the
+  full record output shape without raw snapshots.
+  Create `api/test/db/record-query.test.ts` and
+  `api/test/db/record-query-security.test.ts` for service shape, projection,
+  policy, visibility and inference resistance.
 
-**Acceptance:** tests green.
+**Required automated matrix:** two tenants with the same object/value data never
+cross-read; team/private/users+grant visibility; human/role/agent record-policy
+composition including a row-scoped deny; restricted output omitted and named;
+denied filter/sort attribute produces one audit and no query; 30 deals with
+`stage in` + fixed-currency `amount gte`; scalar casts and canonical JSONB
+equality; active `linked_to` in both directions; scalar/multi projected reference
+output; multi actor/reference `contains`; deleted/merged exclusion; all invalid
+arity/type/archive/scope/depth/node/byte cases; three-key mixed-direction paging
+with ties/nulls and no duplicates/skips; explicit system-owner sort rejection;
+cursor mismatch for tool/tenant/object/filter/sort/attributes/include-total/limit
+and for tampered ciphertext/tag/`kid`; total present only when requested and
+computed over the same accessible filtered set, including zero rows. Rich-text
+contains has a compiler assertion only; T32 owns populated TSV rows. Instrument
+the DB seam to prove policy evaluation uses one rules query per page and remains
+constant as rows and attributes grow; link projection is also one batch query.
+
+**Manual module gate (T15 has no HTTP/MCP endpoint):** with the local documented
+database, a temporary external TS harness calls the API service for two exact
+temporary tenants, walks the 30-deal result in pages of seven, exercises one
+visibility grant and one redacted attribute, and prints one compact JSON object
+containing `unique_ids:30`, `tenant_leaks:0`, `total:30`,
+`cursor_mismatch:"VALIDATION_FAILED"`, `private_hidden:true`, and the redacted
+slug. It deletes only those exact organisations and the temporary file. The
+`crm_records_query` end-to-end tool gate remains T23; `crm_records_count` remains
+T31.
+
+**Safe parallel ownership:** one schemas builder owns only `packages/schemas`
+filter/secret-box files, tests and its root export; one engine builder owns only
+`packages/schema-engine` query files, tests and its root export; one API builder
+owns only the API service/env/deps files and API tests/fixtures listed above.
+Only the API builder touches `policy.ts` or AppDeps fixtures. Integrate schemas
+first, then engine, then API gates; no builder edits another owner's files.
+
+**Acceptance:** with the documented `DATABASE_URL`, run exactly
+the commands below. The manual module gate above, `pnpm verify`, and
+`git diff --check` must also pass.
+
+```bash
+pnpm --filter @deepcrm/schemas build
+pnpm --filter @deepcrm/schemas lint
+pnpm --filter @deepcrm/schemas typecheck
+pnpm exec turbo run test --filter=@deepcrm/schemas
+pnpm --filter @deepcrm/schema-engine lint
+pnpm --filter @deepcrm/schema-engine typecheck
+pnpm exec turbo run test --filter=@deepcrm/schema-engine
+pnpm --filter @deepcrm/api lint
+pnpm --filter @deepcrm/api typecheck
+pnpm exec turbo run test --filter=@deepcrm/api
+```
 
 ---
 

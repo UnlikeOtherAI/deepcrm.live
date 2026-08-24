@@ -967,24 +967,161 @@ Intent semantics per §4 step 3: an omitted key produces **no intent** (existing
 
 Every `record_reference` attribute owns exactly one backing `RelationType` (never shares one). Scalar references back a `many_to_one` relation; multi (`is_multi: true`) references back a `many_to_many` relation. `config.objectTypes` with exactly one slug sets the relation's `to_object_type_id` to that type; multiple slugs (open target) store `to_object_type_id = null`, and validation of the submitted target ids against `config.objectTypes` is config enforcement in the write path (§4 steps 3/5), not a schema constraint. When `config.relationTypeSlug` is supplied it must name an existing relation whose `cardinality`, `from_object_type_id` (this object type), `to_object_type_id` and `projection_attribute_slug` (this attribute's slug, or unset) are all compatible with the attribute — any mismatch is `SCHEMA_CONFLICT`. A compatible supplied relation with an unset `projection_attribute_slug` is atomically claimed by setting it to this attribute slug; one already claimed by another attribute is `SCHEMA_CONFLICT`. When absent, the relation is created with slug `<objectType>_<attr>` (T10).
 
-## 5. Query grammar — `compileFilter(schema, filter) → Prisma where + raw SQL fragments`
+## 5. Query grammar — tenant-, principal- and policy-bound SQL
 
 ```json
 { "and": [
     { "attribute": "stage", "op": "in", "value": ["qualified", "proposal"] },
     { "attribute": "amount", "op": "gte", "value": 10000 },
     { "or": [
-        { "attribute": "owner", "op": "eq", "value": { "type": "human", "id": "usr_1" } },
+        { "system": "owner", "op": "eq", "value": { "type": "human", "id": "usr_1" } },
         { "attribute": "tags", "op": "contains", "value": "enterprise" }
     ]},
     { "not": { "attribute": "close_date", "op": "is_null" } },
-    { "linked_to": { "relation": "deal_for_company", "record_id": "…", "direction": "from" } },
+    { "linked_to": { "relation": "deal_for_company", "record_id": "018f2e65-7a7b-7d2f-8c4d-111111111111", "direction": "from" } },
     { "system": "last_activity_at", "op": "lt", "value": "2026-07-01T00:00:00Z" },
     { "text": "packaging" }
 ]}
 ```
 
-Ops by type: `eq neq in not_in is_null is_not_null` (all); `contains starts_with` (text, email, url, domain, registry_id, personal_name, select-multi); `contains` additionally on **multi `actor_reference`** (matches one canonicalised `{type, id}` element — "records where I am a preferred subowner"; R4) and on multi `record_reference` (compiled as `linked_to` over the backing relation); `gt gte lt lte between` (number, currency.amount, percent, rating, date, datetime, timestamp_system). `text` = full-text on `record_search.tsv`. Sort: `[{attribute|system, direction}]`, max 3 keys. Pagination: opaque cursor = base64 of the last sort values + id, **bound to (tool, tenant, full argument set)** — a mismatched cursor is `VALIDATION_FAILED {detail: "cursor_mismatch"}`; `limit` 1–200 (default 50). Filters are capped at depth 8, 100 nodes, 16 KiB serialized. Object-valued attributes (`actor_reference`, `currency`, `location`, `personal_name`) compare with JSONB equality (`data->slug = $::jsonb`) against values canonicalised at write (fixed key order), never `->>` text comparison. A filter on a `record_reference` attribute compiles to an `EXISTS` over `record_links` (§4a). Attribute values are read as `data->>slug` with casts per type; indexed attributes use expression indexes named `idx_records_<first 8 hex of the attribute id>` (stable, unique, inside the 63-byte identifier limit) `ON records ((data->>'slug')) WHERE object_type_id = '…'`, created by the worker job `attribute.index` when `isIndexed` is set — the one exception to "no DDL": `CONCURRENTLY`, idempotent, and the job first drops any `INVALID` index of that name (a crashed build). A `record_reference` with `isIndexed` is the exception: it is link-backed metadata satisfied by the existing `record_links` indexes and `EXISTS` filtering, so it creates no `records.data` expression index and no `attribute.index` DDL job. Unsetting `isIndexed` or archiving an expression-indexed attribute runs `DROP INDEX CONCURRENTLY`. Indexed attributes are capped per tenant (`LIMIT_EXCEEDED`).
+### 5.1 One row-access relation for data and totals
+
+`compileQuery` takes the explicit local tenant pair and the full `ActorContext`;
+neither ambient request state nor `LoadedSchema.teamId` is tenancy authority. It
+first builds one `row_access` CTE and both the page query and total query read that
+same relation. The CTE always requires:
+
+1. exact `organization_id`, `team_id` and `object_type_id` equality;
+2. `deleted_at IS NULL` and `merged_into_id IS NULL`;
+3. record visibility before policy: `team`, or creator equality for the acting
+   UOA human, or `users` plus an `EXISTS` grant for that human; and
+4. `record.view` policy over the row's `[record, object_type, team]` scope chain.
+
+Policy evaluation in SQL is byte-for-byte equivalent to `checkPolicy`: human and
+role bindings form the human channel; an agent call also requires its namespaced
+`agent:<app>:<agentId>` channel; a deny in either channel is absolute; otherwise
+the highest-priority matching allow decides. A direct human with no matching
+`view` rule uses the documented allow fallback. An agent has no standing
+fallback: both its human/role channel and its agent channel must allow.
+Any decision with `requiresApproval` is not readable, including a winning allow
+that carries approval. At object/team or filter/sort preauthorisation this returns
+`APPROVAL_REQUIRED` before data SQL and writes the one denied audit; at a
+row-scoped decision it omits that row without a per-row audit. Broad
+queries omit rows that fail row access without producing a per-row audit. A
+top-level query denial (the caller cannot view the requested object/team at all)
+or a denied filter/sort attribute writes exactly one `outcome: denied` audit in a
+short transaction and returns `POLICY_DENIED` or `APPROVAL_REQUIRED`; it never
+runs the data SQL. An allowed query with no visible rows returns
+`{records: [], total: 0}` rather than `NOT_FOUND`.
+
+Filter and sort attributes are resolved against the selected active object type
+before SQL is assembled. The service preauthorises `attribute.view` for every
+filter/sort attribute, including its current sensitivity; the row-access relation
+also applies any record-scoped attribute rule so ordering, membership and totals
+cannot become a value oracle. Output projection is applied only after the same
+per-record `redactForActor` pass used by all record serialisation. T15 keeps the
+row-access builder as one auditable query seam; T49 extracts and reuses that exact
+seam for get/history/links/search/feed without changing query semantics.
+
+### 5.2 Operators and typed SQL
+
+After the Zod shape parses, the compiler enforces depth ≤ 8, total filter nodes
+≤ 100, and canonical UTF-8 JSON size ≤ 16 KiB. `and`/`or` are non-empty and
+`not` has exactly one child. `is_null`/`is_not_null` accept no `value`;
+`eq`/`neq`/`contains`/`starts_with`/`gt`/`gte`/`lt`/`lte` accept exactly one
+typed value; `in`/`not_in` accept 1–100 typed values; and `between` accepts
+exactly `[low, high]` of one scalar type with `low ≤ high`. An invalid arity,
+value, object scope, archived/unknown slug or unsupported operator is
+`VALIDATION_FAILED` with an issue naming the valid operators; no user value is
+ever interpolated as an identifier.
+
+`eq neq in not_in` apply to every non-`json` attribute, with whole-array JSONB
+equality for a multi value. Global `is_null`/`is_not_null` apply to every type;
+for stored attributes null means key absence, and for a `record_reference` it
+means absence of an active backing link. Textual scalar
+`text/email/url/domain/registry_id/personal_name` values support
+`contains starts_with`; multi textual values use exact canonical element
+membership for `contains` and an element prefix for `starts_with`. Multi-select
+supports canonical option membership/prefix. `rich_text` supports `contains`
+only and compiles to the record-search TSV expression, never raw Markdown SQL.
+Multi `actor_reference` `contains` uses one canonical `{type,id}` JSONB element;
+multi `record_reference` `contains` uses the active backing-link `EXISTS` path.
+A standalone `{text}` node and rich-text `contains` both use
+`record_search.tsv @@ plainto_tsquery('simple', $value)` through a tenant- and
+object-scoped record-search join. T32 owns search-document materialisation; until
+then T15 proves these compiler paths but does not claim populated full-text
+results.
+
+Ordered comparisons apply only to scalar `number`, `percent`, `rating`, `date`,
+`datetime`, and `timestamp_system`. Currency ordered comparisons read
+`(data->slug->>'amount')::numeric`, accept a canonical decimal operand, and
+require `fixedCurrency`; otherwise amounts of unlike currencies are not
+comparable and the filter is `VALIDATION_FAILED`. Number uses `::numeric`,
+percent/rating use their numeric JSON values, date uses `::date`, datetime and
+system timestamps use `::timestamptz`, and boolean uses `::boolean`. Canonical
+object equality for `actor_reference`, `currency`, `location` and
+`personal_name` is `data->slug = $::jsonb`, never text comparison. System owner
+equality compares the canonical `{type,id}` pair against `owner_type/owner_id`;
+display name uses text operators; created/updated/last-activity use timestamp
+operators. `timestamp_system` resolves its configured source column and is never
+read from `data`.
+
+Every `record_reference` predicate is compiled against active, tenant-scoped
+`record_links` for the attribute's one backing relation: equality/inclusion use
+`EXISTS`, negative predicates use `NOT EXISTS`, and null predicates test link
+absence. The standalone `linked_to` node validates an active relation and both
+tenant columns; `direction: from` places the selected record at the link source,
+and `to` at the target. Indexed reference attributes use these existing link
+indexes and never create a `records.data` expression index.
+
+### 5.3 Sorts, cursors and result assembly
+
+Sort accepts at most three distinct keys. Omitted sort means
+`created_at DESC, id DESC`. Multi, JSON, record-reference and object-valued
+attributes are not sortable; currency is sortable by amount only when fixed.
+Sortable system fields are exactly `created_at`, `updated_at`,
+`last_activity_at`, and `display_name`; system `owner` is filter-only and a sort
+request for it is `VALIDATION_FAILED`. Every requested key uses explicit
+`NULLS LAST` in either direction, followed by
+`id` in the last requested key's direction (descending for the default). The
+keyset predicate is the lexicographic expansion of all requested
+`(is_null, typed_value)` pairs plus id, so ties and nulls neither duplicate nor
+skip rows. Rows are fetched at `limit + 1` (`limit` 1–200, default 50); the extra
+row determines `next_cursor` and is not returned.
+
+The cursor is an authenticated opaque AES-256-GCM envelope produced by the API's
+single query-cursor codec. Its encrypted canonical payload contains the typed
+sort tuples and id; authenticated additional data binds the format version, tool
+name, tenant pair, and canonical full argument set excluding only `cursor`
+(object type, normalized filter, defaulted sort, projected attributes,
+`include_total`, and limit). The versioned keyring is
+`DEEPCRM_SECRET_KEYRING_B64`; the envelope records its `kid`, encryption uses the
+active key, and decoding accepts retained rotation keys. Any malformed envelope,
+unknown key, failed authentication, tuple/type mismatch or binding mismatch is
+`VALIDATION_FAILED {detail: "cursor_mismatch"}` before SQL. There is no unsigned
+or process-local fallback. Changing a bound argument cannot continue a prior
+page, and a client cannot read or alter the position. `total` is returned only
+when requested and counts the full row-access plus filter relation without the
+cursor predicate; an empty page still reports zero.
+
+The keyring environment value is base64 of UTF-8 JSON
+`{"active":"kid","keys":{"kid":"base64-32-byte-key"}}`; every decoded key is
+exactly 32 bytes, `active` must exist in `keys`, and malformed/missing
+configuration fails startup. Cursor plaintext, keys and raw arguments are never
+logged.
+
+T14 reference values are not stored in `records.data`. `queryRecords` therefore
+batch-loads active outgoing backing links for all page ids, calls
+`projectLinksIntoData` per record, overlays only those reference attributes, and
+then applies redaction and the optional output projection. The API loads all
+relevant attribute-view rules/bindings once per page through the shared policy
+evaluator, computes a record×attribute access matrix in memory (including
+record-scoped rules), and passes that matrix to the pure serialiser. Neither link
+projection nor policy redaction performs an N+1 query; a query-count regression
+test holds both DB query counts constant as page rows/attributes increase.
+Expression indexes for ordinary indexed attributes keep the
+stable `idx_records_<first 8 hex of attribute id>` naming and lifecycle described
+in §3a.
 
 ## 6. Matching rules
 

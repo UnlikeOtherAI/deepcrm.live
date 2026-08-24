@@ -94,7 +94,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 **Files:**
 - Create `packages/schemas/src/net/safe-fetch.ts` — port of nessie's guard using `undici` (dep added in T01): resolve host, reject private/loopback/link-local ranges, pin via `Agent` `connect.lookup`, refuse redirects, port 443 only, no userinfo; re-validated on **every delivery attempt**. Unit tests with a fake resolver.
-- Create `packages/schemas/src/crypto/secret-box.ts` — AES-256-GCM with keyring from `DEEPCRM_SECRET_KEYRING_B64` (`{ active: kid, keys: { kid: base64 } }`), `seal`/`open`.
+- Reuse T15's `packages/schemas/src/crypto/secret-box.ts` AES-256-GCM keyring seam; do not create a webhook-only crypto implementation. Webhook ciphertext uses its own purpose-bound authenticated additional data.
 - Create `api/src/services/webhooks.ts` — set (upsert by URL; `rotate_secret` mints anew; **new webhooks start at the current max seq**; owner + approval per policy)/list/delete; secret generated server-side, sealed with a `kid`-versioned keyring, returned once flagged as secret material.
 - Create `worker/src/jobs/change-deliver.ts` — per active webhook (advisory lock namespace 4): select changes `seq > last_delivered_seq` (≤ 500/batch, ≤ 10 batches/run, `backlog_remaining` in the envelope), POST via `safeFetch` with the HMAC signature from `docs/spec/events.md` **§3**, on 2xx advance `last_delivered_seq`, else retry per the §3 backoff table then `active=false` + `last_error`. Register. The `change.deliver` enqueue exists since T13 (§4 step 14).
 - Tools `crm_webhook_set/list/delete` (admin policy).

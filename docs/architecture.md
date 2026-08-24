@@ -128,7 +128,7 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 | `UOA_BASE_URL` | `https://authentication.unlikeotherai.com` | delegation issuer; JWKS at `${UOA_BASE_URL}/oauth/jwks.json` |
 | `DEEPCRM_DIRECT_CLIENTS` | `false` | accept UOA public-profile OAuth tokens (no app key) |
 | `DEEPCRM_UOA_CONFIG_PRIVATE_KEY_B64`, `DEEPCRM_UOA_CLIENT_SECRET` | — | DeepCRM's own UOA registration, outbound-only (chained Ledger attribution) |
-| `DEEPCRM_SECRET_KEYRING_B64` | — | AES-256-GCM keyring for webhook secrets |
+| `DEEPCRM_SECRET_KEYRING_B64` | — | required versioned AES-256-GCM keyring (`{active, keys}`) for authenticated opaque query cursors and purpose-separated sealed material (webhooks/MRTR/exports as those tasks land) |
 | `LEDGER_PUBLIC_URL`, `LEDGER_PROXY_TOKEN` | — | embeddings via Ledger `/v1/jina` |
 | `DEEPCRM_EMBEDDING_MODEL` | `jina-embeddings-v3` | |
 | `DEEPCRM_MAX_BULK_ROWS` | `10000` | bulk assert cap (mirrored in the tool schema) |
