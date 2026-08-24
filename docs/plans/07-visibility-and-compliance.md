@@ -73,7 +73,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T52 — Erasure
+### T52 ✅ — Erasure
 
 **Depends on:** T51. **Spec:** `docs/schema-engine.md` §4d; `docs/auth-and-tenancy.md` §5 (erasure beats history).
 
