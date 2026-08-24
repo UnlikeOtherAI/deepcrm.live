@@ -1,36 +1,10 @@
 import { Prisma, tenantWhere, type TenantRef, writeAudit } from '@deepcrm/db'
 import { AttributeSpec, ErrorCode, ServiceError, type AttributeSpec as AttributeSpecValue } from '@deepcrm/schemas'
 import { getAttributeType } from '../attribute-types/index.js'
+import type { AttributeInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
 import type { SchemaTx } from './tx.js'
 type Tx = SchemaTx
-export type AuditActor = {
-  type: 'human' | 'agent' | 'system'
-  id: string
-  onBehalfOf: string | null
-  requestId: string
-}
-export type ObjectInput = {
-  slug: string
-  singularName: string
-  pluralName: string
-  description: string
-  icon?: string
-  kind?: 'system' | 'standard' | 'custom'
-  primaryAttribute?: string
-}
-export type AttributeInput = AttributeSpecValue & { objectType: string; isSystem?: boolean }
-export type RelationInput = {
-  slug: string
-  fromObjectType: string | null
-  toObjectType: string | null
-  forwardName: string
-  inverseName: string
-  description?: string
-  cardinality: 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
-  onDelete?: 'unlink' | 'cascade' | 'restrict'
-  edgeAttributes?: AttributeSpecValue[]
-  isSystem?: boolean
-}
+export type { AttributeInput, AuditActor, ObjectInput, RelationInput } from './mutation-types.js'
 type RelationUpdateInput = Partial<Omit<RelationInput, 'slug' | 'fromObjectType' | 'toObjectType'>>
 type StoredJsonValue = Prisma.InputJsonValue | typeof Prisma.JsonNull
 
