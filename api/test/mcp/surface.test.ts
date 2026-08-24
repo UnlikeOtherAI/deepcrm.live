@@ -2,9 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestServer } from './harness.js'
 
-const NOT_YET = [
-  'crm_record_erase',
-]
+const NOT_YET: string[] = []
 
 function numberedSection(markdown: string, section: number): string {
   const start = new RegExp(`^## ${section}\\.\\s`, 'm').exec(markdown)

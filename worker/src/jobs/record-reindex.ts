@@ -11,11 +11,16 @@ import { z } from 'zod'
 import type { JobHandler, JobHandlerInput } from '../index.js'
 
 export const RECORD_REINDEX_JOB = 'record.reindex'
+export const RECORD_REINDEX_NEIGHBOURS_JOB = 'record.reindex_neighbours'
 
 const RecordReindexPayload = z.object({
   organizationId: z.string().uuid(),
   teamId: z.string().uuid(),
   recordId: z.string().uuid(),
+}).strict()
+
+const RecordReindexNeighboursPayload = RecordReindexPayload.extend({
+  neighbourRecordIds: z.array(z.string().uuid()).max(500),
 }).strict()
 
 function recordData(value: unknown): Record<string, unknown> {
@@ -160,5 +165,25 @@ export function createRecordReindexHandler(embedder: Embedder): JobHandler {
     const embedding = embeddings[0]
     if (embedding === undefined) throw new Error('Embedding response is empty')
     await storeEmbedding(input, payload, embedder, content, embedding)
+  }
+}
+
+export function createRecordReindexNeighboursHandler(): JobHandler {
+  return async (input) => {
+    const payload = RecordReindexNeighboursPayload.parse(input.job.payload)
+    if (payload.organizationId !== input.job.organizationId || payload.teamId !== input.job.teamId) {
+      throw new Error('record.reindex_neighbours tenant payload mismatch')
+    }
+    for (const recordId of [...new Set(payload.neighbourRecordIds)].sort()) {
+      await input.db.queueJob.create({
+        data: {
+          ...tenantWhere(payload),
+          type: RECORD_REINDEX_JOB,
+          priority: 100,
+          payload: { organizationId: payload.organizationId, teamId: payload.teamId, recordId },
+          idempotencyKey: `reindex:${recordId}:neighbour:${input.job.id}`,
+        },
+      })
+    }
   }
 }

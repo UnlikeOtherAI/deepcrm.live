@@ -147,6 +147,7 @@ function eventName(row: ChangeRow, record: FeedRecord | undefined): FeedChangeVa
     case 'unmerge': return 'record.updated'
     case 'delete': return 'record.deleted'
     case 'merge': return record?.mergedIntoId === null ? 'record.merged' : 'record.deleted'
+    case 'erase': return 'record.erased'
     case 'link': return 'link.created'
     case 'unlink': return 'link.ended'
     case 'schema_change': return 'schema.changed'

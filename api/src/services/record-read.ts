@@ -165,6 +165,13 @@ async function visibleRecord(
   deps: AppDeps, ctx: ActorContext, id: string,
 ): Promise<{ record: QueryRecord; redirectedFrom?: string }> {
   const resolved = await resolveVisibleRecord(deps.db, ctx, id)
+  const state = await deps.db.record.findFirst({
+    where: { ...tenantWhere(ctx.tenant), id: resolved.record.id },
+    select: { erasedAt: true },
+  })
+  if (state?.erasedAt !== null && state?.erasedAt !== undefined) {
+    throw new ServiceError(ErrorCode.ERASED, 'Record has been erased')
+  }
   const row = await deps.db.record.findFirst({
     where: {
       ...tenantWhere(ctx.tenant), id: resolved.record.id,

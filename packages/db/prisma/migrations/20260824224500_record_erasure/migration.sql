@@ -1,0 +1,1 @@
+ALTER TYPE "ChangeKind" ADD VALUE IF NOT EXISTS 'erase';

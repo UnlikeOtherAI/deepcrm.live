@@ -74,9 +74,13 @@ export function createRetentionHandler(config: RetentionConfig): JobHandler {
     await pruneExportFiles(config.exportDir, new Date(now.getTime() - HOUR_MS))
     const recordCutoff = new Date(now.getTime() - config.retentionDays * DAY_MS)
     const replayCutoff = new Date(now.getTime() - DAY_MS)
+    const completedJobCutoff = new Date(now.getTime() - 7 * DAY_MS)
+    const approvalCutoff = new Date(now.getTime() - 30 * DAY_MS)
     await input.db.$transaction(async (tx) => {
-      await tx.$executeRaw`DELETE FROM records WHERE deleted_at < ${recordCutoff}`
+      await tx.$executeRaw`DELETE FROM records WHERE deleted_at < ${recordCutoff} AND erased_at IS NULL`
       await tx.$executeRaw`DELETE FROM idempotency_replays WHERE created_at < ${replayCutoff}`
+      await tx.$executeRaw`DELETE FROM queue_jobs WHERE status = 'completed' AND updated_at < ${completedJobCutoff}`
+      await tx.$executeRaw`DELETE FROM approval_requests WHERE expires_at < ${approvalCutoff}`
       await scheduleRetention(tx, new Date(now.getTime() + DAY_MS))
     })
   }

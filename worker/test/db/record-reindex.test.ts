@@ -16,7 +16,12 @@ import {
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { JobHandlerInput } from '../../src/index.js'
-import { createRecordReindexHandler, RECORD_REINDEX_JOB } from '../../src/jobs/record-reindex.js'
+import {
+  createRecordReindexHandler,
+  createRecordReindexNeighboursHandler,
+  RECORD_REINDEX_JOB,
+  RECORD_REINDEX_NEIGHBOURS_JOB,
+} from '../../src/jobs/record-reindex.js'
 
 const databaseUrl = process.env.DATABASE_URL
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for record reindex tests')
@@ -176,5 +181,49 @@ describe('record reindex worker', () => {
     }
     await expect(createRecordReindexHandler(new FakeEmbedder())(mismatched))
       .rejects.toThrow('record.reindex tenant payload mismatch')
+  })
+
+  it('fans neighbour reindex jobs out to exact record.reindex tasks', async () => {
+    const target = await fixture()
+    const sourceId = crypto.randomUUID()
+    const neighbourJob = await enqueue(db, {
+      organizationId: target.tenant.organizationId,
+      teamId: target.tenant.teamId,
+      type: RECORD_REINDEX_NEIGHBOURS_JOB,
+      payload: {
+        ...target.tenant,
+        recordId: sourceId,
+        neighbourRecordIds: [target.company.id, target.company.id, target.person.id],
+      },
+      idempotencyKey: `reindex-neighbours-test:${sourceId}`,
+    })
+    const running = await db.queueJob.update({
+      where: { id: neighbourJob.id },
+      data: { status: 'running', lockedBy: 'neighbour-worker', lockedAt: now, attempts: { increment: 1 } },
+    })
+    await createRecordReindexNeighboursHandler()({
+      db,
+      job: running,
+      workerId: 'neighbour-worker',
+      clock: () => now,
+      writeAudit,
+      progress: (value: Prisma.InputJsonValue) => progress(db, running.id, 'neighbour-worker', value),
+      terminalize: (tx, result) => complete(tx, running.id, 'neighbour-worker', result),
+    })
+    const jobs = await db.queueJob.findMany({
+      where: {
+        organizationId: target.tenant.organizationId,
+        teamId: target.tenant.teamId,
+        type: RECORD_REINDEX_JOB,
+        idempotencyKey: { contains: `:neighbour:${running.id}` },
+      },
+    })
+    const payloads = jobs.map((job) => job.payload)
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    expect(jobs).toHaveLength(2)
+    expect(payloads).toEqual([
+      { ...target.tenant, recordId: target.company.id },
+      { ...target.tenant, recordId: target.person.id },
+    ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))
   })
 })

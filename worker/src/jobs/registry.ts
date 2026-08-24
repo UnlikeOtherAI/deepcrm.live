@@ -8,7 +8,12 @@ import { BULK_EXPORT_JOB, createBulkExportHandler, type BulkExportConfig } from 
 import { CHANGE_DELIVER_JOB, createChangeDeliverHandler } from './change-deliver.js'
 import { MATCH_KEY_BACKFILL_JOB, matchKeyBackfillHandler } from './match-key-backfill.js'
 import { noop } from './noop.js'
-import { createRecordReindexHandler, RECORD_REINDEX_JOB } from './record-reindex.js'
+import {
+  createRecordReindexHandler,
+  createRecordReindexNeighboursHandler,
+  RECORD_REINDEX_JOB,
+  RECORD_REINDEX_NEIGHBOURS_JOB,
+} from './record-reindex.js'
 import { createDedupScanHandler, DEDUP_SCAN_JOB } from './dedup-scan.js'
 import { createRetentionHandler, RETENTION_JOB, type RetentionConfig } from './retention.js'
 
@@ -30,6 +35,7 @@ export function createHandlers(
     ...handlers,
     [BULK_ASSERT_JOB]: createBulkAssertHandler(recordAssert),
     [RECORD_REINDEX_JOB]: createRecordReindexHandler(embedder),
+    [RECORD_REINDEX_NEIGHBOURS_JOB]: createRecordReindexNeighboursHandler(),
     [CHANGE_DELIVER_JOB]: createChangeDeliverHandler(secretBox, createSafeFetch()),
     [DEDUP_SCAN_JOB]: createDedupScanHandler(),
     [BULK_EXPORT_JOB]: createBulkExportHandler(exportPage, secretBox, config),

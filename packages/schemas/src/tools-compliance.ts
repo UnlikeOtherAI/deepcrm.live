@@ -4,6 +4,7 @@ import { Cursor, IsoDateTime, Limit, Slug } from './primitives.js'
 export const SuppressionKind = z.enum(['email', 'phone', 'domain', 'company_number', 'postal'])
 export const SuppressionChannel = z.enum(['all', 'email', 'phone_call', 'sms', 'post'])
 export const SuppressionReason = z.enum(['objection', 'erasure', 'bounce', 'manual'])
+export const EraseReason = z.enum(['gdpr_request', 'retention_policy', 'legal_order', 'other'])
 
 const suppressionKind = SuppressionKind.describe('structural fact kind to normalize and hash')
 const suppressionValue = z.string().min(1).max(320)
@@ -75,6 +76,22 @@ export const CrmSuppressionRemove = {
     reason: z.string().min(1).max(500).describe('operator reason for removing suppression'),
   }),
   out: z.object({ removed: z.boolean() }),
+}
+
+export const CrmRecordErase = {
+  in: z.object({
+    id: z.string().uuid().describe('record id to erase permanently; direct reads return ERASED after success'),
+    reason: EraseReason.describe('closed reason enum; no free-text personal data is accepted'),
+    suppress: z.boolean().default(true)
+      .describe('when true, hash-suppress email, phone, domain, and registry_id values before scrubbing'),
+  }),
+  out: z.object({
+    erased: z.literal(true),
+    suppressed: z.array(z.object({
+      kind: SuppressionKind,
+      count: z.number().int().nonnegative(),
+    })),
+  }),
 }
 
 export const CrmWriteGuardSet = {

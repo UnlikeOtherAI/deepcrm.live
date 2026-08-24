@@ -27,7 +27,7 @@ export const LinkOut = z.object({
 })
 export const Change = z.object({
   id: Uuid, seq: z.string(), resulting_version: z.number().int(), record: RecordSummary.nullable(),
-  group_id: Uuid.nullable(), kind: z.enum(['create', 'set', 'unset', 'link', 'unlink', 'delete', 'restore', 'merge', 'unmerge', 'schema']),
+  group_id: Uuid.nullable(), kind: z.enum(['create', 'set', 'unset', 'link', 'unlink', 'delete', 'restore', 'merge', 'unmerge', 'erase', 'schema']),
   attribute: Slug.nullable(), relation_type: Slug.nullable(), link_id: Uuid.nullable(),
   old_value: z.unknown().optional(), new_value: z.unknown().optional(),
   actor: z.object({ type: z.enum(['human', 'agent', 'system']), id: z.string() }), on_behalf_of: z.string().nullable(),

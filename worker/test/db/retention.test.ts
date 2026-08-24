@@ -70,6 +70,16 @@ describe('daily retention', () => {
       createdByType: 'system',
       createdById: 'retention-test',
     } })
+    const tombstone = await db.record.create({ data: {
+      organizationId,
+      teamId,
+      objectTypeId: objectType.id,
+      displayName: '(erased)',
+      deletedAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+      erasedAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+      createdByType: 'system',
+      createdById: 'retention-test',
+    } })
     const replay = await db.idempotencyReplay.create({ data: {
       organizationId,
       teamId,
@@ -90,6 +100,30 @@ describe('daily retention', () => {
       type: RETENTION_JOB,
       payload: { scheduledFor: now.toISOString() },
     } })
+    const oldCompleted = await db.queueJob.create({ data: {
+      organizationId,
+      teamId,
+      type: 'retention.completed.fixture',
+      payload: {},
+      status: 'completed',
+      updatedAt: new Date(now.getTime() - 8 * 24 * 60 * 60 * 1_000),
+    } })
+    const expiredApproval = await db.approvalRequest.create({ data: {
+      organizationId,
+      teamId,
+      action: 'retention-test',
+      resourceType: 'record',
+      resourceId: oldRecord.id,
+      argumentsHash: 'b'.repeat(64),
+      argumentsSnapshot: {},
+      requesterType: 'human',
+      requesterId: 'retention-test',
+      onBehalfOf: 'retention-test',
+      reason: 'test',
+      requiredRole: 'owner',
+      continuationTokenHash: `retention-${crypto.randomUUID()}`,
+      expiresAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+    } })
     const controller = new AbortController()
     const worker = startWorker(
       { db, clock: () => now, ids: () => crypto.randomUUID(), writeAudit },
@@ -104,8 +138,14 @@ describe('daily retention', () => {
     expect(await exists(oldFile)).toBe(false)
     expect(await exists(freshFile)).toBe(true)
     expect(await db.record.findFirst({ where: { id: oldRecord.id, organizationId, teamId } })).toBeNull()
+    expect(await db.record.findFirst({ where: { id: tombstone.id, organizationId, teamId } }))
+      .toMatchObject({ displayName: '(erased)' })
     expect(await db.idempotencyReplay.findFirst({
       where: { id: replay.id, organizationId, teamId },
+    })).toBeNull()
+    expect(await db.queueJob.findUnique({ where: { id: oldCompleted.id } })).toBeNull()
+    expect(await db.approvalRequest.findFirst({
+      where: { id: expiredApproval.id, organizationId, teamId },
     })).toBeNull()
     const next = await db.queueJob.findUnique({
       where: { idempotencyKey: 'retention:2026-08-25' },

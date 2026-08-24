@@ -6,7 +6,7 @@ import { canonicalJson, type JsonValue } from './json.js'
 
 export type ChangeIntent = {
   recordId: string
-  kind: 'create' | 'set' | 'unset' | 'link' | 'unlink' | 'delete' | 'restore' | 'merge' | 'unmerge'
+  kind: 'create' | 'set' | 'unset' | 'link' | 'unlink' | 'delete' | 'restore' | 'merge' | 'unmerge' | 'erase'
   attributeSlug: string | null
   relationTypeId: string | null
   linkId: string | null

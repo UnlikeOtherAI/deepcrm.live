@@ -208,7 +208,7 @@ export const Change = z.object({
   resulting_version: z.number().int().describe('version after this change applied: the record\'s version on record rows, the current schema version on kind "schema" rows — never null'),
   record: RecordSummary.nullable().describe('null for kind "schema"'),
   group_id: Uuid.nullable().describe('shared by the paired rows of a link/unlink and by cascade groups'),
-  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge','schema']),
+  kind: z.enum(['create','set','unset','link','unlink','delete','restore','merge','unmerge','erase','schema']),
   attribute: Slug.nullable(), relation_type: Slug.nullable(), link_id: Uuid.nullable(),
   old_value: z.unknown().optional(), new_value: z.unknown().optional(),
   actor: z.object({ type: ActorType, id: z.string() }), on_behalf_of: z.string().nullable(),
@@ -555,7 +555,7 @@ export const CrmChangesSince = { in: z.object({
   from: z.literal('beginning').optional().describe('explicit opt-in to replay full retained history'),
   object_types: z.array(Slug).optional(), kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
   out: z.object({ changes: z.array(Change), next_cursor: z.string(), has_more: z.boolean() }) }
-export const WebhookEvent = z.enum(['record.created','record.updated','record.deleted','record.merged',
+export const WebhookEvent = z.enum(['record.created','record.updated','record.deleted','record.merged','record.erased',
   'link.created','link.ended','schema.changed'])
 export const CrmWebhookSet = { in: z.object({ url: z.string().url().describe('https only, public host; identity — set upserts by URL'),
   events: z.array(WebhookEvent).min(1), active: z.boolean().default(true),

@@ -3,6 +3,7 @@ import {
   CrmSuppressionCheck,
   CrmSuppressionList,
   CrmSuppressionRemove,
+  CrmRecordErase,
   CrmWriteGuardSet,
   type ActorContext,
 } from '@deepcrm/schemas'
@@ -15,6 +16,7 @@ import {
   removeSuppression,
   setWriteGuard,
 } from '../../services/compliance.js'
+import { eraseCrmRecord } from '../../services/erasure.js'
 import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
@@ -55,6 +57,17 @@ export function registerComplianceTools(
       reason: (args) => args.reason,
       message: () => 'Approve removing this suppression entry? Requires an owner.',
     }, async (args, _mrtr, approval) => jsonResult(await removeSuppression(deps, ctx, args, approval))),
+  })
+  defineTool(server, {
+    name: 'crm_record_erase',
+    description: 'Right-to-erasure operation. Suppresses contact facts first, scrubs record, link data, list entry data, historical values, search, keys, and grants, emits record.erased, and leaves a permanent ERASED tombstone. Owner approval-gated and irreversible.',
+    input: CrmRecordErase.in.shape,
+    handler: withApproval(deps, ctx, 'crm_record_erase', CrmRecordErase.in.shape, {
+      resourceType: 'record',
+      resourceId: (args) => args.id,
+      reason: (args) => args.reason,
+      message: () => 'Approve irreversible record erasure? Requires an owner.',
+    }, async (args, _mrtr, approval) => jsonResult(await eraseCrmRecord(deps, ctx, args, approval))),
   })
   defineTool(server, {
     name: 'crm_write_guard_set',

@@ -52,12 +52,12 @@ export const ExportPayload = z.object({
 }).strict()
 
 export const FeedChangeKind = z.enum([
-  'create', 'set', 'unset', 'link', 'unlink', 'delete', 'restore', 'merge', 'unmerge', 'schema',
+  'create', 'set', 'unset', 'link', 'unlink', 'delete', 'restore', 'merge', 'unmerge', 'erase', 'schema',
 ])
 export type FeedChangeKindValue = z.infer<typeof FeedChangeKind>
 
 export const FeedEventName = z.enum([
-  'record.created', 'record.updated', 'record.deleted', 'record.merged',
+  'record.created', 'record.updated', 'record.deleted', 'record.merged', 'record.erased',
   'link.created', 'link.ended', 'schema.changed',
 ])
 

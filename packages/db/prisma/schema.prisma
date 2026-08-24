@@ -153,6 +153,7 @@ enum ChangeKind {
   restore
   merge
   unmerge
+  erase
   schema_change @map("schema")
 }
 
