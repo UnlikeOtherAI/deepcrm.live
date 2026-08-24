@@ -78,7 +78,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T33 — Change feed tool
+### T33 ✅ — Change feed tool
 
 **Depends on:** T32. **Spec:** `docs/spec/events.md` §1–§2; `docs/spec/contracts.md` (`Change`).
 
