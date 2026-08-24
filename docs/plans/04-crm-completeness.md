@@ -38,7 +38,7 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 ---
 
-### T30 — Pipeline summary and bulk assert Task
+### T30 ✅ — Pipeline summary and bulk assert Task
 
 **Depends on:** T29. **Spec:** `docs/mcp-surface.md` §6 (`crm_pipeline_summary`), §3 (`crm_records_bulk_assert`), §0.5.
 
