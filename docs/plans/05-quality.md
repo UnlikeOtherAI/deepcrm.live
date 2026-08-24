@@ -38,7 +38,7 @@ Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface te
 
 ---
 
-### T38 — Merge execution and redirects
+### T38 ✅ — Merge execution and redirects
 
 **Depends on:** T37. **Spec:** `docs/schema-engine.md` §7 steps 1, 4–7; `docs/mcp-surface.md` §7 (`crm_merge_records`).
 
