@@ -385,7 +385,7 @@ MCP; T16 must not register them early.
 
 ---
 
-### T18 — Property tests for engine invariants
+### T18 ✅ — Property tests for engine invariants
 
 **Depends on:** T17. **Spec:** `docs/testing.md` §4.
 
