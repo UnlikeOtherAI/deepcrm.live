@@ -2,7 +2,7 @@
 
 Outcome: every tool in `docs/mcp-surface.md` exists; `NOT_YET` in the surface test is empty.
 
-### T35 — Search tool
+### T35 ✅ — Search tool
 
 **Depends on:** T34. **Spec:** `docs/schema-engine.md` §8; `docs/mcp-surface.md` §7 (`crm_search`).
 
