@@ -6,6 +6,21 @@ import type { LoadedAttribute, LoadedObjectType } from '../schema/load.js'
 type RuleAlias = 'p' | 'higher' | 'tied'
 type BindingAlias = 'b' | 'hb' | 'tb'
 
+export type VisibilityRecord = {
+  visibility: 'team' | 'users' | 'private'
+  createdOnBehalfOf: string | null
+  visibilityGrants: readonly { uoaUserId: string }[]
+}
+
+export function canSee(ctx: ActorContext, record: VisibilityRecord): boolean {
+  return record.visibility === 'team'
+    || record.createdOnBehalfOf === ctx.onBehalfOf.uoaUserId
+    || (
+      record.visibility === 'users'
+      && record.visibilityGrants.some((grant) => grant.uoaUserId === ctx.onBehalfOf.uoaUserId)
+    )
+}
+
 function policyPredicate(
   tenant: TenantRef,
   ctx: ActorContext,

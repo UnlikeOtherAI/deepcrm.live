@@ -7,7 +7,7 @@ import {
   type ActorContext,
 } from '@deepcrm/schemas'
 
-import { rowAccess } from '../query/access.js'
+import { rowAccess } from '../records/visibility.js'
 import type {
   LoadedObjectType,
   LoadedRelationType,

@@ -1,6 +1,6 @@
 import { tenantWhere, type Db } from '@deepcrm/db'
 import { type Candidate, type ActorContext } from '@deepcrm/schemas'
-import type { LoadedSchema, MatchCandidateFact, RecordTx } from '@deepcrm/schema-engine'
+import { canSee, type LoadedSchema, type MatchCandidateFact, type RecordTx } from '@deepcrm/schema-engine'
 
 import { loadPolicyEvaluator, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 
@@ -18,15 +18,6 @@ function scopes(ctx: ActorContext, objectTypeId: string, recordId: string): Poli
     { scope: 'object_type', id: objectTypeId },
     { scope: 'record', id: recordId },
   ]
-}
-
-function visible(
-  ctx: ActorContext,
-  record: { visibility: string; createdOnBehalfOf: string | null; visibilityGrants: readonly { uoaUserId: string }[] },
-): boolean {
-  return record.visibility === 'team'
-    || record.createdOnBehalfOf === ctx.onBehalfOf.uoaUserId
-    || record.visibilityGrants.some((grant) => grant.uoaUserId === ctx.onBehalfOf.uoaUserId)
 }
 
 function evidence(
@@ -69,7 +60,7 @@ export async function presentDuplicates(
       objectType: { select: { slug: true } }, visibilityGrants: { select: { uoaUserId: true } },
     },
   })
-  const byId = new Map(rows.filter((row) => visible(ctx, row)).map((row) => [row.id, row]))
+  const byId = new Map(rows.filter((row) => canSee(ctx, row)).map((row) => [row.id, row]))
   return facts.flatMap((fact) => {
     const row = byId.get(fact.recordId)
     if (row === undefined) return []

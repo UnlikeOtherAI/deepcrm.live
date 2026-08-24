@@ -6,7 +6,7 @@ import { getAttributeType } from '../attribute-types/index.js'
 import { qualityFilterPredicate } from '../quality/report.js'
 import { canonicalJson, canonicalJsonValue, type JsonValue } from '../records/json.js'
 import type { LoadedAttribute, LoadedObjectType, LoadedRelationType, LoadedSchema } from '../schema/load.js'
-import { attributeReadAccess, rowAccess } from './access.js'
+import { attributeReadAccess, rowAccess } from '../records/visibility.js'
 import type { QueryCursorState, QueryFilter, QueryInput, QueryOperator, QuerySort } from './types.js'
 
 export type CompiledQuery = { sql: Prisma.Sql; countSql: Prisma.Sql }

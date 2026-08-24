@@ -5,6 +5,7 @@ export { assertRecord, createRecord, deleteRecord, restoreRecord, updateRecord }
 export { diffChanges, writeChanges } from './changes.js'
 export { recordAt, recordChangesByIds, recordHistory } from './history.js'
 export { lockKeys, lockLinkTopology, lockRecords } from './locks.js'
+export { attributeReadAccess, canSee, rowAccess, type VisibilityRecord } from './visibility.js'
 export {
   findUniqueRecord,
   keyHash,

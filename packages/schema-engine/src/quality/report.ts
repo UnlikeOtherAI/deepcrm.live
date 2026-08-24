@@ -1,7 +1,7 @@
 import { Prisma, type Db } from '@deepcrm/db'
 import type { ActorContext, Filter } from '@deepcrm/schemas'
 
-import { attributeReadAccess, rowAccess } from '../query/access.js'
+import { attributeReadAccess, rowAccess } from '../records/visibility.js'
 import type {
   LoadedAttribute, LoadedObjectType, LoadedRelationType, LoadedSchema,
 } from '../schema/load.js'

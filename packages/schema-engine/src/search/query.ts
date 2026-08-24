@@ -1,7 +1,7 @@
 import { Prisma, type Db, type TenantRef } from '@deepcrm/db'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
-import { rowAccess } from '../query/access.js'
+import { rowAccess } from '../records/visibility.js'
 import type { LoadedObjectType } from '../schema/load.js'
 import type { Embedder } from './embedder.js'
 

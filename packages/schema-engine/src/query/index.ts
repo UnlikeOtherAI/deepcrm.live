@@ -4,7 +4,6 @@ export {
   type CompiledQuery,
   type RecordSetInput,
 } from './compile.js'
-export { attributeReadAccess, rowAccess } from './access.js'
 export { queryRecords } from './run.js'
 export type {
   QueryCursorState,

@@ -3,7 +3,7 @@ import type { ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import { applyTemplate } from '../../src/templates/apply.js'
-import { attributeReadAccess, rowAccess } from '../../src/query/access.js'
+import { attributeReadAccess, canSee, rowAccess } from '../../src/records/visibility.js'
 import { loadSchema, type LoadedObjectType } from '../../src/schema/load.js'
 
 const url = process.env.DATABASE_URL
@@ -96,6 +96,32 @@ async function visibleIds(
 afterAll(async () => { await Promise.all(organizations.map(dropTenant.bind(null, db))); await db.$disconnect() })
 
 describe('query row access', () => {
+  it('evaluates the shared in-memory visibility gate', () => {
+    const ctx: ActorContext = {
+      tenant: { organizationId: crypto.randomUUID(), teamId: crypto.randomUUID() },
+      app: 'test',
+      actor: { type: 'system', id: 'query-access' },
+      onBehalfOf: { uoaUserId: 'owner', role: 'owner' },
+      provenance: null,
+      actChain: [],
+      requestId: crypto.randomUUID(),
+      now: new Date(),
+    }
+    expect(canSee(ctx, { visibility: 'team', createdOnBehalfOf: 'other', visibilityGrants: [] })).toBe(true)
+    expect(canSee(ctx, { visibility: 'private', createdOnBehalfOf: 'owner', visibilityGrants: [] })).toBe(true)
+    expect(canSee(ctx, { visibility: 'private', createdOnBehalfOf: 'other', visibilityGrants: [] })).toBe(false)
+    expect(canSee(ctx, {
+      visibility: 'users',
+      createdOnBehalfOf: 'other',
+      visibilityGrants: [{ uoaUserId: 'owner' }],
+    })).toBe(true)
+    expect(canSee(ctx, {
+      visibility: 'users',
+      createdOnBehalfOf: 'other',
+      visibilityGrants: [{ uoaUserId: 'another-user' }],
+    })).toBe(false)
+  })
+
   it('uses identical tenant/visibility predicates for page and count', async () => {
     const value = await fixture()
     const scope = { organizationId: value.tenant.organizationId, teamId: value.tenant.teamId }

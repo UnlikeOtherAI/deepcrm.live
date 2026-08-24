@@ -4,12 +4,13 @@ import {
   ServiceError,
   type ActorContext,
 } from '@deepcrm/schemas'
-import type {
-  InlineLinkAuthorizer,
-  InlineLinkInput,
-  LoadedSchema,
-  RecordTx,
-  ResolvedLinkOperation,
+import {
+  canSee,
+  type InlineLinkAuthorizer,
+  type InlineLinkInput,
+  type LoadedSchema,
+  type RecordTx,
+  type ResolvedLinkOperation,
 } from '@deepcrm/schema-engine'
 
 import { assertLinkPolicies, linkPolicyRequests } from './links.js'
@@ -52,15 +53,6 @@ function relationBySlug(schema: LoadedSchema, slug: string) {
   return relation
 }
 
-function visible(ctx: ActorContext, row: {
-  visibility: string; createdOnBehalfOf: string | null
-  visibilityGrants: readonly { uoaUserId: string }[]
-}): boolean {
-  return row.visibility === 'team'
-    || row.createdOnBehalfOf === ctx.onBehalfOf.uoaUserId
-    || row.visibilityGrants.some((grant) => grant.uoaUserId === ctx.onBehalfOf.uoaUserId)
-}
-
 async function visibleRecords(
   tx: InlineLinkTx,
   ctx: ActorContext,
@@ -77,7 +69,7 @@ async function visibleRecords(
       visibilityGrants: { select: { uoaUserId: true } },
     },
   })
-  if (rows.length !== unique.length || rows.some((row) => !visible(ctx, row))) {
+  if (rows.length !== unique.length || rows.some((row) => !canSee(ctx, row))) {
     throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   }
   const byId = new Map(rows.map((row) => [row.id, {

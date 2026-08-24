@@ -1,7 +1,7 @@
 import { Prisma, type TenantRef } from '@deepcrm/db'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
-import { rowAccess } from '../query/access.js'
+import { rowAccess } from '../records/visibility.js'
 import type { LoadedObjectType, LoadedSchema } from '../schema/load.js'
 import type { RecordTx } from '../schema/tx.js'
 import { finalMatchingRecords, matchingTupleHash, matchingTuples } from './keys.js'
