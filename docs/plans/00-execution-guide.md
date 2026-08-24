@@ -45,5 +45,6 @@ The local Postgres from `docs/testing.md` runs for the whole session, and `DATAB
 | 5 | [05-quality.md](05-quality.md) | search, duplicates, merge/unmerge, data quality, export, approvals |
 | 6 | [06-deploy-and-integrate.md](06-deploy-and-integrate.md) | Docker/Caddy deploy, Nessie integration, prompts |
 | 7 | [07-visibility-and-compliance.md](07-visibility-and-compliance.md) | per-record visibility, suppression/erasure, origin guard, per-app provenance (the DeepSignal asks) |
+| 8 | [08-hubspot-crm-compatibility.md](08-hubspot-crm-compatibility.md) | generic-schema CRM semantics, standard sales/service/commerce packs, and MCP interoperability verification |
 
 When all tasks in a phase are ✅, move the phase file to `docs/done/`.
