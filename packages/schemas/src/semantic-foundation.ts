@@ -2,7 +2,9 @@ import { z } from 'zod'
 
 import { ActorType, IsoDateTime, Slug, Uuid } from './primitives.js'
 import { AttributeType } from './attribute-config.js'
-import { Sensitivity } from './schema-specs.js'
+
+const FoundationSensitivity = z.enum(['public', 'internal', 'confidential', 'restricted'])
+  .describe('redaction level for a semantic metadata value')
 
 export const AttributeValueSource = z.enum([
   'stored', 'formula', 'rollup', 'relation_sync', 'score', 'system',
@@ -79,7 +81,7 @@ export type RecordStageHistoryInterval = z.infer<typeof RecordStageHistoryInterv
 export const AttributeDerivationDetail = z.object({
   attribute: Slug.describe('derived attribute slug'),
   type: AttributeType.describe('materialized value type'),
-  sensitivity: Sensitivity.describe('redaction level for the derived value'),
+  sensitivity: FoundationSensitivity.describe('redaction level for the derived value'),
   value_source: AttributeValueSource.exclude(['stored']).describe('non-stored value source'),
   materialized: z.boolean().describe('true when the value is stored in records.data'),
   config: z.record(z.unknown()).describe('source-specific deterministic derivation config'),

@@ -602,10 +602,26 @@ export const CrmTaskUpdate = { in: z.object({ id: Uuid, status: TaskStatus.optio
 export const CrmTasksList = { in: z.object({ status: TaskStatus.optional(), assignee: Actor.optional(),
   due_before: IsoDateTime.optional(), due_after: IsoDateTime.optional(), about: Uuid.optional(),
   cursor: Cursor, limit: Limit }), out: CrmRecordsQuery.out }
+export const PipelineStageSpec = z.object({ slug: Slug, name: z.string().min(1).max(120),
+  position: z.number().int().min(0), probability: z.number().min(0).max(1).optional(),
+  category: PipelineStageCategory.default('open') })
+export const CrmPipelineDefine = { in: z.object({ object_type: Slug, slug: Slug,
+  name: z.string().min(1).max(120), description: z.string().max(500).optional(),
+  is_default: z.boolean().default(false), stages: z.array(PipelineStageSpec).min(1).max(100) }),
+  out: PipelineDetail }
+export const CrmPipelineUpdate = { in: z.object({ object_type: Slug, pipeline: Slug,
+  name: z.string().min(1).max(120).optional(), description: z.string().max(500).optional(),
+  is_default: z.boolean().optional() }), out: PipelineDetail }
+export const CrmPipelineStageSet = { in: z.object({ record_id: Uuid, pipeline: Slug, stage: Slug,
+  occurred_at: IsoDateTime.optional(), reason: Reason, idempotency_key: IdempotencyKey }),
+  out: z.object({ record_id: Uuid, pipeline: Slug, stage: Slug, changed: z.boolean(),
+    interval_id: Uuid.nullable() }) }
+export const CrmPipelineStagesList = { in: z.object({ object_type: Slug, pipeline: Slug }),
+  out: z.object({ pipeline: PipelineDetail, stages: z.array(PipelineStageDetail) }) }
 export const CrmPipelineSummary = { in: z.object({ object_type: Slug,
-  status_attribute: Slug.optional().describe('defaults to the only status attribute'),
+  pipeline: Slug.optional().describe('defaults to the object type default pipeline'),
   amount_attribute: Slug.optional(), filter: Filter.optional(), since: IsoDateTime.optional() }),
-  out: z.object({ stages: z.array(z.object({ id: Slug, label: z.string(), category: StatusOption.shape.category,
+  out: z.object({ stages: z.array(z.object({ id: Slug, label: z.string(), category: PipelineStageCategory,
     count: z.number().int(), amount_sum: CurrencyValue.nullable(), avg_days_in_stage: z.number().nullable() })),
     conversions: z.array(z.object({ from: Slug, to: Slug, count: z.number().int() })) }) }
 

@@ -27,6 +27,8 @@ type Fixture = Readonly<{
   ctx: ActorContext
   schema: LoadedSchema
   deal: LoadedObjectType
+  pipelineId: string
+  stageIds: ReadonlyMap<string, string>
 }>
 
 function context(tenant: TenantRef): ActorContext {
@@ -60,10 +62,42 @@ async function fixture(fixedAmount = true): Promise<Fixture> {
     })
     await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
   }
+  const pipeline = await db.pipeline.create({ data: {
+    organizationId: tenant.organizationId,
+    teamId: tenant.teamId,
+    objectTypeId: initialDeal.id,
+    slug: 'sales',
+    name: 'Sales',
+    isDefault: true,
+    createdByType: 'system',
+    createdById: 'pipeline-test',
+  } })
+  const stageSpecs = [
+    { slug: 'lead', name: 'Lead', position: 0, category: 'open' as const },
+    { slug: 'qualified', name: 'Qualified', position: 1, category: 'open' as const },
+    { slug: 'proposal', name: 'Proposal', position: 2, category: 'open' as const },
+    { slug: 'negotiation', name: 'Negotiation', position: 3, category: 'open' as const },
+    { slug: 'won', name: 'Won', position: 4, category: 'won' as const },
+    { slug: 'lost', name: 'Lost', position: 5, category: 'lost' as const },
+  ]
+  const stageIds = new Map<string, string>()
+  for (const stage of stageSpecs) {
+    const created = await db.pipelineStage.create({ data: {
+      organizationId: tenant.organizationId,
+      teamId: tenant.teamId,
+      pipelineId: pipeline.id,
+      slug: stage.slug,
+      name: stage.name,
+      position: stage.position,
+      category: stage.category,
+    } })
+    stageIds.set(stage.slug, created.id)
+  }
+  await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
   const schema = await loadSchema(db, tenant)
   const deal = schema.objectTypesBySlug.get('deal')
   if (deal === undefined) throw new Error('deal missing')
-  return { tenant, ctx, schema, deal }
+  return { tenant, ctx, schema, deal, pipelineId: pipeline.id, stageIds }
 }
 
 async function addDeal(
@@ -95,28 +129,26 @@ async function addDeal(
   } })
 }
 
-async function addStatusChange(
+async function addStageInterval(
   value: Fixture,
   recordId: string,
-  sequence: number,
-  occurredAt: string,
-  oldValue: string | null,
-  newValue: string | null,
+  stage: string,
+  startedAt: string,
+  endedAt: string | null,
 ): Promise<void> {
-  await db.recordChange.create({ data: {
+  const stageId = value.stageIds.get(stage)
+  if (stageId === undefined) throw new Error(`missing stage ${stage}`)
+  await db.recordStageHistory.create({ data: {
     organizationId: value.tenant.organizationId,
     teamId: value.tenant.teamId,
     recordId,
-    kind: newValue === null ? 'unset' : 'set',
-    attributeSlug: 'stage',
-    oldValue: oldValue === null ? Prisma.JsonNull : oldValue,
-    newValue: newValue === null ? Prisma.JsonNull : newValue,
+    pipelineId: value.pipelineId,
+    stageId,
+    startedAt: new Date(startedAt),
+    endedAt: endedAt === null ? null : new Date(endedAt),
     actorType: 'system',
     actorId: 'pipeline-test',
-    requestId: `pipeline-change-${sequence}`,
-    resultingVersion: sequence,
-    seq: BigInt(sequence),
-    occurredAt: new Date(occurredAt),
+    requestId: `stage-${recordId}-${stage}`,
   } })
 }
 
@@ -173,12 +205,12 @@ describe('pipeline summary', () => {
     await addDeal(value, 'Visible Merged', 'proposal', '500', { mergedIntoId: proposal.id })
     await addDeal(value, 'Visible Erased', 'won', '600', { erasedAt: value.ctx.now })
 
-    await addStatusChange(value, proposal.id, 1, '2026-08-01T00:00:00.000Z', null, 'lead')
-    await addStatusChange(value, proposal.id, 2, '2026-08-03T00:00:00.000Z', 'lead', 'qualified')
-    await addStatusChange(value, proposal.id, 3, '2026-08-06T00:00:00.000Z', 'qualified', 'proposal')
-    await addStatusChange(value, won.id, 4, '2026-08-01T00:00:00.000Z', null, 'lead')
-    await addStatusChange(value, won.id, 5, '2026-08-05T00:00:00.000Z', 'lead', 'proposal')
-    await addStatusChange(value, won.id, 6, '2026-08-07T00:00:00.000Z', 'proposal', 'won')
+    await addStageInterval(value, proposal.id, 'lead', '2026-08-01T00:00:00.000Z', '2026-08-03T00:00:00.000Z')
+    await addStageInterval(value, proposal.id, 'qualified', '2026-08-03T00:00:00.000Z', '2026-08-06T00:00:00.000Z')
+    await addStageInterval(value, proposal.id, 'proposal', '2026-08-06T00:00:00.000Z', null)
+    await addStageInterval(value, won.id, 'lead', '2026-08-01T00:00:00.000Z', '2026-08-05T00:00:00.000Z')
+    await addStageInterval(value, won.id, 'proposal', '2026-08-05T00:00:00.000Z', '2026-08-07T00:00:00.000Z')
+    await addStageInterval(value, won.id, 'won', '2026-08-07T00:00:00.000Z', null)
 
     const filter: Filter = { system: 'display_name', op: 'starts_with', value: 'Visible' }
     const traced = db.$extends({})
@@ -193,7 +225,7 @@ describe('pipeline summary', () => {
       value.schema,
       value.deal,
       {
-        statusAttribute: 'stage', amountAttribute: 'amount', filter,
+        pipeline: 'sales', amountAttribute: 'amount', filter,
         since: new Date('2026-08-05T00:00:00.000Z'),
       },
     )
@@ -220,13 +252,12 @@ describe('pipeline summary', () => {
       { from: 'proposal', to: 'won', count: 1 },
     ])
 
-    const statusAttribute = value.deal.attributes.find((item) => item.slug === 'stage')
     const amountAttribute = value.deal.attributes.find((item) => item.slug === 'amount')
-    if (statusAttribute === undefined || amountAttribute === undefined) {
+    if (amountAttribute === undefined) {
       throw new Error('pipeline attributes missing')
     }
     const recordSet = compileRecordSet(value.tenant, value.ctx, value.schema, value.deal, {
-      filter, attributes: [statusAttribute, amountAttribute],
+      filter, attributes: [amountAttribute],
     })
     const total = await db.$queryRaw<Array<{ total: number }>>(Prisma.sql`
       SELECT count(*)::integer AS total
@@ -275,28 +306,22 @@ describe('pipeline summary', () => {
     const deal = schema.objectTypesBySlug.get('deal')
     if (deal === undefined) throw new Error('reloaded deal missing')
     await expect(pipelineSummary(db, value.tenant, other.ctx, value.schema, value.deal, {
-      statusAttribute: 'stage',
+      pipeline: 'sales',
     })).rejects.toMatchObject({ code: 'TENANT_MISMATCH' })
     await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'name',
+      pipeline: 'missing',
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
+      pipeline: 'sales', amountAttribute: 'amount',
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
     await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'stage', amountAttribute: 'amount',
+      pipeline: 'sales', since: new Date('invalid'),
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
     await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'stage', since: new Date('invalid'),
+      pipeline: 'sales', amountAttribute: 'name',
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
     await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'old_stage',
-    })).rejects.toMatchObject({ code: 'ATTRIBUTE_ARCHIVED' })
-    await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'multi_stage',
-    })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
-    await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'stage', amountAttribute: 'name',
-    })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
-    await expect(pipelineSummary(db, value.tenant, value.ctx, schema, deal, {
-      statusAttribute: 'stage', amountAttribute: 'multi_amount',
+      pipeline: 'sales', amountAttribute: 'multi_amount',
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
   })
 })

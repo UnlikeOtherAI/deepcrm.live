@@ -57,6 +57,11 @@ function relation(
     inverse_name: loaded.inverseName,
     description: loaded.description,
     cardinality: loaded.cardinality,
+    edge_limits: {
+      max_active_edges_from: loaded.maxActiveEdgesFrom,
+      max_active_edges_to: loaded.maxActiveEdgesTo,
+      label_limits: loaded.edgeLimitConfig,
+    },
     on_delete: loaded.onDelete,
     edge_attributes: edgeAttributes(loaded),
     is_system: loaded.isSystem,
@@ -107,6 +112,27 @@ function relationSummaries(schema: LoadedSchema, objectType: LoadedObjectType) {
   return summaries
 }
 
+function pipelineSummaries(schema: LoadedSchema, objectType: LoadedObjectType) {
+  return (schema.pipelinesByObjectTypeId.get(objectType.id) ?? []).map((pipeline) => ({
+    id: pipeline.id,
+    object_type: objectType.slug,
+    slug: pipeline.slug,
+    name: pipeline.name,
+    description: pipeline.description,
+    is_default: pipeline.isDefault,
+    stages: pipeline.stages.map((stage) => ({
+      id: stage.id,
+      slug: stage.slug,
+      name: stage.name,
+      position: stage.position,
+      probability: stage.probability,
+      category: stage.category,
+      archived_at: iso(stage.archivedAt),
+    })),
+    archived_at: iso(pipeline.archivedAt),
+  }))
+}
+
 export function presentObjectType(schema: LoadedSchema, objectType: LoadedObjectType) {
   return ObjectTypeDetail.parse({
     id: objectType.id,
@@ -119,6 +145,7 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
     primary_attribute: primaryAttribute(objectType),
     attributes: objectType.attributes.map(attribute),
     relation_types: relationSummaries(schema, objectType),
+    pipelines: pipelineSummaries(schema, objectType),
     archived_at: iso(objectType.archivedAt),
   })
 }

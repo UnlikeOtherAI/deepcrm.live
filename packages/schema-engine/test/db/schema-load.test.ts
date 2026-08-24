@@ -36,7 +36,7 @@ function stableEmptySource(teamId: string): SchemaLoadSource {
   return {
     readVersion: async () => ({ id: teamId, schemaVersion: 0 }),
     readMetadata: async () => ({
-      objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+      objectTypes: [], relationTypes: [], pipelines: [], lists: [], views: [], matchingRules: [],
     }),
   }
 }
@@ -58,7 +58,7 @@ describe('schema loader', () => {
       },
       readMetadata: async () => {
         metadataReads += 1
-        return { objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [] }
+        return { objectTypes: [], relationTypes: [], pipelines: [], lists: [], views: [], matchingRules: [] }
       },
     }
     const target = { organizationId: 'retry-org', teamId: 'retry-team' }
@@ -74,7 +74,7 @@ describe('schema loader', () => {
     const changing: SchemaLoadSource = {
       readVersion: async () => ({ id: 'changing-team', schemaVersion: mismatchVersion++ }),
       readMetadata: async () => ({
-        objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+        objectTypes: [], relationTypes: [], pipelines: [], lists: [], views: [], matchingRules: [],
       }),
     }
     await expect(loadSchemaFromSource(changing, {
@@ -91,7 +91,7 @@ describe('schema loader', () => {
     const missing: SchemaLoadSource = {
       readVersion: async () => null,
       readMetadata: async () => ({
-        objectTypes: [], relationTypes: [], lists: [], views: [], matchingRules: [],
+        objectTypes: [], relationTypes: [], pipelines: [], lists: [], views: [], matchingRules: [],
       }),
     }
     await expect(loadSchemaFromSource(missing, {

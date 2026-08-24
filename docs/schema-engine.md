@@ -1033,6 +1033,31 @@ Audit rows, task results, webhook payloads and logs may name ids, counts and
 error codes from these tables, but not raw file/event payloads or derived source
 values.
 
+## 3c. Pipelines and stage history (T58)
+
+Pipelines are first-class generic schema metadata. A pipeline is owned by exactly
+one object type and stage slugs are valid only inside that pipeline. Exactly one
+active default pipeline may exist per `(tenant, object_type)`; making a pipeline
+default clears the previous default in the same schema transaction. Stage
+positions are contiguous from zero and stage slugs are unique per active
+pipeline.
+
+Record stage membership is not stored in `records.data` and is not inferred from
+legacy status attributes. `crm_pipeline_stage_set` appends immutable
+`record_stage_history` intervals: it closes the current open interval for that
+record/pipeline, creates the new interval, bumps the record version, writes a
+metadata `record_changes` row and writes the terminal audit row in the same
+transaction. A same-stage replay is a no-op and does not create a duplicate
+interval. Merge, unmerge and timeline continue to operate on generic record
+history; stage history remains attached to the record ids it describes.
+
+`crm_pipeline_summary` resolves the requested or default pipeline, compiles the
+same visibility-filtered record predicate used by ordinary record queries, and
+aggregates only records visible to the caller. Current counts and optional
+fixed-currency sums come from open stage intervals; closed interval durations
+come from `record_stage_history.started_at/ended_at`; conversions are counted
+from ordered adjacent intervals at or after `since`.
+
 ## 4. Write path — `applyWrite(tx, ctx, schema, op)`
 
 Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` (ReadCommitted) with explicit advisory locks. **Advisory locks use the two-int form** `pg_advisory_xact_lock(namespace, hashtext(tenantId ∥ key))` with a fixed namespace constant per concern (`1` records, `2` unique/match keys, `3` provisioning, `4` webhooks, `5` audit, `6` idempotency, `7` link topology), so concerns and tenants never false-share a 32-bit bucket.

@@ -6,6 +6,8 @@ import {
   type MatchingRule,
   type MatchingRuleGeneration,
   type ObjectType,
+  type Pipeline,
+  type PipelineStage,
   type RelationType,
   type TenantRef,
   type View,
@@ -17,6 +19,7 @@ export type LoadedObjectType = Readonly<ObjectType & {
   attributes: readonly LoadedAttribute[]
 }>
 export type LoadedRelationType = Readonly<RelationType>
+export type LoadedPipeline = Readonly<Pipeline & { stages: readonly PipelineStage[] }>
 export type LoadedList = Readonly<List & {
   attributes: readonly LoadedAttribute[]
 }>
@@ -30,6 +33,7 @@ export type LoadedSchema = Readonly<{
   schemaVersion: number
   objectTypes: readonly LoadedObjectType[]
   relationTypes: readonly LoadedRelationType[]
+  pipelines: readonly LoadedPipeline[]
   lists: readonly LoadedList[]
   views: readonly LoadedView[]
   matchingRules: readonly LoadedMatchingRule[]
@@ -41,6 +45,8 @@ export type LoadedSchema = Readonly<{
   archivedAttributeSlugsByObjectTypeId: ReadonlyMap<string, ReadonlySet<string>>
   relationTypesBySlug: ReadonlyMap<string, LoadedRelationType>
   relationTypesById: ReadonlyMap<string, LoadedRelationType>
+  pipelinesBySlug: ReadonlyMap<string, LoadedPipeline>
+  pipelinesByObjectTypeId: ReadonlyMap<string, readonly LoadedPipeline[]>
   listsBySlug: ReadonlyMap<string, LoadedList>
   listsById: ReadonlyMap<string, LoadedList>
   attributesByListId: ReadonlyMap<string, ReadonlyMap<string, LoadedAttribute>>
@@ -59,6 +65,7 @@ type TeamVersion = { id: string; schemaVersion: number }
 type MetadataRows = {
   objectTypes: Array<ObjectType & { attributes: Attribute[] }>
   relationTypes: RelationType[]
+  pipelines: Array<Pipeline & { stages: PipelineStage[] }>
   lists: Array<List & { attributes: Attribute[] }>
   views: View[]
   matchingRules: Array<MatchingRule & { generation: MatchingRuleGeneration }>
@@ -223,6 +230,10 @@ function buildSchema(
     }),
   ))
   const relationTypes: readonly LoadedRelationType[] = copied.relationTypes
+  const pipelines: readonly LoadedPipeline[] = Object.freeze(copied.pipelines.map((pipeline) => Object.freeze({
+    ...pipeline,
+    stages: Object.freeze(pipeline.stages.filter((stage) => stage.archivedAt === null)),
+  })))
   const lists: readonly LoadedList[] = Object.freeze(copied.lists.map((list) => Object.freeze({
     ...list,
     attributes: Object.freeze(list.attributes.filter((attribute) => attribute.archivedAt === null)),
@@ -280,6 +291,11 @@ function buildSchema(
   const relationTypesById = new ImmutableMap(relationTypes.map(
     (relationType) => pair(relationType.id, relationType),
   ))
+  const pipelinesBySlug = new ImmutableMap(pipelines.map((pipeline) => pair(pipeline.slug, pipeline)))
+  const pipelinesByObjectTypeId = new ImmutableMap(objectTypes.map((objectType) => pair(
+    objectType.id,
+    Object.freeze(pipelines.filter((pipeline) => pipeline.objectTypeId === objectType.id)),
+  )))
   const listsBySlug = new ImmutableMap(lists.map((list) => pair(list.slug, list)))
   const listsById = new ImmutableMap(lists.map((list) => pair(list.id, list)))
   const attributesByListId = new ImmutableMap(lists.map((list) => pair(
@@ -328,6 +344,7 @@ function buildSchema(
     schemaVersion: team.schemaVersion,
     objectTypes,
     relationTypes,
+    pipelines,
     lists,
     views,
     matchingRules,
@@ -339,6 +356,8 @@ function buildSchema(
     archivedAttributeSlugsByObjectTypeId,
     relationTypesBySlug,
     relationTypesById,
+    pipelinesBySlug,
+    pipelinesByObjectTypeId,
     listsBySlug,
     listsById,
     attributesByListId,
@@ -382,7 +401,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
     }),
     readMetadata: async (target) => {
       const activeWhere = { ...tenantWhere(target), archivedAt: null }
-      const [objectTypes, relationTypes, lists, views, matchingRules] = await Promise.all([
+      const [objectTypes, relationTypes, pipelines, lists, views, matchingRules] = await Promise.all([
         db.objectType.findMany({
           where: activeWhere,
           include: {
@@ -394,6 +413,11 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
           orderBy: { slug: 'asc' },
         }),
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
+        db.pipeline.findMany({
+          where: activeWhere,
+          include: { stages: { where: tenantWhere(target), orderBy: [{ position: 'asc' }, { slug: 'asc' }] } },
+          orderBy: { slug: 'asc' },
+        }),
         db.list.findMany({
           where: tenantWhere(target),
           include: {
@@ -411,7 +435,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
           orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
         }),
       ])
-      return { objectTypes, relationTypes, lists, views, matchingRules }
+      return { objectTypes, relationTypes, pipelines, lists, views, matchingRules }
     },
   }
   return loadSchemaFromSource(source, tenant)
@@ -429,13 +453,18 @@ export async function loadSchemaForMatchingBootstrap(
     }),
     readMetadata: async (target) => {
       const activeWhere = { ...tenantWhere(target), archivedAt: null }
-      const [objectTypes, relationTypes, lists, views, matchingRules] = await Promise.all([
+      const [objectTypes, relationTypes, pipelines, lists, views, matchingRules] = await Promise.all([
         db.objectType.findMany({
           where: activeWhere,
           include: { attributes: { where: tenantWhere(target), orderBy: { position: 'asc' } } },
           orderBy: { slug: 'asc' },
         }),
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),
+        db.pipeline.findMany({
+          where: activeWhere,
+          include: { stages: { where: tenantWhere(target), orderBy: [{ position: 'asc' }, { slug: 'asc' }] } },
+          orderBy: { slug: 'asc' },
+        }),
         db.list.findMany({
           where: tenantWhere(target),
           include: {
@@ -452,7 +481,7 @@ export async function loadSchemaForMatchingBootstrap(
           orderBy: [{ objectTypeId: 'asc' }, { position: 'asc' }],
         }),
       ])
-      return { objectTypes, relationTypes, lists, views, matchingRules }
+      return { objectTypes, relationTypes, pipelines, lists, views, matchingRules }
     },
   }
   return loadSchemaFromSource(source, tenant, { bootstrapGenerationId: generationId, useCache: false })

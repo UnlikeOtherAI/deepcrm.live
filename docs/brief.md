@@ -307,7 +307,7 @@ Schema mutations that lose data (archive with values, cardinality tightening, un
 
 ### 6.3 Pipelines, activities, tasks
 
-- `crm_pipeline_summary({object_type, status_attribute, group_by?})` — counts, amounts, time-in-stage per stage (derived from `record_changes`).
+- `crm_pipeline_summary({object_type, pipeline?, amount_attribute?, filter?, since?})` — counts, amounts, time-in-stage and conversions per first-class pipeline stage (derived from `record_stage_history`).
 - `crm_activity_log({kind, occurred_at, subject, body, participants, about: [record ids], external_ref?})` — idempotent on `external_ref`.
 - `crm_record_timeline({id, hops?, kinds?, cursor})`.
 - `crm_task_create/update/list` (assignee = agent or human actor reference; `due_at`; `status`). Tasks are CRM records, so everything above applies; these are conveniences with sharper descriptions.

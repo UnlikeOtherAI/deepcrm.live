@@ -45,7 +45,14 @@ function context(tenant: TenantRef): ActorContext {
   }
 }
 
-async function fixture(): Promise<{ tenant: TenantRef; ctx: ActorContext }> {
+type PipelineFixture = Readonly<{
+  tenant: TenantRef
+  ctx: ActorContext
+  pipelineId: string
+  stageIds: ReadonlyMap<string, string>
+}>
+
+async function fixture(): Promise<PipelineFixture> {
   const tenant = await seedTenant(db)
   organizations.push(tenant.organizationId)
   const ctx = context(tenant)
@@ -63,15 +70,50 @@ async function fixture(): Promise<{ tenant: TenantRef; ctx: ActorContext }> {
   await db.team.update({
     where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } },
   })
-  return { tenant, ctx }
+  const pipeline = await db.pipeline.create({ data: {
+    organizationId: tenant.organizationId,
+    teamId: tenant.teamId,
+    objectTypeId: deal.id,
+    slug: 'sales',
+    name: 'Sales',
+    isDefault: true,
+    createdByType: 'system',
+    createdById: 'pipeline-api-test',
+  } })
+  const stages = [
+    { slug: 'lead', name: 'Lead', position: 0, category: 'open' as const },
+    { slug: 'qualified', name: 'Qualified', position: 1, category: 'open' as const },
+    { slug: 'proposal', name: 'Proposal', position: 2, category: 'open' as const },
+    { slug: 'negotiation', name: 'Negotiation', position: 3, category: 'open' as const },
+    { slug: 'won', name: 'Won', position: 4, category: 'won' as const },
+    { slug: 'lost', name: 'Lost', position: 5, category: 'lost' as const },
+  ]
+  const stageIds = new Map<string, string>()
+  for (const stage of stages) {
+    const created = await db.pipelineStage.create({ data: {
+      organizationId: tenant.organizationId,
+      teamId: tenant.teamId,
+      pipelineId: pipeline.id,
+      slug: stage.slug,
+      name: stage.name,
+      position: stage.position,
+      category: stage.category,
+    } })
+    stageIds.set(stage.slug, created.id)
+  }
+  await db.team.update({
+    where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } },
+  })
+  return { tenant, ctx, pipelineId: pipeline.id, stageIds }
 }
 
 async function createDeal(
-  tenant: TenantRef,
+  fixtureValue: PipelineFixture,
   name: string,
   stage: string,
   amount: string,
 ): Promise<void> {
+  const { tenant } = fixtureValue
   const { organizationId, teamId } = tenant
   const objectType = await db.objectType.findFirstOrThrow({
     where: { organizationId, teamId, slug: 'deal' }, select: { id: true },
@@ -89,6 +131,23 @@ async function createDeal(
     createdAt: now,
     updatedAt: now,
   } })
+  const record = await db.record.findFirstOrThrow({
+    where: { organizationId, teamId, displayName: name },
+    select: { id: true },
+  })
+  const stageId = fixtureValue.stageIds.get(stage)
+  if (stageId === undefined) throw new Error(`stage fixture missing ${stage}`)
+  await db.recordStageHistory.create({ data: {
+    organizationId,
+    teamId,
+    recordId: record.id,
+    pipelineId: fixtureValue.pipelineId,
+    stageId,
+    startedAt: now,
+    actorType: 'human',
+    actorId: 'pipeline-user',
+    requestId: crypto.randomUUID(),
+  } })
 }
 
 afterAll(async () => {
@@ -98,10 +157,10 @@ afterAll(async () => {
 })
 
 describe('pipeline summary service', () => {
-  it('selects the sole active status and returns compact filtered aggregates', async () => {
+  it('selects the default pipeline and returns compact filtered aggregates', async () => {
     const value = await fixture()
-    await createDeal(value.tenant, 'Pipeline Alpha', 'proposal', '12.50')
-    await createDeal(value.tenant, 'Pipeline Beta', 'won', '20')
+    await createDeal(value, 'Pipeline Alpha', 'proposal', '12.50')
+    await createDeal(value, 'Pipeline Beta', 'won', '20')
     const result = await pipelineSummary(deps, value.ctx, {
       objectType: 'deal',
       amountAttribute: 'amount',
@@ -122,26 +181,18 @@ describe('pipeline summary service', () => {
     expect(result.conversions).toEqual([])
   })
 
-  it('uses shared attribute errors for explicit status slugs', async () => {
+  it('rejects missing and archived pipeline slugs', async () => {
     const value = await fixture()
     await expect(pipelineSummary(deps, value.ctx, {
-      objectType: 'deal', statusAttribute: 'missing_stage',
-    })).rejects.toMatchObject({ code: 'UNKNOWN_ATTRIBUTE' })
-    const stage = await db.attribute.findFirstOrThrow({
-      where: {
-        organizationId: value.tenant.organizationId,
-        teamId: value.tenant.teamId,
-        objectType: { slug: 'deal' },
-        slug: 'stage',
-      },
-    })
-    await db.attribute.update({ where: { id: stage.id }, data: { archivedAt: now } })
+      objectType: 'deal', pipeline: 'missing_stage',
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await db.pipeline.update({ where: { id: value.pipelineId }, data: { archivedAt: now } })
     await db.team.update({
       where: { id: value.tenant.teamId }, data: { schemaVersion: { increment: 1 } },
     })
     await expect(pipelineSummary(deps, value.ctx, {
-      objectType: 'deal', statusAttribute: 'stage',
-    })).rejects.toMatchObject({ code: 'ATTRIBUTE_ARCHIVED' })
+      objectType: 'deal', pipeline: 'sales',
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
   it('preauthorizes sensitive aggregation and audits a denial exactly once', async () => {
@@ -160,7 +211,7 @@ describe('pipeline summary service', () => {
       bindings: { create: { actorType: 'role', actorId: 'member' } },
     } })
     await expect(pipelineSummary(deps, value.ctx, {
-      objectType: 'deal', statusAttribute: 'stage', amountAttribute: 'amount',
+      objectType: 'deal', pipeline: 'sales', amountAttribute: 'amount',
     })).rejects.toMatchObject({ code: 'POLICY_DENIED' })
     const audits = await db.auditLog.findMany({
       where: {
