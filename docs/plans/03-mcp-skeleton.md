@@ -84,7 +84,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T25 — Surface pin test and tool description lint
+### T25 ✅ — Surface pin test and tool description lint
 
 **Depends on:** T24. **Spec:** `docs/mcp-surface.md` §10; `AGENTS.md` rule zero.
 
