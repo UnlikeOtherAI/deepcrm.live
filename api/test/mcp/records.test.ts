@@ -100,6 +100,14 @@ describe('record MCP tools', () => {
     expect(structured(await call('crm_record_get', { id: loserId }))).toMatchObject({
       record: { id: survivorId, redirected_from: loserId },
     })
+    const unmerged = structured(await call('crm_unmerge', {
+      merge_change_id: z.object({ merge_change_id: z.string().uuid() }).parse(merged).merge_change_id,
+      reason: 'records are distinct',
+    }))
+    expect(unmerged).toEqual({ restored: [loserId], conflicts: [] })
+    expect(structured(await call('crm_record_get', { id: loserId }))).toMatchObject({
+      record: { id: loserId },
+    })
   })
 
   it('creates, reads, queries, histories, deletes and restores records', async () => {

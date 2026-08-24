@@ -6,9 +6,12 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   createProjectionLinkWriter,
   createRecord,
+  applyTemplate,
   defineAttribute,
   defineObjectType,
   deleteRecord,
+  executeMerge,
+  executeUnmerge,
   loadSchema,
   projectLinksIntoData,
   restoreRecord,
@@ -329,6 +332,85 @@ async function runScenario(scenario: Scenario): Promise<void> {
 afterAll(async () => db.$disconnect())
 
 describe('schema engine database properties', () => {
+  it('satisfies merge/unmerge invariant (d)', async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.tuple(fc.uuid(), fc.uuid()).filter(([left, right]) => left !== right),
+      async ([left, right]) => {
+        const tenant = await seedTenant(db)
+        try {
+          const ctx = context(tenant, 0)
+          await db.$transaction((tx) => applyTemplate(tx, tenant, actor(), 'standard_crm'))
+          const schema = await loadSchema(db, tenant)
+          const links = createProjectionLinkWriter()
+          const company = (await db.$transaction((tx) => createRecord(tx, ctx, schema, {
+            objectType: 'company', data: { name: `Company ${left}` },
+          }, links))).record
+          const survivor = (await db.$transaction((tx) => createRecord(tx, ctx, schema, {
+            objectType: 'person',
+            data: { name: { full: `Survivor ${left}` }, emails: [`${left}@property.test`], company: company.id },
+          }, links))).record
+          const loser = (await db.$transaction((tx) => createRecord(tx, ctx, schema, {
+            objectType: 'person',
+            data: { name: { full: `Loser ${right}` }, emails: [`${right}@property.test`], company: company.id },
+          }, links))).record
+          await db.$transaction((tx) => createRecord(tx, ctx, schema, {
+            objectType: 'deal', data: { name: `Deal ${right}`, contacts: [loser.id] },
+          }, links))
+          const ids = [survivor.id, loser.id]
+          const beforeRecords = await db.record.findMany({
+            where: { ...scope(tenant), id: { in: ids } },
+            select: { id: true, data: true }, orderBy: { id: 'asc' },
+          })
+          const beforeLinks = await db.recordLink.findMany({
+            where: {
+              ...scope(tenant), activeUntil: null,
+              OR: [{ fromRecordId: { in: ids } }, { toRecordId: { in: ids } }],
+            },
+            select: {
+              id: true, relationTypeId: true, fromRecordId: true, toRecordId: true, position: true,
+            },
+            orderBy: { id: 'asc' },
+          })
+          const beforeMatch = await db.recordMatchLookupKey.findMany({
+            where: { ...scope(tenant), recordId: { in: ids } },
+            select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+            orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+          })
+          expect(beforeMatch.length).toBeGreaterThan(0)
+          const merged = await db.$transaction((tx) => executeMerge(tx, ctx, schema, {
+            survivorId: survivor.id, mergedIds: [loser.id], reason: 'property merge',
+          }))
+          const result = await db.$transaction((tx) => executeUnmerge(
+            tx, context(tenant, 1), schema,
+            { mergeChangeId: merged.mergeChangeId, reason: 'property unmerge' },
+          ))
+          expect(result.conflicts).toEqual([])
+          expect(await db.record.findMany({
+            where: { ...scope(tenant), id: { in: ids } },
+            select: { id: true, data: true }, orderBy: { id: 'asc' },
+          })).toEqual(beforeRecords)
+          expect(await db.recordLink.findMany({
+            where: {
+              ...scope(tenant), activeUntil: null,
+              OR: [{ fromRecordId: { in: ids } }, { toRecordId: { in: ids } }],
+            },
+            select: {
+              id: true, relationTypeId: true, fromRecordId: true, toRecordId: true, position: true,
+            },
+            orderBy: { id: 'asc' },
+          })).toEqual(beforeLinks)
+          expect(await db.recordMatchLookupKey.findMany({
+            where: { ...scope(tenant), recordId: { in: ids } },
+            select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+            orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+          })).toEqual(beforeMatch)
+        } finally {
+          await dropTenant(db, tenant.organizationId)
+        }
+      },
+    ), { numRuns: 5 })
+  }, 120_000)
+
   it('does not advance an empty replacement and records a projection reorder', async () => {
     await runScenario({
       schemaSeed: 1,

@@ -19,3 +19,25 @@ export const CrmMergeRecords = {
     ended_links: z.array(Uuid).describe('links ended for self, duplicate, or cardinality conflicts'),
   }).strict(),
 }
+
+const UnmergeConflict = z.object({
+  kind: z.enum(['unique_key', 'matching_rule', 'link', 'list_entry'])
+    .describe('constraint that prevents restoration'),
+  attribute: Slug.optional().describe('attribute involved in a key or matching collision'),
+  rule_position: z.number().int().nonnegative().optional()
+    .describe('matching-rule tuple position involved in the collision'),
+  link_id: Uuid.optional().describe('link that cannot be restored'),
+  held_by: Uuid.optional().describe('visible record currently holding the conflicting value or edge'),
+}).strict()
+
+export const CrmUnmerge = {
+  in: z.object({
+    merge_change_id: Uuid.describe('merge change id returned by crm_merge_records'),
+    reason: z.string().min(1).max(500).describe('required audit reason for undoing the merge'),
+  }).strict(),
+  out: z.object({
+    restored: z.array(Uuid).describe('loser record ids restored to live records'),
+    conflicts: z.array(UnmergeConflict)
+      .describe('collisions that prevented restoration; restored is empty when present'),
+  }).strict(),
+}

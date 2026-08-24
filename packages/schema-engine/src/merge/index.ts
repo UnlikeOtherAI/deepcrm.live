@@ -9,6 +9,7 @@ export {
   type UniqueKeyMove,
 } from './plan.js'
 export { executeMerge } from './execute.js'
+export { executeUnmerge } from './unmerge.js'
 export type {
   ExecuteMergeInput,
   ExecuteMergeResult,
@@ -17,4 +18,7 @@ export type {
   MergePlanAuthorizer,
   MergeSnapshot,
   MergeUniqueKeySnapshot,
+  ExecuteUnmergeInput,
+  ExecuteUnmergeResult,
+  UnmergeConflict,
 } from './types.js'

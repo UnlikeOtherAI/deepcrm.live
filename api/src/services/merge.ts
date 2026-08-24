@@ -1,10 +1,12 @@
 import type { Db, Prisma } from '@deepcrm/db'
 import {
   executeMerge,
+  executeUnmerge,
   loadSchema,
   type LoadedSchema,
   type MergePlanAuthorization,
   type RecordTx,
+  type UnmergeConflict,
 } from '@deepcrm/schema-engine'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
@@ -12,7 +14,7 @@ import type { AppDeps } from '../deps.js'
 import { loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
-import { findVisibleLiveRecords } from './record-visibility.js'
+import { findVisibleLiveRecords, findVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
 
 export type MergeRecordsInput = {
@@ -29,6 +31,22 @@ export type MergeRecordsResult = {
   ended_links: readonly string[]
 }
 
+export type UnmergeRecordsInput = {
+  mergeChangeId: string
+  reason: string
+}
+
+export type UnmergeRecordsResult = {
+  restored: readonly string[]
+  conflicts: readonly {
+    kind: UnmergeConflict['kind']
+    attribute?: string
+    rule_position?: number
+    link_id?: string
+    held_by?: string
+  }[]
+}
+
 type MergeServiceTx = RecordTx & Pick<Db, 'policyRule' | 'webhook'>
 
 function auditMetadata(ctx: ActorContext, input: MergeRecordsInput): Prisma.InputJsonObject {
@@ -43,6 +61,7 @@ function auditMetadata(ctx: ActorContext, input: MergeRecordsInput): Prisma.Inpu
 async function writeAudit(
   deps: AppDeps, ctx: ActorContext, input: MergeRecordsInput,
   outcome: 'success' | 'denied', resourceId: string | null,
+  action = 'crm_merge_records',
 ): Promise<void> {
   await deps.db.$transaction((tx) => deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId,
@@ -50,7 +69,7 @@ async function writeAudit(
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
     onBehalfOf: ctx.onBehalfOf.uoaUserId,
-    action: 'crm_merge_records',
+    action,
     resourceType: 'merge',
     resourceId,
     outcome,
@@ -181,6 +200,112 @@ export async function mergeRecords(
       if (error instanceof ServiceError && (
         error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
       )) await writeAudit(deps, ctx, input, 'denied', input.survivorId)
+      throw error
+    }
+  })
+}
+
+async function visibleUnmergeMarker(
+  deps: AppDeps, ctx: ActorContext, mergeChangeId: string,
+): Promise<{ survivorId: string; objectTypeId: string; recordIds: string[] }> {
+  const marker = await deps.db.recordChange.findFirst({
+    where: { ...ctx.tenant, id: mergeChangeId, kind: 'merge' },
+    select: { recordId: true, groupId: true, snapshot: true },
+  })
+  if (marker?.recordId === null || marker?.recordId === undefined
+    || marker.groupId === null || marker.snapshot === null) {
+    throw new ServiceError(ErrorCode.NOT_FOUND, 'Merge change not found')
+  }
+  const group = await deps.db.recordChange.findMany({
+    where: { ...ctx.tenant, groupId: marker.groupId, kind: 'merge', recordId: { not: null } },
+    select: { recordId: true },
+  })
+  const recordIds = group.flatMap((change) => change.recordId ?? [])
+  const visible = await Promise.all(recordIds.map((id) => findVisibleRecord(deps.db, ctx, id)))
+  if (recordIds.length < 2 || visible.some((record) => record === null)) {
+    throw new ServiceError(ErrorCode.NOT_FOUND, 'Merge change not found')
+  }
+  const survivor = visible.find((record) => record?.id === marker.recordId)
+  if (survivor === undefined || survivor === null
+    || visible.some((record) => record?.objectTypeId !== survivor.objectTypeId)) {
+    throw new ServiceError(ErrorCode.NOT_FOUND, 'Merge change not found')
+  }
+  const live = await findVisibleLiveRecords(deps.db, ctx, [marker.recordId])
+  if (live.length !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Merge change not found')
+  return { survivorId: survivor.id, objectTypeId: survivor.objectTypeId, recordIds }
+}
+
+async function presentConflict(
+  deps: AppDeps, ctx: ActorContext, conflict: UnmergeConflict,
+): Promise<UnmergeRecordsResult['conflicts'][number]> {
+  const holderVisible = conflict.heldBy === undefined
+    ? false
+    : await findVisibleRecord(deps.db, ctx, conflict.heldBy) !== null
+  return {
+    kind: conflict.kind,
+    ...(conflict.attribute === undefined ? {} : { attribute: conflict.attribute }),
+    ...(conflict.rulePosition === undefined ? {} : { rule_position: conflict.rulePosition }),
+    ...(conflict.linkId === undefined ? {} : { link_id: conflict.linkId }),
+    ...(holderVisible ? { held_by: conflict.heldBy } : {}),
+  }
+}
+
+export async function unmergeRecords(
+  deps: AppDeps, ctx: ActorContext, input: UnmergeRecordsInput,
+): Promise<UnmergeRecordsResult> {
+  return recordBoundary(deps.db, deps.ids, ctx, async () => {
+    const marker = await visibleUnmergeMarker(deps, ctx, input.mergeChangeId)
+    try {
+      await authorizeMerge(deps.db, ctx, marker.objectTypeId, marker.recordIds)
+      const schema = await loadSchema(deps.db, ctx.tenant)
+      return await deps.db.$transaction(async (tx) => {
+        const serviceTx: MergeServiceTx = tx
+        const result = await executeUnmerge(serviceTx, ctx, schema, {
+          mergeChangeId: input.mergeChangeId,
+          reason: input.reason,
+        })
+        await enqueueRecordMutationEffects(
+          serviceTx, ctx, result.sequences, result.touchedRecordIds,
+        )
+        await deps.writeAudit(serviceTx, {
+          organizationId: ctx.tenant.organizationId,
+          teamId: ctx.tenant.teamId,
+          actorType: ctx.actor.type,
+          actorId: ctx.actor.id,
+          onBehalfOf: ctx.onBehalfOf.uoaUserId,
+          action: 'crm_unmerge',
+          resourceType: 'merge',
+          resourceId: input.mergeChangeId,
+          outcome: 'success',
+          reason: input.reason,
+          metadata: {
+            app: ctx.app,
+            actChain: ctx.actChain,
+            provenance: ctx.provenance,
+            restoredCount: result.restored.length,
+            conflictCount: result.conflicts.length,
+          },
+          requestId: ctx.requestId,
+          ipAddress: null,
+          userAgent: null,
+        })
+        return {
+          restored: result.restored,
+          conflicts: await Promise.all(result.conflicts.map((conflict) => (
+            presentConflict(deps, ctx, conflict)
+          ))),
+        }
+      })
+    } catch (error) {
+      if (error instanceof ServiceError && (
+        error.code === ErrorCode.POLICY_DENIED || error.code === ErrorCode.APPROVAL_REQUIRED
+      )) {
+        await writeAudit(deps, ctx, {
+          survivorId: marker.survivorId,
+          mergedIds: [],
+          reason: input.reason,
+        }, 'denied', input.mergeChangeId, 'crm_unmerge')
+      }
       throw error
     }
   })

@@ -7,9 +7,11 @@ import {
   createProjectionLinkWriter,
   createRecord,
   executeMerge,
+  executeUnmerge,
   listLinks,
   loadSchema,
   recordAt,
+  updateRecord,
 } from '../../src/index.js'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -75,6 +77,77 @@ afterAll(async () => {
 })
 
 describe('merge execution', () => {
+  it('undoes a merge without losing data, links, list membership, or current match rows', async () => {
+    const fixture = await setup()
+    const recordIds = [fixture.survivor.id, fixture.loser.id]
+    const beforeRecords = await db.record.findMany({
+      where: { ...scope(fixture.tenant), id: { in: recordIds } },
+      select: { id: true, data: true }, orderBy: { id: 'asc' },
+    })
+    const beforeLinks = await db.recordLink.findMany({
+      where: {
+        ...scope(fixture.tenant), activeUntil: null,
+        OR: [
+          { fromRecordId: { in: recordIds } },
+          { toRecordId: { in: recordIds } },
+        ],
+      },
+      select: {
+        id: true, relationTypeId: true, fromRecordId: true, toRecordId: true, position: true,
+      },
+      orderBy: { id: 'asc' },
+    })
+    const beforeMatchKeys = await db.recordMatchKey.findMany({
+      where: { ...scope(fixture.tenant), recordId: { in: recordIds } },
+      select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+      orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+    })
+    const beforeLookupKeys = await db.recordMatchLookupKey.findMany({
+      where: { ...scope(fixture.tenant), recordId: { in: recordIds } },
+      select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+      orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+    })
+    const merged = await db.$transaction((tx) => executeMerge(tx, fixture.ctx, fixture.schema, {
+      survivorId: fixture.survivor.id,
+      mergedIds: [fixture.loser.id],
+      reason: 'same person',
+    }))
+    const result = await db.$transaction((tx) => executeUnmerge(tx, {
+      ...fixture.ctx, requestId: crypto.randomUUID(), now: new Date('2026-08-24T12:01:00.000Z'),
+    }, fixture.schema, {
+      mergeChangeId: merged.mergeChangeId,
+      reason: 'merge was incorrect',
+    }))
+    expect(result).toMatchObject({ restored: [fixture.loser.id], conflicts: [] })
+    expect(await db.record.findMany({
+      where: { ...scope(fixture.tenant), id: { in: recordIds } },
+      select: { id: true, data: true }, orderBy: { id: 'asc' },
+    })).toEqual(beforeRecords)
+    expect(await db.recordLink.findMany({
+      where: {
+        ...scope(fixture.tenant), activeUntil: null,
+        OR: [
+          { fromRecordId: { in: recordIds } },
+          { toRecordId: { in: recordIds } },
+        ],
+      },
+      select: {
+        id: true, relationTypeId: true, fromRecordId: true, toRecordId: true, position: true,
+      },
+      orderBy: { id: 'asc' },
+    })).toEqual(beforeLinks)
+    expect(await db.recordMatchKey.findMany({
+      where: { ...scope(fixture.tenant), recordId: { in: recordIds } },
+      select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+      orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+    })).toEqual(beforeMatchKeys)
+    expect(await db.recordMatchLookupKey.findMany({
+      where: { ...scope(fixture.tenant), recordId: { in: recordIds } },
+      select: { matchingRuleId: true, normalizedHash: true, recordId: true },
+      orderBy: [{ recordId: 'asc' }, { matchingRuleId: 'asc' }, { normalizedHash: 'asc' }],
+    })).toEqual(beforeLookupKeys)
+  })
+
   it('moves keys, re-points both link columns, collapses duplicates, and leaves redirects', async () => {
     const fixture = await setup()
     const beforeLinks = await db.recordLink.findMany({
@@ -158,11 +231,33 @@ describe('merge execution', () => {
         objectType: 'deal', data: { name: 'Surviving deal', contacts: [fixture.survivor.id] },
       }, writer,
     ))).record
-    await db.$transaction((tx) => executeMerge(tx, fixture.ctx, fixture.schema, {
+    const merged = await db.$transaction((tx) => executeMerge(tx, fixture.ctx, fixture.schema, {
       survivorId: survivorDeal.id,
       mergedIds: [fixture.deal.id],
       reason: 'same deal',
     }))
+    const other = (await db.$transaction((tx) => createRecord(tx, {
+      ...fixture.ctx, requestId: crypto.randomUUID(),
+    }, fixture.schema, {
+      objectType: 'person',
+      data: { name: { full: 'Other' }, emails: ['other@engine.test'] },
+    }, writer))).record
+    const updateCtx = {
+      ...fixture.ctx,
+      requestId: crypto.randomUUID(),
+      now: new Date('2026-08-24T12:01:00.000Z'),
+    }
+    await db.$transaction((tx) => updateRecord(tx, updateCtx, fixture.schema, {
+      recordId: survivorDeal.id,
+      expectedVersion: merged.record.version,
+      data: { contacts: [fixture.survivor.id, fixture.loser.id, other.id] },
+    }, writer))
+    expect((await db.$transaction((tx) => executeUnmerge(tx, {
+      ...updateCtx, requestId: crypto.randomUUID(),
+    }, fixture.schema, {
+      mergeChangeId: merged.mergeChangeId,
+      reason: 'deals are distinct',
+    }))).conflicts).toEqual([])
     const relation = fixture.schema.resolveBackingRelation('deal', 'contacts')
     if (relation === undefined) throw new Error('Missing deal contacts relation')
     const links = await db.recordLink.findMany({
@@ -174,7 +269,61 @@ describe('merge execution', () => {
     })
     expect(links).toEqual([
       { toRecordId: fixture.survivor.id, position: 0 },
-      { toRecordId: fixture.loser.id, position: 1 },
+      { toRecordId: other.id, position: 1 },
     ])
+    expect(await db.recordLink.findMany({
+      where: {
+        ...scope(fixture.tenant), relationTypeId: relation.id,
+        fromRecordId: fixture.deal.id, activeUntil: null,
+      },
+      select: { toRecordId: true, position: true }, orderBy: { position: 'asc' },
+    })).toEqual([{ toRecordId: fixture.loser.id, position: 0 }])
+  })
+
+  it('preserves survivor changes after merge and returns unique conflicts atomically', async () => {
+    const fixture = await setup()
+    const writer = createProjectionLinkWriter()
+    const merged = await db.$transaction((tx) => executeMerge(tx, fixture.ctx, fixture.schema, {
+      survivorId: fixture.survivor.id,
+      mergedIds: [fixture.loser.id],
+      reason: 'same person',
+    }))
+    const updateCtx = {
+      ...fixture.ctx,
+      requestId: crypto.randomUUID(),
+      now: new Date('2026-08-24T12:01:00.000Z'),
+    }
+    const updated = await db.$transaction((tx) => updateRecord(tx, updateCtx, fixture.schema, {
+      recordId: fixture.survivor.id,
+      expectedVersion: merged.record.version,
+      data: { title: 'Analyst', emails: ['ada@engine.test'] },
+    }, writer))
+    const third = (await db.$transaction((tx) => createRecord(tx, {
+      ...updateCtx, requestId: crypto.randomUUID(),
+    }, fixture.schema, {
+      objectType: 'person',
+      data: { name: { full: 'Third' }, emails: ['augusta@engine.test'] },
+    }, writer))).record
+    const changesBefore = await db.recordChange.count({ where: scope(fixture.tenant) })
+    const result = await db.$transaction((tx) => executeUnmerge(tx, {
+      ...updateCtx, requestId: crypto.randomUUID(), now: new Date('2026-08-24T12:02:00.000Z'),
+    }, fixture.schema, {
+      mergeChangeId: merged.mergeChangeId,
+      reason: 'merge was incorrect',
+    }))
+    expect(result).toEqual({
+      restored: [],
+      conflicts: [{ kind: 'unique_key', attribute: 'emails', heldBy: third.id }],
+      sequences: [],
+      touchedRecordIds: [],
+    })
+    expect(await db.recordChange.count({ where: scope(fixture.tenant) })).toBe(changesBefore)
+    expect(await db.record.findUniqueOrThrow({ where: { id: fixture.survivor.id } })).toMatchObject({
+      data: { name: { full: 'Ada' }, emails: ['ada@engine.test'], title: 'Analyst' },
+      version: updated.record.version,
+    })
+    expect(await db.record.findUniqueOrThrow({ where: { id: fixture.loser.id } })).toMatchObject({
+      mergedIntoId: fixture.survivor.id,
+    })
   })
 })

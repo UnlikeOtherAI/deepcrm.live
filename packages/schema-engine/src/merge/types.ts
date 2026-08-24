@@ -50,3 +50,23 @@ export type ExecuteMergeResult = {
   sequences: readonly number[]
   touchedRecordIds: readonly string[]
 }
+
+export type UnmergeConflict = {
+  kind: 'unique_key' | 'matching_rule' | 'link' | 'list_entry'
+  attribute?: string
+  rulePosition?: number
+  linkId?: string
+  heldBy?: string
+}
+
+export type ExecuteUnmergeInput = {
+  mergeChangeId: string
+  reason: string
+}
+
+export type ExecuteUnmergeResult = {
+  restored: readonly string[]
+  conflicts: readonly UnmergeConflict[]
+  sequences: readonly number[]
+  touchedRecordIds: readonly string[]
+}

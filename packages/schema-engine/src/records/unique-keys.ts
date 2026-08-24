@@ -26,9 +26,16 @@ function normalizedValues(
   return values.map((item) => normalize(item) ?? canonicalJson(item))
 }
 
-type UniqueKey = { attributeId: string; attributeSlug: string; normalizedHash: string; normalizedValue: string }
+export type UniqueKey = {
+  attributeId: string
+  attributeSlug: string
+  normalizedHash: string
+  normalizedValue: string
+}
 
-function uniqueKeys(objectType: LoadedObjectType, data: Record<string, JsonValue>): UniqueKey[] {
+export function uniqueKeysForData(
+  objectType: LoadedObjectType, data: Record<string, JsonValue>,
+): UniqueKey[] {
   const keys: UniqueKey[] = []
   for (const attribute of objectType.attributes) {
     if (!attribute.isUnique) continue
@@ -79,7 +86,7 @@ export async function syncUniqueKeys(
   recordId: string,
   data: Record<string, JsonValue>,
 ): Promise<void> {
-  const keys = uniqueKeys(objectType, data)
+  const keys = uniqueKeysForData(objectType, data)
   await lockKeys(tx, schema.teamId, keys.map((key) => `${key.attributeId}:${key.normalizedHash}`))
   await tx.recordUniqueKey.deleteMany({
     where: { organizationId: objectType.organizationId, teamId: schema.teamId, recordId },
