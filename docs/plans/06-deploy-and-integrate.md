@@ -2,7 +2,7 @@
 
 Outcome: `https://api.deepcrm.live/mcp` live on Hetzner; Nessie can enable DeepCRM per team and its agents see `crm_*` tools; prompts shipped.
 
-### T43 — Dockerfile and compose
+### T43 ✅ — Dockerfile and compose
 
 **Depends on:** T42. **Spec:** `docs/deployment.md`.
 
