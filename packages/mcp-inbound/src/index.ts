@@ -1,1 +1,7 @@
+export * from './app-key.js'
+export * from './authenticate.js'
+export * from './headers.js'
+export * from './nessie-context.js'
 export { devPrincipal } from './principal.js'
+export * from './seen-set.js'
+export * from './uoa-delegation.js'
