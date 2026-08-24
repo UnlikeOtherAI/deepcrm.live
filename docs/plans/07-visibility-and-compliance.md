@@ -120,7 +120,7 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T56 — Search chokepoint, model filter, similar_to, membership filters (R6, R13, R17, R4)
+### T56 ✅ — Search chokepoint, model filter, similar_to, membership filters (R6, R13, R17, R4)
 
 **Depends on:** T55. **Spec:** `docs/auth-and-tenancy.md` §3 (searchQuery chokepoint); `docs/schema-engine.md` §5 (`contains` on multi actor/record refs), §7 (merge multi ordering — R3), §8 (embedding_model filter, content assembly order — R14); `docs/spec/contracts.md` (`CrmSearch.similar_to`).
 
