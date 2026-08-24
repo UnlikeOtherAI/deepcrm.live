@@ -1,4 +1,4 @@
-import { createDb, dropTenant, seedTenant, type PolicyEffect } from '@deepcrm/db'
+import { createDb, dropTenant, seedTenant, writeAudit, type PolicyEffect } from '@deepcrm/db'
 import { defineObjectType } from '@deepcrm/schema-engine'
 import type { ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -30,6 +30,7 @@ const deps: AppDeps = {
   ids: () => crypto.randomUUID(),
   version: '0.0.0',
   orgAllowlist: null,
+  writeAudit,
 }
 type Tenant = { organizationId: string; teamId: string }
 

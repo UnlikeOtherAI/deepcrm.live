@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createDb, type Db } from '@deepcrm/db'
+import { createDb, writeAudit, type Db } from '@deepcrm/db'
 import type { Env } from './env.js'
 
 export type AppDeps = {
@@ -8,6 +8,7 @@ export type AppDeps = {
   ids: () => string
   version: string
   orgAllowlist: ReadonlySet<string> | null
+  writeAudit: typeof writeAudit
 }
 
 export type WorkerDeps = AppDeps
@@ -26,5 +27,6 @@ export function createAppDeps(env: Env): AppDeps {
     ids: () => randomUUID(),
     version: '0.0.0',
     orgAllowlist: parseOrgAllowlist(env.DEEPCRM_ORG_ALLOWLIST),
+    writeAudit,
   }
 }

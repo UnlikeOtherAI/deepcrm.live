@@ -79,7 +79,7 @@ function parse(attribute: LoadedAttribute, value: unknown, issues: ValidationIss
       return undefined
     }
     const serialized = JSON.stringify(result.data)
-    if (serialized === undefined) throw new Error('Attribute result is not JSON')
+    if (serialized === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Attribute result is not JSON')
     return canonicalJsonValue(JSON.parse(serialized))
   } catch {
     invalid(issues, attribute.slug)

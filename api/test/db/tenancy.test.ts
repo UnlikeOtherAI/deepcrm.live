@@ -1,4 +1,4 @@
-import { createDb } from '@deepcrm/db'
+import { createDb, writeAudit } from '@deepcrm/db'
 import { devPrincipal } from '@deepcrm/mcp-inbound'
 import type { Principal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -20,6 +20,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
     ids: () => crypto.randomUUID(),
     version: '0.0.0',
     orgAllowlist,
+    writeAudit,
   }
 }
 

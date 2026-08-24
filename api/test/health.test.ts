@@ -1,4 +1,4 @@
-import { createDb, type Db } from '@deepcrm/db'
+import { createDb, writeAudit, type Db } from '@deepcrm/db'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createAppDeps, type AppDeps } from '../src/deps.js'
@@ -17,6 +17,7 @@ function makeDeps(ok: boolean): AppDeps {
     ids: () => 'id_test',
     version: '0.0.0',
     orgAllowlist: null,
+    writeAudit,
   }
 }
 
@@ -49,6 +50,7 @@ describe('createAppDeps', () => {
     expect(deps.orgAllowlist).not.toBeNull()
     if (deps.orgAllowlist === null) throw new Error('expected an organization allowlist')
     expect([...deps.orgAllowlist]).toEqual(['org_a', 'org_b'])
+    expect(deps.writeAudit).toBe(writeAudit)
     await deps.db.$disconnect()
   })
 })

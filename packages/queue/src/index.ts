@@ -1,5 +1,7 @@
 import { Prisma, type Db, type QueueJob } from '@deepcrm/db'
 
+export type QueueEnqueueTx = Pick<Db, 'queueJob'>
+
 type TenantJob = { organizationId: string; teamId: string }
 type SystemJob = { organizationId?: never; teamId?: never }
 export type EnqueueInput = (TenantJob | SystemJob) & {
@@ -11,16 +13,51 @@ export type EnqueueInput = (TenantJob | SystemJob) & {
   maxAttempts?: number
 }
 
+type ExistingJob = {
+  id: string
+  organizationId: string | null
+  teamId: string | null
+  type: string
+}
+
+function sameJobScope(existing: ExistingJob, input: EnqueueInput): boolean {
+  return existing.organizationId === (input.organizationId ?? null)
+    && existing.teamId === (input.teamId ?? null)
+    && existing.type === input.type
+}
+
+function duplicateIdempotencyKey(): never {
+  throw new Error('Queue job idempotency key is already used by another job')
+}
+
+async function existingJob(
+  db: QueueEnqueueTx,
+  input: EnqueueInput,
+): Promise<{ id: string; created: false } | null> {
+  if (input.idempotencyKey === undefined) return null
+  const existing = await db.queueJob.findUnique({
+    where: { idempotencyKey: input.idempotencyKey },
+    select: { id: true, organizationId: true, teamId: true, type: true },
+  })
+  if (existing === null) return null
+  if (!sameJobScope(existing, input)) duplicateIdempotencyKey()
+  return { id: existing.id, created: false }
+}
+
 export async function enqueue(
-  db: Db,
+  db: QueueEnqueueTx,
   input: EnqueueInput,
 ): Promise<{ id: string; created: boolean }> {
+  const existing = await existingJob(db, input)
+  if (existing !== null) return existing
   if (input.idempotencyKey !== undefined) {
-    const existing = await db.queueJob.findUnique({
-      where: { idempotencyKey: input.idempotencyKey },
-      select: { id: true },
+    const inserted = await db.queueJob.createMany({
+      data: { ...input, visibleAt: input.visibleAt, priority: input.priority, maxAttempts: input.maxAttempts },
+      skipDuplicates: true,
     })
-    if (existing !== null) return { id: existing.id, created: false }
+    const stored = await existingJob(db, input)
+    if (stored === null) throw new Error('Queue idempotency row was not stored')
+    return { id: stored.id, created: inserted.count === 1 }
   }
   const job = await db.queueJob.create({
     data: { ...input, visibleAt: input.visibleAt, priority: input.priority, maxAttempts: input.maxAttempts },
