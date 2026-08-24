@@ -13,6 +13,7 @@ import { enqueueBulkAssert } from '../../services/bulk-assert.js'
 import {
   assertRecord, createRecord, deleteRecord, recordAt, recordHistory, restoreRecord, updateRecord,
 } from '../../services/records.js'
+import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok, taskCreated } from './result.js'
 
@@ -134,23 +135,32 @@ export function registerRecordTools(
     name: 'crm_record_delete',
     description: 'Soft-delete a visible record and end links according to relation policy. Requires delete entitlement or approval.',
     input: CrmRecordDelete.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_record_delete', CrmRecordDelete.in.shape, {
+      resourceType: 'record',
+      resourceId: (args) => args.id,
+      reason: (args) => args.reason,
+      message: (args) => `Approve deleting record '${args.id}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       await deleteRecord(deps, ctx, {
         recordId: args.id, expectedVersion: args.expected_version, reason: args.reason,
-      })
+      }, approval)
       return jsonResult({ deleted: true })
-    },
+    }),
   })
   defineTool(server, {
     name: 'crm_record_restore',
     description: 'Restore a soft-deleted record and recoverable links. Restore conflicts identify a current unique-key holder.',
     input: CrmRecordRestore.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_record_restore', CrmRecordRestore.in.shape, {
+      resourceType: 'record',
+      resourceId: (args) => args.id,
+      message: (args) => `Approve restoring record '${args.id}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       const result = await restoreRecord(deps, ctx, {
         recordId: args.id,
-      })
+      }, approval)
       return jsonResult({ record: result.record })
-    },
+    }),
   })
   defineTool(server, {
     name: 'crm_record_at',

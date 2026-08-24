@@ -21,6 +21,15 @@ const ArchiveInputRequired = z.object({
   }),
   requestState: z.string().min(1),
 }).passthrough()
+const ApprovalInputRequired = z.object({
+  resultType: z.literal('input_required'),
+  inputRequests: z.object({
+    approval: z.object({
+      method: z.literal('elicitation/create'),
+    }).passthrough(),
+  }).passthrough(),
+  requestState: z.string().min(1),
+}).passthrough()
 const ToolResult = z.object({
   content: z.array(z.unknown()),
   structuredContent: z.unknown().optional(),
@@ -203,10 +212,7 @@ describe('schema MCP tools and resources', () => {
     const initial = ArchiveInputRequired.parse(await call('crm_attribute_archive', args))
     expect(initial.inputRequests.confirm.params.requestedSchema.required).toEqual(['confirmed'])
 
-    const stateMiddle = Math.floor(initial.requestState.length / 2)
-    const stateCharacter = initial.requestState[stateMiddle]
-    if (stateCharacter === undefined) throw new Error('Request state was empty')
-    const tampered = `${initial.requestState.slice(0, stateMiddle)}${stateCharacter === 'a' ? 'b' : 'a'}${initial.requestState.slice(stateMiddle + 1)}`
+    const tampered = `${initial.requestState}.corrupt`
     const retryRequest = {
       method: 'tools/call' as const,
       params: {
@@ -234,7 +240,7 @@ describe('schema MCP tools and resources', () => {
     })).resolves.toMatchObject({ reason: 'Fax is retired.' })
   })
 
-  it('returns APPROVAL_REQUIRED for allow rules that require approval on view and define', async () => {
+  it('returns an approval challenge for schema define rules that require approval', async () => {
     const team = await devTeam()
     await db.policyRule.deleteMany({
       where: {
@@ -277,18 +283,23 @@ describe('schema MCP tools and resources', () => {
         where: { organizationId: team.organizationId, teamId: team.id },
       })
       expect(structured(await call('crm_schema_get', {}))).toMatchObject({ code: 'APPROVAL_REQUIRED' })
-      expect(structured(await call('crm_object_type_define', {
+      const challenge = ApprovalInputRequired.parse(await call('crm_object_type_define', {
         slug: 'approval_probe',
         singular_name: 'Approval probe',
         plural_name: 'Approval probes',
         description: 'Must not be created before approval.',
-      }))).toMatchObject({ code: 'APPROVAL_REQUIRED' })
+      }))
+      expect(challenge.inputRequests.approval.method).toBe('elicitation/create')
       await expect(db.objectType.count({
         where: { organizationId: team.organizationId, teamId: team.id },
       })).resolves.toBe(before)
       await expect(db.auditLog.count({
         where: { organizationId: team.organizationId, teamId: team.id },
-      })).resolves.toBe(auditsBefore)
+      })).resolves.toBe(auditsBefore + 1)
+      await expect(db.auditLog.findFirstOrThrow({
+        where: { organizationId: team.organizationId, teamId: team.id },
+        orderBy: { createdAt: 'desc' },
+      })).resolves.toMatchObject({ action: 'approval.requested', resourceType: 'approval' })
     } finally {
       await db.policyRule.deleteMany({
         where: {

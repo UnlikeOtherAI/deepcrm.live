@@ -37,6 +37,7 @@ import {
 } from '../../services/schema.js'
 import { presentAttribute, presentObjectType, presentRelation, presentSchema } from '../schema-presenters.js'
 import { inputRequired, verifyRequestState, type MrtrInput } from './input-required.js'
+import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
@@ -139,7 +140,10 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
     name: 'crm_object_type_define',
     description: 'Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with crm_attribute_define.',
     input: CrmObjectTypeDefine.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_object_type_define', CrmObjectTypeDefine.in.shape, {
+      resourceType: 'schema',
+      message: (args) => `Approve defining object type '${args.slug}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       await defineSchemaObjectWithAttributes(deps, ctx, {
         slug: args.slug,
         singularName: args.singular_name,
@@ -148,12 +152,12 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         icon: args.icon,
         attributes: args.attributes,
         primaryAttribute: args.primary_attribute,
-      })
+      }, approval)
       const schema = await latestSchema(deps, ctx)
       const objectType = schema.objectTypesBySlug.get(args.slug)
       if (objectType === undefined) throw new Error('Object type was not found after creation')
       return jsonResult(presentObjectType(schema, objectType))
-    },
+    }),
   })
 
   defineTool(server, {
@@ -179,24 +183,31 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
     name: 'crm_object_type_archive',
     description: 'Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count.',
     input: CrmObjectTypeArchive.in.shape,
-    handler: async (args, mrtr) => {
+    handler: withApproval(deps, ctx, 'crm_object_type_archive', CrmObjectTypeArchive.in.shape, {
+      resourceType: 'schema',
+      reason: (args) => args.reason,
+      message: (args) => `Approve archiving object type '${args.object_type}'? Requires an admin.`,
+    }, async (args, mrtr, approval) => {
       const impact = await previewSchemaObjectArchive(deps, ctx, args.object_type)
-      if (impact.records > 0) {
+      if (impact.records > 0 && approval === undefined) {
         const pending = confirmedOrChallenge(deps, ctx, 'crm_object_type_archive', args, (
           `Archiving object type '${args.object_type}' will hide ${impact.records} records.`
         ), mrtr)
         if (pending !== undefined) return pending
       }
-      await archiveSchemaObject(deps, ctx, args.object_type, args.reason)
+      await archiveSchemaObject(deps, ctx, args.object_type, args.reason, approval)
       return jsonResult({ archived: true, records: impact.records })
-    },
+    }),
   })
 
   defineTool(server, {
     name: 'crm_attribute_define',
     description: 'Add an attribute (field) to an object type. Use record_reference to relate to other object types. Unique attributes enable crm_record_assert.',
     input: CrmAttributeDefine.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_attribute_define', CrmAttributeDefine.in.shape, {
+      resourceType: 'schema',
+      message: (args) => `Approve defining attribute '${args.slug}' on '${args.object_type}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       await defineSchemaAttribute(deps, ctx, {
         objectType: args.object_type,
         slug: args.slug,
@@ -210,9 +221,9 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         is_indexed: args.is_indexed,
         sensitivity: args.sensitivity,
         default_value: args.default_value,
-      })
+      }, approval)
       return jsonResult(presentAttribute(await latestSchema(deps, ctx), args.object_type, args.slug))
-    },
+    }),
   })
 
   defineTool(server, {
@@ -238,24 +249,33 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
     name: 'crm_attribute_archive',
     description: 'Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value.',
     input: CrmAttributeArchive.in.shape,
-    handler: async (args, mrtr) => {
+    handler: withApproval(deps, ctx, 'crm_attribute_archive', CrmAttributeArchive.in.shape, {
+      resourceType: 'schema',
+      reason: (args) => args.reason,
+      message: (args) => `Approve archiving attribute '${args.attribute}'? Requires an admin.`,
+    }, async (args, mrtr, approval) => {
       const impact = await previewSchemaAttributeArchive(deps, ctx, args.object_type, args.attribute)
-      if (impact.recordsWithValues > 0) {
+      if (impact.recordsWithValues > 0 && approval === undefined) {
         const pending = confirmedOrChallenge(deps, ctx, 'crm_attribute_archive', args, (
           `Archiving attribute '${args.attribute}' will hide ${impact.recordsWithValues} existing values.`
         ), mrtr)
         if (pending !== undefined) return pending
       }
-      await archiveSchemaAttribute(deps, ctx, args.object_type, args.attribute, args.reason)
+      await archiveSchemaAttribute(
+        deps, ctx, args.object_type, args.attribute, args.reason, approval,
+      )
       return jsonResult({ archived: true, records_with_values: impact.recordsWithValues })
-    },
+    }),
   })
 
   defineTool(server, {
     name: 'crm_relation_type_define',
     description: 'Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. All four cardinalities are supported; a record_reference attribute owns exactly one backing relation, never shared.',
     input: CrmRelationTypeDefine.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_relation_type_define', CrmRelationTypeDefine.in.shape, {
+      resourceType: 'schema',
+      message: (args) => `Approve defining relation type '${args.slug}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       await defineSchemaRelation(deps, ctx, {
         slug: args.slug,
         fromObjectType: args.from_object_type,
@@ -266,26 +286,30 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         cardinality: args.cardinality,
         onDelete: args.on_delete,
         edgeAttributes: args.edge_attributes,
-      })
+      }, approval)
       return jsonResult(presentRelation(await latestSchema(deps, ctx), args.slug))
-    },
+    }),
   })
 
   defineTool(server, {
     name: 'crm_relation_type_archive',
     description: 'Archive a relation type; links are kept but inactive.',
     input: CrmRelationTypeArchive.in.shape,
-    handler: async (args, mrtr) => {
+    handler: withApproval(deps, ctx, 'crm_relation_type_archive', CrmRelationTypeArchive.in.shape, {
+      resourceType: 'schema',
+      reason: (args) => args.reason,
+      message: (args) => `Approve archiving relation type '${args.relation_type}'? Requires an admin.`,
+    }, async (args, mrtr, approval) => {
       const impact = await previewSchemaRelationArchive(deps, ctx, args.relation_type)
-      if (impact.links > 0) {
+      if (impact.links > 0 && approval === undefined) {
         const pending = confirmedOrChallenge(deps, ctx, 'crm_relation_type_archive', args, (
           `Archiving relation type '${args.relation_type}' will deactivate ${impact.links} active links.`
         ), mrtr)
         if (pending !== undefined) return pending
       }
-      await archiveSchemaRelation(deps, ctx, args.relation_type, args.reason)
+      await archiveSchemaRelation(deps, ctx, args.relation_type, args.reason, approval)
       return jsonResult({ archived: true, links: impact.links })
-    },
+    }),
   })
 
   defineTool(server, {

@@ -21,6 +21,7 @@ import {
 } from '@deepcrm/schema-engine'
 import { Candidate, ErrorCode, RecordOut as RecordOutSchema, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
+import type { ApprovalConsumption } from './approvals.js'
 import { type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import {
   asInlineLinkPolicyError,
@@ -175,12 +176,14 @@ async function runWrite(
   schema: LoadedSchema,
   operation: (tx: RecordServiceTx) => Promise<RecordWriteResult>,
   replayAuthorizer?: (tx: RecordServiceTx, result: RecordServiceResult) => Promise<void>,
+  approval?: ApprovalConsumption,
 ): Promise<RecordServiceResult> {
   if (authorization !== null) await authorizeRecordWrite(deps, ctx, descriptor, authorization)
   const hash = argumentHash(descriptor.args)
   try {
     return await deps.db.$transaction(async (tx) => {
       const serviceTx: RecordServiceTx = tx
+      await approval?.consume(serviceTx)
       const reservation = await reserve(serviceTx, ctx, descriptor, hash)
       if (reservation.kind === 'replay') {
         if (replayAuthorizer !== undefined) await replayAuthorizer(serviceTx, reservation.result)
@@ -420,7 +423,7 @@ export function assertRecordWithIntegration(
 
 async function changeDeletedState(
   deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
-  restore: boolean,
+  restore: boolean, approval?: ApprovalConsumption,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, record] = await Promise.all([
@@ -438,28 +441,35 @@ async function changeDeletedState(
       },
       idempotencyKey: input.idempotencyKey, reason: input.reason, resourceId: input.recordId,
     }
-    return runWrite(deps, ctx, descriptor, [recordPolicy(action, scopes)], null, schema, (tx) => (
-      restore
-        ? engineRestoreRecord(
-          tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
-        )
-        : engineDeleteRecord(
-          tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
-        )
-    ))
+    return runWrite(
+      deps, ctx, descriptor, [recordPolicy(action, scopes)], null, schema,
+      (tx) => (
+        restore
+          ? engineRestoreRecord(
+            tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
+          )
+          : engineDeleteRecord(
+            tx, ctx, schema, input.recordId, input.expectedVersion, deps.linkWriter, input.reason,
+          )
+      ),
+      undefined,
+      approval,
+    )
   })
 }
 
 export function deleteRecord(
   deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
+  approval?: ApprovalConsumption,
 ): Promise<RecordServiceResult> {
-  return changeDeletedState(deps, ctx, input, false)
+  return changeDeletedState(deps, ctx, input, false, approval)
 }
 
 export function restoreRecord(
   deps: AppDeps, ctx: ActorContext, input: DeleteRecordServiceInput,
+  approval?: ApprovalConsumption,
 ): Promise<RecordServiceResult> {
-  return changeDeletedState(deps, ctx, input, true)
+  return changeDeletedState(deps, ctx, input, true, approval)
 }
 
 export { recordAt, recordHistory } from './record-history.js'

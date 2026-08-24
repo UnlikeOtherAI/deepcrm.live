@@ -23,6 +23,7 @@ import {
 } from '@deepcrm/schema-engine'
 import { Prisma, tenantWhere } from '@deepcrm/db'
 import type { AppDeps } from '../deps.js'
+import type { ApprovalConsumption } from './approvals.js'
 import { checkPolicy } from './policy.js'
 
 export function getSchema(deps: AppDeps, ctx: ActorContext): Promise<LoadedSchema>
@@ -82,10 +83,11 @@ export async function defineSchemaObjectWithAttributes(
   deps: AppDeps,
   ctx: ActorContext,
   input: Parameters<typeof defineObjectTypeWithAttributes>[3],
+  approval?: ApprovalConsumption,
 ) {
   return runSchemaDefine(deps, ctx, (tx, author) => (
     defineObjectTypeWithAttributes(tx, ctx.tenant, author, input)
-  ))
+  ), approval)
 }
 
 function actor(ctx: ActorContext) {
@@ -113,22 +115,32 @@ export async function runSchemaDefine<T>(
   deps: AppDeps,
   ctx: ActorContext,
   operation: (tx: SchemaTx, auditActor: ReturnType<typeof actor>) => Promise<T>,
+  approval?: ApprovalConsumption,
 ): Promise<T> {
   await requireSchemaDefine(deps, ctx)
-  return inSchemaTransaction(deps, (tx) => operation(tx, actor(ctx)))
+  return inSchemaTransaction(deps, async (tx) => {
+    await approval?.consume(tx)
+    return operation(tx, actor(ctx))
+  })
 }
 
 export const defineSchemaAttribute = (
   deps: AppDeps,
   ctx: ActorContext,
   input: Parameters<typeof defineAttribute>[3],
-) => runSchemaDefine(deps, ctx, (tx, author) => defineAttribute(tx, ctx.tenant, author, input))
+  approval?: ApprovalConsumption,
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => defineAttribute(tx, ctx.tenant, author, input), approval,
+)
 
 export const defineSchemaRelation = (
   deps: AppDeps,
   ctx: ActorContext,
   input: Parameters<typeof defineRelationType>[3],
-) => runSchemaDefine(deps, ctx, (tx, author) => defineRelationType(tx, ctx.tenant, author, input))
+  approval?: ApprovalConsumption,
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => defineRelationType(tx, ctx.tenant, author, input), approval,
+)
 
 export const updateSchemaObject = (
   deps: AppDeps,
@@ -146,10 +158,12 @@ export const archiveSchemaObject = (
   ctx: ActorContext,
   slug: string,
   reason?: string,
+  approval?: ApprovalConsumption,
 ) => runSchemaDefine(
   deps,
   ctx,
   (tx, author) => archiveObjectType(tx, ctx.tenant, author, slug, reason),
+  approval,
 )
 
 export const updateSchemaAttribute = (
@@ -170,10 +184,12 @@ export const archiveSchemaAttribute = (
   objectSlug: string,
   slug: string,
   reason?: string,
+  approval?: ApprovalConsumption,
 ) => runSchemaDefine(
   deps,
   ctx,
   (tx, author) => archiveAttribute(tx, ctx.tenant, author, objectSlug, slug, reason),
+  approval,
 )
 
 export const updateSchemaRelation = (
@@ -192,10 +208,12 @@ export const archiveSchemaRelation = (
   ctx: ActorContext,
   slug: string,
   reason?: string,
+  approval?: ApprovalConsumption,
 ) => runSchemaDefine(
   deps,
   ctx,
   (tx, author) => archiveRelationType(tx, ctx.tenant, author, slug, reason),
+  approval,
 )
 
 export async function previewSchemaObjectArchive(

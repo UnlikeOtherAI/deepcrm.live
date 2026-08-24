@@ -11,6 +11,7 @@ import type { AppDeps } from '../../deps.js'
 import { changesSince } from '../../services/io.js'
 import { enqueueExport } from '../../services/exports.js'
 import { deleteWebhook, listWebhooks, setWebhook } from '../../services/webhooks.js'
+import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok, taskCreated } from './result.js'
 
@@ -23,7 +24,11 @@ export function registerIoTools(
     name: 'crm_export',
     description: 'Export exactly one object type or saved view for offline analysis when paginated queries are unsuitable. Returns a Task with a redacted, row-capped CSV or JSONL result at a signed, single-use URL valid for at most one hour; may raise POLICY_DENIED or APPROVAL_REQUIRED.',
     input: CrmExportInputShape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_export', CrmExportInputShape, {
+      resourceType: 'export',
+      reason: (args) => args.reason,
+      message: (args) => `Approve exporting '${args.object_type ?? args.view}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       const result = await enqueueExport(deps, ctx, {
         objectType: args.object_type,
         view: args.view,
@@ -31,9 +36,9 @@ export function registerIoTools(
         attributes: args.attributes,
         reason: args.reason,
         idempotencyKey: args.idempotency_key,
-      })
+      }, approval)
       return taskCreated(result.task)
-    },
+    }),
   })
   defineTool(server, {
     name: 'crm_changes_since',
@@ -54,15 +59,18 @@ export function registerIoTools(
     name: 'crm_webhook_set',
     description: 'Register or update an owner-approved HMAC webhook from now on. Creation or explicit rotation returns secret material once; integration code must keep it out of model context.',
     input: CrmWebhookSet.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_webhook_set', CrmWebhookSet.in.shape, {
+      resourceType: 'webhook',
+      message: (args) => `Approve webhook registration for '${args.url}'? Requires an owner.`,
+    }, async (args, _mrtr, approval) => {
       const result = await setWebhook(deps, ctx, {
         url: args.url,
         events: args.events,
         active: args.active,
         rotateSecret: args.rotate_secret,
-      })
+      }, approval)
       return ok(result, JSON.stringify(result))
-    },
+    }),
   })
   defineTool(server, {
     name: 'crm_webhook_list',

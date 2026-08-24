@@ -752,6 +752,7 @@ model ApprovalRequest {
   requesterId           String         @map("requester_id")
   onBehalfOf            String         @map("on_behalf_of")
   reason                String
+  requiredRole          String         @map("required_role")
   status                ApprovalStatus @default(pending)
   // sha-256 of the bearer token (>= 128-bit CSPRNG, prefixed apr_); the raw
   // value is returned once inside requestState and never stored.

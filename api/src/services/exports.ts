@@ -14,6 +14,7 @@ import {
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
+import type { ApprovalConsumption } from './approvals.js'
 import { checkPolicy } from './policy.js'
 import { EXPORT_JOB, getQueueTask } from './queue-tasks.js'
 import { selectedAttribute, selectedObjectType } from './record-query-authorization.js'
@@ -109,6 +110,7 @@ export async function enqueueExport(
   deps: AppDeps,
   ctx: ActorContext,
   input: ExportServiceInput,
+  approval?: ApprovalConsumption,
 ): Promise<{ task: Awaited<ReturnType<typeof getQueueTask>> }> {
   const parsed = CrmExport.in.safeParse({
     object_type: input.objectType,
@@ -140,17 +142,20 @@ export async function enqueueExport(
   })
   const operationKey = input.idempotencyKey ?? ctx.requestId
   try {
-    const job = await enqueue(deps.db, {
-      organizationId: ctx.tenant.organizationId,
-      teamId: ctx.tenant.teamId,
-      type: EXPORT_JOB,
-      payload: jsonObject(payload),
-      idempotencyKey: `export:${ctx.tenant.teamId}:${ctx.onBehalfOf.uoaUserId}:${operationKey}`,
-      maxAttempts: 3,
-      matchesExistingPayload: (stored) => {
-        const existing = ExportPayload.safeParse(stored)
-        return existing.success && existing.data.argumentsHash === argumentsHash
-      },
+    const job = await deps.db.$transaction(async (tx) => {
+      await approval?.consume(tx)
+      return enqueue(tx, {
+        organizationId: ctx.tenant.organizationId,
+        teamId: ctx.tenant.teamId,
+        type: EXPORT_JOB,
+        payload: jsonObject(payload),
+        idempotencyKey: `export:${ctx.tenant.teamId}:${ctx.onBehalfOf.uoaUserId}:${operationKey}`,
+        maxAttempts: 3,
+        matchesExistingPayload: (stored) => {
+          const existing = ExportPayload.safeParse(stored)
+          return existing.success && existing.data.argumentsHash === argumentsHash
+        },
+      })
     })
     return { task: await getQueueTask(deps, ctx, job.id) }
   } catch (error) {

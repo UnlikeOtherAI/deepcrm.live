@@ -21,6 +21,7 @@ const RequestStatePayloadSchema: z.ZodType<RequestStatePayload> = z.object({
   argumentsHash: z.string().regex(/^[a-f0-9]{64}$/),
   impact: z.string().min(1),
   approvalId: z.string().min(1).optional(),
+  approvalToken: z.string().min(1).optional(),
   exp: z.number().int().positive(),
 }).strict()
 
@@ -102,21 +103,7 @@ export function verifyRequestState(
   argsHash: string,
   secretBox: SecretBox,
 ): RequestStatePayload {
-  let raw: Uint8Array
-  try {
-    raw = secretBox.open(state, purpose, additionalData)
-  } catch {
-    invalidRequestState()
-  }
-  let decoded: unknown
-  try {
-    decoded = JSON.parse(new TextDecoder().decode(raw))
-  } catch {
-    invalidRequestState()
-  }
-  const parsed = RequestStatePayloadSchema.safeParse(decoded)
-  if (!parsed.success) invalidRequestState()
-  const payload = parsed.data
+  const payload = readRequestState(state, secretBox)
   const now = Math.floor(ctx.now.getTime() / 1_000)
   if (
     payload.exp <= now
@@ -131,3 +118,23 @@ export function verifyRequestState(
   return payload
 }
 
+export function readRequestState(
+  state: string,
+  secretBox: SecretBox,
+): RequestStatePayload {
+  let raw: Uint8Array
+  try {
+    raw = secretBox.open(state, purpose, additionalData)
+  } catch {
+    invalidRequestState()
+  }
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(new TextDecoder().decode(raw))
+  } catch {
+    invalidRequestState()
+  }
+  const parsed = RequestStatePayloadSchema.safeParse(decoded)
+  if (!parsed.success) invalidRequestState()
+  return parsed.data
+}

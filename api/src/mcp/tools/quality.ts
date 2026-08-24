@@ -8,6 +8,7 @@ import {
 import type { AppDeps } from '../../deps.js'
 import { mergeRecords, unmergeRecords } from '../../services/merge.js'
 import { dataQualityReport } from '../../services/quality.js'
+import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
@@ -30,15 +31,20 @@ export function registerQualityTools(
     name: 'crm_merge_records',
     description: 'Merge visible same-type duplicates into one survivor. Re-points links and lists, moves surviving unique keys, and leaves reversible redirects. Requires merge entitlement; use crm_find_duplicates first.',
     input: CrmMergeRecords.in.shape,
-    handler: async (args) => {
+    handler: withApproval(deps, ctx, 'crm_merge_records', CrmMergeRecords.in.shape, {
+      resourceType: 'merge',
+      resourceId: (args) => args.survivor_id,
+      reason: (args) => args.reason,
+      message: (args) => `Approve merging ${args.merged_ids.length} record(s) into '${args.survivor_id}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
       const result = await mergeRecords(deps, ctx, {
         survivorId: args.survivor_id,
         mergedIds: args.merged_ids,
         ...(args.field_choices === undefined ? {} : { fieldChoices: args.field_choices }),
         reason: args.reason,
-      })
+      }, approval)
       return ok(result, JSON.stringify(result))
-    },
+    }),
   })
   defineTool(server, {
     name: 'crm_unmerge',

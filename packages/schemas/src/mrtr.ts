@@ -21,10 +21,10 @@ export type RequestStatePayload = {
   tool: string; argumentsHash: string
   impact: string
   approvalId?: string
+  approvalToken?: string
   exp: number
 }
 
 // Server-side request shapes the confirm/approval elicitations ask for:
 export const ConfirmContent = z.object({ confirmed: z.boolean() })
 export const ApprovalContent = z.object({ approved: z.boolean(), note: z.string().max(500).optional() })
-

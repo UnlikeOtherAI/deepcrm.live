@@ -11,6 +11,7 @@ import {
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
+import type { ApprovalConsumption } from './approvals.js'
 import { loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
@@ -155,6 +156,7 @@ async function visibleMergeSet(
 
 export async function mergeRecords(
   deps: AppDeps, ctx: ActorContext, input: MergeRecordsInput,
+  approval?: ApprovalConsumption,
 ): Promise<MergeRecordsResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const visible = await visibleMergeSet(deps, ctx, input)
@@ -163,6 +165,7 @@ export async function mergeRecords(
       const schema = await loadSchema(deps.db, ctx.tenant)
       return await deps.db.$transaction(async (tx) => {
         const serviceTx: MergeServiceTx = tx
+        await approval?.consume(serviceTx)
         const result = await executeMerge(serviceTx, ctx, schema, {
           survivorId: input.survivorId,
           mergedIds: input.mergedIds,

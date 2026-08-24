@@ -13,6 +13,7 @@ import {
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
+import type { ApprovalConsumption } from './approvals.js'
 import { checkPolicy } from './policy.js'
 
 export type WebhookSetInput = {
@@ -64,13 +65,19 @@ function auditInput(
   }
 }
 
-async function authorize(deps: AppDeps, ctx: ActorContext, action: string): Promise<void> {
+async function authorize(
+  deps: AppDeps, ctx: ActorContext, action: string, approval?: ApprovalConsumption,
+): Promise<void> {
   const decision = await checkPolicy(deps.db, ctx, {
     resourceType: 'webhook',
     action: 'admin',
     scopes: [{ scope: 'team', id: ctx.tenant.teamId }],
   })
-  if (ctx.onBehalfOf.role === 'owner' && decision.allowed && !decision.requiresApproval) return
+  if (
+    ctx.onBehalfOf.role === 'owner'
+    && decision.allowed
+    && (!decision.requiresApproval || approval !== undefined)
+  ) return
   await deps.db.$transaction((tx) => deps.writeAudit(
     tx,
     auditInput(ctx, action, 'denied', null, {}),
@@ -123,11 +130,13 @@ export async function setWebhook(
   deps: AppDeps,
   ctx: ActorContext,
   input: WebhookSetInput,
+  approval?: ApprovalConsumption,
 ): Promise<{ webhook: WebhookView; secret?: string }> {
-  await authorize(deps, ctx, 'crm.webhook.set')
+  await authorize(deps, ctx, 'crm.webhook.set', approval)
   const url = (await assertSafeUrl(input.url)).toString()
   const parsedEvents = WebhookEvent.array().min(1).parse(input.events)
   return deps.db.$transaction(async (tx) => {
+    await approval?.consume(tx)
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(4, hashtext(${url}))`
     const existing = await tx.webhook.findFirst({
       where: { ...tenantWhere(ctx.tenant), url },
