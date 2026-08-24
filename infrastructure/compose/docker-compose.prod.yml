@@ -1,0 +1,62 @@
+services:
+  api:
+    image: deepcrm-app:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile.app
+    container_name: deepcrm-api
+    restart: unless-stopped
+    env_file: ${DEEPCRM_ENV_FILE:-./.env}
+    environment:
+      DEEPCRM_PROCESS_MODE: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5656/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - edge
+      - db
+
+  worker:
+    image: deepcrm-app:latest
+    container_name: deepcrm-worker
+    restart: unless-stopped
+    env_file: ${DEEPCRM_ENV_FILE:-./.env}
+    environment:
+      DEEPCRM_PROCESS_MODE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - db
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: deepcrm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deepcrm
+      POSTGRES_PASSWORD: ${DEEPCRM_POSTGRES_PASSWORD:?set DEEPCRM_POSTGRES_PASSWORD}
+      POSTGRES_DB: deepcrm
+    volumes:
+      - deepcrm-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepcrm -d deepcrm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - db
+
+networks:
+  edge:
+    external: true
+  db:
+    external: true
+
+volumes:
+  deepcrm-pgdata:

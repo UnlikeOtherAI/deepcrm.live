@@ -55,7 +55,8 @@ App keys: generate with `node scripts/generate-app-key.mjs nessie` → prints th
 ## Migrations
 
 `packages/db/prisma/migrations/*` are immutable. `redeploy.sh` runs
-`prisma migrate deploy`, then `node worker/dist/matching-bootstrap.js`, before
+`node node_modules/prisma/build/index.js migrate deploy --schema
+packages/db/prisma/schema.prisma`, then `node worker/dist/matching-bootstrap.js`, before
 starting containers. The bootstrap is normally idempotent; `--retry-terminal`
 is required to replace a terminal failed/cancelled attempt. It recomputes T16
 generation-zero canonical match keys and refuses to enable matching schema loads
