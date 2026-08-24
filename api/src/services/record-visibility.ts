@@ -28,6 +28,24 @@ export async function findVisibleRecord(
   })
 }
 
+export async function findVisibleLiveRecords(
+  db: Db,
+  ctx: ActorContext,
+  recordIds: readonly string[],
+): Promise<readonly VisibleRecord[]> {
+  if (recordIds.length === 0) return []
+  return db.record.findMany({
+    where: {
+      ...visibleWhere(ctx),
+      id: { in: [...new Set(recordIds)] },
+      deletedAt: null,
+      mergedIntoId: null,
+    },
+    select: { id: true, objectTypeId: true },
+    orderBy: { id: 'asc' },
+  })
+}
+
 export async function requireVisibleRecord(
   db: Db,
   ctx: ActorContext,

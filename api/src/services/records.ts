@@ -488,3 +488,11 @@ export function restoreRecord(
 ): Promise<RecordServiceResult> {
   return changeDeletedState(deps, ctx, input, true)
 }
+
+export { recordAt, recordHistory } from './record-history.js'
+export type {
+  RecordAtServiceInput,
+  RecordAtServiceResult,
+  RecordHistoryServiceInput,
+  RecordHistoryServiceResult,
+} from './record-history.js'

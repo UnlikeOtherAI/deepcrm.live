@@ -5,6 +5,7 @@ import { parseSecretBox, type Principal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import { resolveTenant, type TenantResolution } from '../../src/services/tenancy.js'
 
@@ -24,6 +25,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
     version: '0.0.0',
     orgAllowlist,
     linkWriter: createProjectionLinkWriter(),
+    historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }

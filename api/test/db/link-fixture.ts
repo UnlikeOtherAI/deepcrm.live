@@ -12,6 +12,7 @@ import {
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 
 export type LinkTenant = { organizationId: string; teamId: string }
@@ -33,6 +34,7 @@ export function linkDeps(db: Db): AppDeps {
     version: '0.0.0',
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
+    historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }

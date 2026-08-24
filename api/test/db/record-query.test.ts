@@ -4,6 +4,7 @@ import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schema
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { queryRecords } from '../../src/services/record-query.js'
 import {
   createQueryCursorCodec,
@@ -29,6 +30,9 @@ const deps: AppDeps = {
   version: '0.0.0',
   orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(),
+  historyCursor: createHistoryCursorCodec(
+    parseSecretBox(keyring('test-v1', { 'test-v1': localKey })),
+  ),
   queryCursor: cursor,
   writeAudit,
 }

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createAppDeps, type AppDeps } from '../src/deps.js'
 import { parseEnv, type Env } from '../src/env.js'
+import { createHistoryCursorCodec } from '../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../src/services/query-cursor.js'
 
 const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSJ9fQ=='
@@ -26,6 +27,7 @@ function makeDeps(ok: boolean): AppDeps {
     version: '0.0.0',
     orgAllowlist: null,
     linkWriter: createProjectionLinkWriter(),
+    historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     writeAudit,
   }
