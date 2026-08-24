@@ -34,7 +34,7 @@ Outcome: `/mcp` answers MCP 2026-07-28 clients, authenticates per `docs/auth-and
 
 ---
 
-### T21 — Tool error mapping and result helpers
+### T21 ✅ — Tool error mapping and result helpers
 
 **Depends on:** T20. **Spec:** `docs/mcp-surface.md` §0.2–§0.4; `docs/spec/contracts.md` (`errors.ts`, `mrtr.ts` — copy verbatim).
 
