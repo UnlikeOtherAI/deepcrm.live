@@ -54,15 +54,13 @@ export type AssertRecordServiceInput = AssertRecordInput & CommonWriteInput
 export type DeleteRecordServiceInput = {
   recordId: string; expectedVersion?: number; idempotencyKey?: string; reason?: string
 }
-type EngineServiceResult = {
-  record: {
+type EngineServiceResult = { record: {
     id: string; version: number; data: Prisma.JsonObject
     displayName: string; deletedAt: string | null
   }
   created: boolean; changed: boolean; duplicates?: PresentedDuplicates
 }
-export type RecordServiceResult = {
-  record: ReturnType<typeof RecordOutSchema.parse>
+export type RecordServiceResult = { record: ReturnType<typeof RecordOutSchema.parse>
   created: boolean; changed: boolean; duplicates?: PresentedDuplicates
 }
 type WriteDescriptor = {
@@ -314,8 +312,9 @@ export function createRecordWithIntegration(
   return createRecordOperation(deps, ctx, input, integration)
 }
 
-export async function updateRecord(
+async function updateRecordOperation(
   deps: AppDeps, ctx: ActorContext, input: UpdateRecordServiceInput,
+  integration: RecordWriteIntegration,
 ): Promise<RecordServiceResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, record] = await Promise.all([
@@ -324,7 +323,7 @@ export async function updateRecord(
     const scopes = recordScopes(ctx, record)
     const { reason, idempotencyKey, ...engineInput } = input
     const descriptor: WriteDescriptor = {
-      tool: 'crm_record_update', action: 'edit', scopes,
+      tool: integration.tool, action: 'edit', scopes,
       args: {
         recordId: input.recordId, data: input.data,
         ...metadataArgs(input),
@@ -347,11 +346,23 @@ export async function updateRecord(
     }
     return runWrite(deps, ctx, descriptor, authorization, null, schema, async (tx) => {
       const inlineLinkAuthorizer = await inlineAuthorizer(tx, ctx, schema)
-      return engineUpdateRecord(tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter)
+      const result = await engineUpdateRecord(
+        tx, ctx, schema, { ...engineInput, reason, inlineLinkAuthorizer }, deps.linkWriter)
+      await integration.afterWrite(tx)
+      return result
     })
   })
 }
-
+export function updateRecord(
+  deps: AppDeps, ctx: ActorContext, input: UpdateRecordServiceInput,
+): Promise<RecordServiceResult> {
+  return updateRecordOperation(deps, ctx, input, standardRecordWrite('crm_record_update'))
+}
+export function updateRecordWithIntegration(
+  deps: AppDeps, ctx: ActorContext, input: UpdateRecordServiceInput, integration: RecordWriteIntegration,
+): Promise<RecordServiceResult> {
+  return updateRecordOperation(deps, ctx, input, integration)
+}
 async function assertRecordOperation(
   deps: AppDeps, ctx: ActorContext, input: AssertRecordServiceInput,
   integration: RecordWriteIntegration,

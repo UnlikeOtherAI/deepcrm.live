@@ -54,6 +54,10 @@ type NormalizedQuery = {
   includeTotal: boolean
   limit: number
 }
+export type RecordQueryIntegration = {
+  tool: string
+  cursorArguments: (query: NormalizedQuery) => Record<string, unknown>
+}
 
 function pointer(path: readonly PropertyKey[]): string {
   if (path.length === 0) return ''
@@ -162,18 +166,24 @@ function attributeRequest(
   }
 }
 
-function binding(ctx: ActorContext, query: NormalizedQuery): QueryCursorBinding {
+function recordCursorArguments(query: NormalizedQuery): Record<string, unknown> {
   return {
-    tool: 'crm_records_query',
+    object_type: query.objectType,
+    filter: query.filter ?? null,
+    sort: query.sort,
+    attributes: query.attributes ?? null,
+    include_total: query.includeTotal,
+    limit: query.limit,
+  }
+}
+
+function binding(
+  ctx: ActorContext, query: NormalizedQuery, integration: RecordQueryIntegration,
+): QueryCursorBinding {
+  return {
+    tool: integration.tool,
     tenant: ctx.tenant,
-    arguments: {
-      object_type: query.objectType,
-      filter: query.filter ?? null,
-      sort: query.sort,
-      attributes: query.attributes ?? null,
-      include_total: query.includeTotal,
-      limit: query.limit,
-    },
+    arguments: integration.cursorArguments(query),
   }
 }
 
@@ -181,6 +191,7 @@ async function writeDeniedAudit(
   deps: AppDeps,
   ctx: ActorContext,
   objectType: LoadedObjectType,
+  tool: string,
 ): Promise<void> {
   await deps.db.$transaction((tx) => deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId,
@@ -188,7 +199,7 @@ async function writeDeniedAudit(
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
     onBehalfOf: ctx.onBehalfOf.uoaUserId,
-    action: 'crm_records_query',
+    action: tool,
     resourceType: 'object_type',
     resourceId: objectType.id,
     outcome: 'denied',
@@ -206,9 +217,10 @@ async function rejectDecision(
   objectType: LoadedObjectType,
   request: PolicyRequest,
   decision: PolicyDecision,
+  tool: string,
 ): Promise<void> {
   if (decision.allowed && !decision.requiresApproval) return
-  await writeDeniedAudit(deps, ctx, objectType)
+  await writeDeniedAudit(deps, ctx, objectType, tool)
   throw new ServiceError(
     decision.requiresApproval ? ErrorCode.APPROVAL_REQUIRED : ErrorCode.POLICY_DENIED,
     'Record query is not permitted',
@@ -222,16 +234,18 @@ async function preauthorize(
   objectType: LoadedObjectType,
   evaluator: PolicyEvaluator,
   requests: readonly PolicyRequest[],
+  tool: string,
 ): Promise<void> {
   for (const request of requests) {
-    await rejectDecision(deps, ctx, objectType, request, evaluator.evaluate(request))
+    await rejectDecision(deps, ctx, objectType, request, evaluator.evaluate(request), tool)
   }
 }
 
-export async function queryRecords(
+async function queryRecordsOperation(
   deps: AppDeps,
   ctx: ActorContext,
   input: RecordQueryInput,
+  integration: RecordQueryIntegration,
 ): Promise<RecordQueryResult> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const query = parseQuery(input)
@@ -257,8 +271,10 @@ export async function queryRecords(
       ...sensitiveRequests,
       ...projectedAttributes.map((attribute) => attributeRequest(scopes, attribute)),
     ])
-    await preauthorize(deps, ctx, objectType, evaluator, [recordRequest, ...sensitiveRequests])
-    const cursorBinding = binding(ctx, query)
+    await preauthorize(
+      deps, ctx, objectType, evaluator, [recordRequest, ...sensitiveRequests], integration.tool,
+    )
+    const cursorBinding = binding(ctx, query, integration)
     const after = input.cursor === undefined
       ? undefined
       : deps.queryCursor.open(input.cursor, cursorBinding)
@@ -284,4 +300,18 @@ export async function queryRecords(
       ...(query.includeTotal ? { total: page.total ?? 0 } : {}),
     }
   })
+}
+
+export function queryRecords(
+  deps: AppDeps, ctx: ActorContext, input: RecordQueryInput,
+): Promise<RecordQueryResult> {
+  return queryRecordsOperation(deps, ctx, input, {
+    tool: 'crm_records_query', cursorArguments: recordCursorArguments,
+  })
+}
+
+export function queryRecordsForTool(
+  deps: AppDeps, ctx: ActorContext, input: RecordQueryInput, integration: RecordQueryIntegration,
+): Promise<RecordQueryResult> {
+  return queryRecordsOperation(deps, ctx, input, integration)
 }
