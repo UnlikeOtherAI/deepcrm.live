@@ -39,7 +39,7 @@ Steps: DNS record; rsync; `/srv/deepcrm/.env` (generate `DEEPCRM_APP_KEYS` for `
 
 ---
 
-### T46 — Nessie integration spec (written in the nessie repo)
+### T46 ✅ — Nessie integration spec (written in the nessie repo)
 
 **Depends on:** T44. **Spec:** `docs/spec/nessie-integration.md` (the protocol, from DeepCRM's side); nessie `CLAUDE.md` → "DeepWater as an agent tool" and "External-agent products".
 
