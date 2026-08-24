@@ -7,6 +7,7 @@ import { CHANGE_DELIVER_JOB, createChangeDeliverHandler } from './change-deliver
 import { MATCH_KEY_BACKFILL_JOB, matchKeyBackfillHandler } from './match-key-backfill.js'
 import { noop } from './noop.js'
 import { createRecordReindexHandler, RECORD_REINDEX_JOB } from './record-reindex.js'
+import { createDedupScanHandler, DEDUP_SCAN_JOB } from './dedup-scan.js'
 
 export const handlers: Record<string, JobHandler> = {
   noop,
@@ -23,5 +24,6 @@ export function createHandlers(
     [BULK_ASSERT_JOB]: createBulkAssertHandler(recordAssert),
     [RECORD_REINDEX_JOB]: createRecordReindexHandler(embedder),
     [CHANGE_DELIVER_JOB]: createChangeDeliverHandler(secretBox, createSafeFetch()),
+    [DEDUP_SCAN_JOB]: createDedupScanHandler(),
   }
 }

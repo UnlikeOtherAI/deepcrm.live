@@ -2,6 +2,7 @@ export {
   loadSchema,
   type LoadedAttribute,
   type LoadedList,
+  type LoadedMatchingRule,
   loadSchemaForMatchingBootstrap,
   type LoadedObjectType,
   type LoadedRelationType,

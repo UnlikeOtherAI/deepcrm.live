@@ -3,6 +3,8 @@ import { cancel } from '@deepcrm/queue'
 import {
   BulkAssertProgress,
   BulkAssertResult,
+  FindDuplicatesProgress,
+  FindDuplicatesResult,
   ErrorCode,
   McpTask,
   ServiceError,
@@ -12,6 +14,7 @@ import {
 import type { AppDeps } from '../deps.js'
 
 export const BULK_ASSERT_JOB = 'records.bulk_assert'
+export const DEDUP_SCAN_JOB = 'records.dedup_scan'
 const TASK_TTL_MS = 7 * 24 * 60 * 60 * 1_000
 const TASK_POLL_INTERVAL_MS = 1_000
 
@@ -31,7 +34,9 @@ function status(job: QueueJob): 'working' | 'completed' | 'failed' | 'cancelled'
 
 function progress(job: QueueJob) {
   if (job.progress === null) return undefined
-  const parsed = BulkAssertProgress.safeParse(job.progress)
+  const parsed = job.type === DEDUP_SCAN_JOB
+    ? FindDuplicatesProgress.safeParse(job.progress)
+    : BulkAssertProgress.safeParse(job.progress)
   if (!parsed.success) return invalidState('progress')
   return parsed.data
 }
@@ -65,7 +70,7 @@ function present(job: QueueJob): ReturnType<typeof McpTask.parse> {
 
 async function taskJob(deps: AppDeps, ctx: ActorContext, taskId: string): Promise<QueueJob> {
   const job = await deps.db.queueJob.findFirst({
-    where: { ...tenantWhere(ctx.tenant), id: taskId, type: BULK_ASSERT_JOB },
+    where: { ...tenantWhere(ctx.tenant), id: taskId, type: { in: [BULK_ASSERT_JOB, DEDUP_SCAN_JOB] } },
   })
   if (job === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Task not found')
   return job
@@ -95,12 +100,14 @@ export async function getQueueTaskResult(
   deps: AppDeps,
   ctx: ActorContext,
   taskId: string,
-): Promise<ReturnType<typeof BulkAssertResult.parse>> {
+): Promise<ReturnType<typeof BulkAssertResult.parse> | ReturnType<typeof FindDuplicatesResult.parse>> {
   const job = await taskJob(deps, ctx, taskId)
   if (job.status !== 'completed' || job.result === null) {
     throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Task result is not available', {
       detail: 'task_not_completed',
     })
   }
-  return BulkAssertResult.parse(job.result)
+  return job.type === DEDUP_SCAN_JOB
+    ? FindDuplicatesResult.parse(job.result)
+    : BulkAssertResult.parse(job.result)
 }
