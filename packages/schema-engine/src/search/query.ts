@@ -27,6 +27,14 @@ export type SemanticInput =
 
 type RawHit = Omit<SearchHit, 'match'> & { match: string }
 type VectorRow = { embedding: string }
+type SearchQueryInput = {
+  scope: SearchScope
+  objectTypes?: readonly LoadedObjectType[]
+  select: Prisma.Sql
+  where?: Prisma.Sql
+  orderBy?: Prisma.Sql
+  limit?: number
+}
 
 function access(
   scope: SearchScope,
@@ -39,6 +47,18 @@ function access(
     )})`),
     ' OR ',
   )
+}
+
+export function searchQuery(input: SearchQueryInput): Prisma.Sql {
+  const objects = input.objectTypes ?? input.scope.objectTypes
+  return Prisma.sql`
+    SELECT ${input.select}
+    FROM record_search s JOIN records r ON r.id = s.record_id
+    WHERE (${access(input.scope, objects)})
+      ${input.where === undefined ? Prisma.empty : Prisma.sql`AND ${input.where}`}
+    ${input.orderBy === undefined ? Prisma.empty : Prisma.sql`ORDER BY ${input.orderBy}`}
+    ${input.limit === undefined ? Prisma.empty : Prisma.sql`LIMIT ${input.limit}`}
+  `
 }
 
 function parseHits(rows: readonly RawHit[]): SearchHit[] {
@@ -71,13 +91,14 @@ async function vector(
     if (values === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Embedding query returned no value')
     return encodedVector(values)
   }
-  const rows = await tx.$queryRaw<VectorRow[]>(Prisma.sql`
-    SELECT s.embedding::text AS embedding
-    FROM record_search s JOIN records r ON r.id = s.record_id
-    WHERE (${access(scope, scope.sourceObjectTypes)}) AND r.id = ${input.similarTo}::uuid
-      AND s.embedding IS NOT NULL AND s.embedding_model = ${embedder.model}
-    LIMIT 1
-  `)
+  const rows = await tx.$queryRaw<VectorRow[]>(searchQuery({
+    scope,
+    objectTypes: scope.sourceObjectTypes,
+    select: Prisma.sql`s.embedding::text AS embedding`,
+    where: Prisma.sql`r.id = ${input.similarTo}::uuid
+      AND s.embedding IS NOT NULL AND s.embedding_model = ${embedder.model}`,
+    limit: 1,
+  }))
   const stored = rows[0]?.embedding
   if (stored === undefined) {
     throw new ServiceError(ErrorCode.NOT_FOUND, 'Similar record or current-model embedding not found')
@@ -90,15 +111,16 @@ export async function keywordSearch(
   scope: SearchScope,
   query: string,
 ): Promise<SearchHit[]> {
-  const rows = await tx.$queryRaw<RawHit[]>(Prisma.sql`
-    SELECT r.id AS "recordId", r.object_type_id AS "objectTypeId",
+  const rows = await tx.$queryRaw<RawHit[]>(searchQuery({
+    scope,
+    select: Prisma.sql`r.id AS "recordId", r.object_type_id AS "objectTypeId",
       r.display_name AS "displayName",
       ts_rank(s.tsv, plainto_tsquery('simple', ${query}))::float8 AS score,
-      'keyword'::text AS match
-    FROM record_search s JOIN records r ON r.id = s.record_id
-    WHERE (${access(scope)}) AND s.tsv @@ plainto_tsquery('simple', ${query})
-    ORDER BY score DESC, r.id ASC LIMIT ${scope.limit}
-  `)
+      'keyword'::text AS match`,
+    where: Prisma.sql`s.tsv @@ plainto_tsquery('simple', ${query})`,
+    orderBy: Prisma.sql`score DESC, r.id ASC`,
+    limit: scope.limit,
+  }))
   return parseHits(rows)
 }
 
@@ -109,16 +131,17 @@ export async function semanticSearch(
   embedder: Embedder,
 ): Promise<SearchHit[]> {
   const queryVector = await vector(tx, scope, input, embedder)
-  const rows = await tx.$queryRaw<RawHit[]>(Prisma.sql`
-    SELECT r.id AS "recordId", r.object_type_id AS "objectTypeId",
+  const rows = await tx.$queryRaw<RawHit[]>(searchQuery({
+    scope,
+    select: Prisma.sql`r.id AS "recordId", r.object_type_id AS "objectTypeId",
       r.display_name AS "displayName", (1 - (s.embedding <=> ${queryVector}::vector))::float8 AS score,
-      'semantic'::text AS match
-    FROM record_search s JOIN records r ON r.id = s.record_id
-    WHERE (${access(scope)}) AND s.embedding IS NOT NULL
+      'semantic'::text AS match`,
+    where: Prisma.sql`s.embedding IS NOT NULL
       AND s.embedding_model = ${embedder.model}
-      ${input.similarTo === undefined ? Prisma.empty : Prisma.sql`AND r.id <> ${input.similarTo}::uuid`}
-    ORDER BY s.embedding <=> ${queryVector}::vector, r.id ASC LIMIT ${scope.limit}
-  `)
+      ${input.similarTo === undefined ? Prisma.empty : Prisma.sql`AND r.id <> ${input.similarTo}::uuid`}`,
+    orderBy: Prisma.sql`s.embedding <=> ${queryVector}::vector, r.id ASC`,
+    limit: scope.limit,
+  }))
   return parseHits(rows)
 }
 
@@ -130,11 +153,10 @@ export async function hybridSearch(
 ): Promise<SearchHit[]> {
   const queryVector = await vector(tx, scope, { query }, embedder)
   const rows = await tx.$queryRaw<RawHit[]>(Prisma.sql`
-    WITH eligible AS (
-      SELECT s.record_id, s.tsv, s.embedding, s.embedding_model
-      FROM record_search s JOIN records r ON r.id = s.record_id
-      WHERE (${access(scope)})
-    ), keyword AS (
+    WITH eligible AS (${searchQuery({
+      scope,
+      select: Prisma.sql`s.record_id, s.tsv, s.embedding, s.embedding_model`,
+    })}), keyword AS (
       SELECT record_id, row_number() OVER (
         ORDER BY ts_rank(tsv, plainto_tsquery('simple', ${query})) DESC, record_id
       ) AS rank

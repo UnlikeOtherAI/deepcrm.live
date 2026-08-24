@@ -66,7 +66,13 @@ async function tenant(): Promise<Tenant> {
   return value
 }
 
-async function company(target: Tenant, name: string, content: string, vector?: readonly number[]) {
+async function company(
+  target: Tenant,
+  name: string,
+  content: string,
+  vector?: readonly number[],
+  model = embedder.model,
+) {
   const schema = await loadSchema(db, target)
   const objectType = schema.objectTypesBySlug.get('company')
   if (objectType === undefined) throw new Error('Company object type missing')
@@ -85,7 +91,7 @@ async function company(target: Tenant, name: string, content: string, vector?: r
     ...target,
     objectTypeId: objectType.id,
     content,
-    embeddingModel: vector === undefined ? null : embedder.model,
+    embeddingModel: vector === undefined ? null : model,
   } })
   if (vector !== undefined) {
     const encoded = `[${vector.join(',')}]`
@@ -144,10 +150,13 @@ describe('search service', () => {
 
   it('uses a visible current-model record embedding for by-example search', async () => {
     const target = await tenant()
+    const foreign = await tenant()
     const vector = (await embedder.embed(['neighbour-vector']))[0]
     if (vector === undefined) throw new Error('Fake embedding missing')
     const source = await company(target, 'Source', 'source-only-token', vector)
     const neighbour = await company(target, 'Neighbour', 'different-only-token', vector)
+    const oldModel = await company(target, 'Old Model', 'old-model-only-token', vector, 'old-search-model')
+    const foreignNeighbour = await company(foreign, 'Foreign Neighbour', 'foreign-only-token', vector)
 
     const result = await searchRecords(deps, context(target), {
       similarTo: source.id, objectTypes: ['company'], mode: 'semantic', limit: 10,
@@ -157,5 +166,7 @@ describe('search service', () => {
       match: 'semantic',
     })
     expect(result.hits.some((hit) => hit.record.id === source.id)).toBe(false)
+    expect(result.hits.some((hit) => hit.record.id === oldModel.id)).toBe(false)
+    expect(result.hits.some((hit) => hit.record.id === foreignNeighbour.id)).toBe(false)
   })
 })
