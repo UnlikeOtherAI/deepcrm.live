@@ -1,7 +1,21 @@
-import { CrmWriteGuardSet, type ActorContext } from '@deepcrm/schemas'
+import {
+  CrmSuppressionAdd,
+  CrmSuppressionCheck,
+  CrmSuppressionList,
+  CrmSuppressionRemove,
+  CrmWriteGuardSet,
+  type ActorContext,
+} from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
-import { setWriteGuard } from '../../services/compliance.js'
+import {
+  addSuppression,
+  checkSuppression,
+  listSuppressions,
+  removeSuppression,
+  setWriteGuard,
+} from '../../services/compliance.js'
+import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
 
@@ -14,6 +28,34 @@ export function registerComplianceTools(
   ctx: ActorContext,
   deps: AppDeps,
 ): void {
+  defineTool(server, {
+    name: 'crm_suppression_add',
+    description: 'Add a hashed suppression entry. Use for objections, erasure, bounces, and manual channel holds. Values are normalized in memory and never stored raw.',
+    input: CrmSuppressionAdd.in.shape,
+    handler: async (args) => jsonResult(await addSuppression(deps, ctx, args)),
+  })
+  defineTool(server, {
+    name: 'crm_suppression_check',
+    description: 'Call before outbound contact on the exact channel. all entries and unexpired channel entries suppress; expired entries return suppressed false.',
+    input: CrmSuppressionCheck.in.shape,
+    handler: async (args) => jsonResult(await checkSuppression(deps, ctx, args)),
+  })
+  defineTool(server, {
+    name: 'crm_suppression_list',
+    description: 'List suppression metadata and hashes only. Use filters to inspect compliance state; raw suppressed values are never returned.',
+    input: CrmSuppressionList.in.shape,
+    handler: async (args) => jsonResult(await listSuppressions(deps, ctx, args)),
+  })
+  defineTool(server, {
+    name: 'crm_suppression_remove',
+    description: 'Remove one hashed suppression entry by value and channel. This is owner approval-gated because it may re-enable outbound contact.',
+    input: CrmSuppressionRemove.in.shape,
+    handler: withApproval(deps, ctx, 'crm_suppression_remove', CrmSuppressionRemove.in.shape, {
+      resourceType: 'suppression',
+      reason: (args) => args.reason,
+      message: () => 'Approve removing this suppression entry? Requires an owner.',
+    }, async (args, _mrtr, approval) => jsonResult(await removeSuppression(deps, ctx, args, approval))),
+  })
   defineTool(server, {
     name: 'crm_write_guard_set',
     description: 'Set rejected origins, require_origin, and app keys forced to team-visible writes. Owner-only; rejected writes return ORIGIN_REJECTED or VISIBILITY_REJECTED.',

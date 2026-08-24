@@ -4,10 +4,6 @@ import { startTestServer } from './harness.js'
 
 const NOT_YET = [
   'crm_record_erase',
-  'crm_suppression_add',
-  'crm_suppression_check',
-  'crm_suppression_list',
-  'crm_suppression_remove',
 ]
 
 function numberedSection(markdown: string, section: number): string {
