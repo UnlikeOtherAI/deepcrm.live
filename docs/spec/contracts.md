@@ -379,10 +379,15 @@ export const CrmRecordsCount = { in: z.object({ object_type: Slug, filter: Filte
   out: z.object({ count: z.number().int() }) }
 export const CrmRecordsGetMany = { in: z.object({ ids: z.array(Uuid).min(1).max(100) }),
   out: z.object({ records: z.array(RecordOut), missing: z.array(Uuid) }) }
+export const McpTask = z.object({ taskId: Uuid,
+  status: z.enum(['working', 'input_required', 'completed', 'failed', 'cancelled']),
+  ttl: z.number().int().nonnegative().nullable(), createdAt: IsoDateTime,
+  lastUpdatedAt: IsoDateTime, pollInterval: z.number().int().positive().optional(),
+  statusMessage: z.string().optional() }).strict()
 export const CrmRecordsBulkAssert = { in: z.object({ object_type: Slug, match_attribute: Slug,
   rows: z.array(z.object({ data: RecordData, links: z.array(LinkInput).max(20).optional() })).min(1).max(10_000)
     .describe('hard cap mirrors DEEPCRM_MAX_BULK_ROWS; see crm://help/limits'),
-  reason: Reason }), out: z.object({ taskId: z.string() }) }
+  reason: Reason, idempotency_key: IdempotencyKey }), out: z.object({ task: McpTask }) }
 export const BulkAssertResult = z.object({ created: z.number().int(), updated: z.number().int(),
   failed: z.array(z.object({ index: z.number().int(), code: z.string(), message: z.string() })) })
 export const CrmRecordDelete = { in: z.object({ id: Uuid, expected_version: ExpectedVersion, reason: Reason }),

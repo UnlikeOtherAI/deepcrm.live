@@ -117,11 +117,14 @@ rejections: approved:false ⇒ row rejected; isError POLICY_DENIED { next:"fatal
 
 ```
 crm_records_bulk_assert { object_type:"person", match_attribute:"emails", rows:[…2,000…] }
-← task-shaped result (io.modelcontextprotocol/tasks), taskId:"job_…"  — tenant-bound: tasks/get from
-  another tenant answers NOT_FOUND
-tasks/get { taskId:"job_…" }  → { status:"working", progress:{ done:600, total:2000 } }
-tasks/get                     → { status:"completed", result:{ created:1800, updated:190, failed:[{index:77,code:"VALIDATION_FAILED",message:"emails[0]: invalid"}] } }
-tasks/cancel                  → only while queued; running jobs finish their current batch then stop, status "cancelled"
+← { task:{ taskId:"job_…", status:"working", ttl:604800000, createdAt:"…",
+           lastUpdatedAt:"…", pollInterval:1000 } }  — SDK CreateTaskResult
+tasks/get { taskId:"job_…" }  → full Task with statusMessage:"Processed 600 of 2000 rows"
+tasks/get                     → full Task with status:"completed"; another tenant answers NOT_FOUND
+tasks/result { taskId }       → original tools/call result with structuredContent:
+  { created:1800, updated:190, failed:[{index:77,code:"VALIDATION_FAILED",message:"invalid row"}] }
+tasks/cancel { taskId }       → full cancelled Task; running work stops at the next batch boundary
+tasks/update                  → JSON-RPC −32601
 ```
 
 ## F8 — Reacting to changes (scheduled agent)

@@ -23,7 +23,9 @@ import { registerSchemaTools } from './tools/schema.js'
 import { registerRecordTools } from './tools/records.js'
 import { registerLinkTools } from './tools/links.js'
 import { registerActivityTools } from './tools/activity.js'
+import { registerPipelineTools } from './tools/pipeline.js'
 import { configureToolRuntime, logToolEntry } from './tools/register.js'
+import { registerTaskMethods } from './tasks.js'
 
 const PROTOCOL_VERSION = '2026-07-28'
 const CACHE_TTL_MS = 300_000
@@ -60,7 +62,7 @@ function decorateResult(
   cacheable: boolean,
   toolList: boolean,
 ): ServerResult | Result {
-  const taskShaped = 'taskId' in result
+  const taskShaped = 'taskId' in result || 'task' in result
   const hasResultType = 'resultType' in result && result.resultType !== undefined
   const resultType = !hasResultType && !taskShaped
     ? { resultType: 'complete' }
@@ -128,6 +130,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
     { name: 'deepcrm', version: deps.version },
     {
       capabilities: {
+        tasks: { cancel: {}, requests: { tools: { call: {} } } },
         extensions: { 'io.modelcontextprotocol/tasks': {} },
       },
     },
@@ -149,13 +152,16 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   registerRecordTools(server, ctx, deps)
   registerLinkTools(server, ctx, deps)
   registerActivityTools(server, ctx, deps)
+  registerPipelineTools(server, ctx, deps)
   registerResources(server, ctx, deps)
+  registerTaskMethods(server, ctx, deps)
 
   server.server.setRequestHandler(ServerDiscoverRequestSchema, async () => {
     const result = {
       protocolVersions: [PROTOCOL_VERSION],
       capabilities: {
         tools: {},
+        tasks: { cancel: {}, requests: { tools: { call: {} } } },
         extensions: { 'io.modelcontextprotocol/tasks': {} },
       },
       serverInfo: { name: 'deepcrm', version: deps.version },

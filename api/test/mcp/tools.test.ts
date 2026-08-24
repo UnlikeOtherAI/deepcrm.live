@@ -1,7 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
+import {
+  CallToolResultSchema,
+  CreateTaskResultSchema,
+} from '@modelcontextprotocol/sdk/types.js'
 import {
   ErrorCode,
   parseSecretBox,
@@ -17,7 +20,7 @@ import {
   type MrtrInput,
 } from '../../src/mcp/tools/input-required.js'
 import { configureToolRuntime, defineTool } from '../../src/mcp/tools/register.js'
-import { ok, toolError, type ToolLogEntry } from '../../src/mcp/tools/result.js'
+import { ok, taskCreated, toolError, type ToolLogEntry } from '../../src/mcp/tools/result.js'
 
 const keyring = Buffer.from(JSON.stringify({
   active: 'mrtr',
@@ -69,6 +72,20 @@ afterEach(async () => {
 })
 
 describe('tool results', () => {
+  it('returns a standard unsolicited task plus CallToolResult compatibility fields', () => {
+    const result = taskCreated({
+      taskId: '0f811893-d652-4775-8428-6f266c9ceefa',
+      status: 'working',
+      ttl: 604_800_000,
+      createdAt: '2026-08-24T12:00:00.000Z',
+      lastUpdatedAt: '2026-08-24T12:00:00.000Z',
+      pollInterval: 1_000,
+    })
+    expect(CreateTaskResultSchema.parse(result).task.taskId).toBe(result.task.taskId)
+    expect(CallToolResultSchema.parse(result).structuredContent).toEqual({ task: result.task })
+    expect(result).not.toHaveProperty('resultType')
+  })
+
   it('returns structured success content', () => {
     expect(ok({ record_id: 'record_test' }, '{"record_id":"record_test"}')).toEqual({
       content: [{ type: 'text', text: '{"record_id":"record_test"}' }],

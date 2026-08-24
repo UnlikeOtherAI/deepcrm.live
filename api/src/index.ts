@@ -2,7 +2,9 @@ import { buildApp } from './app.js'
 import { createAppDeps, type AppDeps } from './deps.js'
 import { parseEnv } from './env.js'
 import type { JobHandler, WorkerDeps } from '@deepcrm/worker'
-import { handlers } from '@deepcrm/worker/dist/jobs/registry.js'
+import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
+import { assertRecordWithIntegration } from './services/records.js'
+import { standardRecordWrite } from './services/record-write-integration.js'
 
 const env = parseEnv(process.env)
 
@@ -45,7 +47,16 @@ async function startWorkerIfNeeded(deps: AppDeps, signal: AbortSignal): Promise<
     )
   }
   // T07 fills the handler registry at this call site (T04 passes {}).
-  await loaded.startWorker(deps, handlers, signal)
+  const recordAssert = async (
+    ctx: Parameters<typeof assertRecordWithIntegration>[1],
+    input: Parameters<typeof assertRecordWithIntegration>[2],
+  ) => {
+    const result = await assertRecordWithIntegration(
+      deps, ctx, input, standardRecordWrite('crm_records_bulk_assert'),
+    )
+    return { created: result.created }
+  }
+  await loaded.startWorker(deps, createHandlers(recordAssert), signal)
 }
 
 async function main(): Promise<void> {

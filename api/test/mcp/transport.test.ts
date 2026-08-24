@@ -10,6 +10,10 @@ const keyring = 'eyJhY3RpdmUiOiJsb2NhbC12MSIsImtleXMiOnsibG9jYWwtdjEiOiJBQUFBQUF
 const DiscoverResultSchema = z.object({
   protocolVersions: z.array(z.string()),
   capabilities: z.object({
+    tasks: z.object({
+      cancel: z.record(z.unknown()),
+      requests: z.object({ tools: z.object({ call: z.record(z.unknown()) }) }),
+    }),
     extensions: z.record(z.unknown()),
   }).passthrough(),
   serverInfo: z.object({ name: z.string(), version: z.string() }),
@@ -105,6 +109,9 @@ describe('streamable HTTP MCP transport', () => {
       limits: { maxBulkRows: 10_000, maxFilterNodes: 100, maxPageRows: 200 },
     })
     expect(result.capabilities.extensions).toHaveProperty('io.modelcontextprotocol/tasks')
+    expect(result.capabilities.tasks).toEqual({
+      cancel: {}, requests: { tools: { call: {} } },
+    })
     expect(result._meta).toMatchObject({
       'io.modelcontextprotocol/serverInfo': { name: 'deepcrm', version: '0.0.0' },
     })

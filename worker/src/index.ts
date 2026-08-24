@@ -14,6 +14,8 @@ export type WorkerDeps = {
   writeAudit: typeof writeAudit
 }
 
+export type { BulkAssertRecordInput, BulkAssertRecordPort } from './bulk-assert-port.js'
+
 export type JobHandlerInput = {
   db: Db
   job: QueueJob

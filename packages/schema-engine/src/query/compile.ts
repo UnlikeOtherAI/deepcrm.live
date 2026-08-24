@@ -9,6 +9,10 @@ import { attributeReadAccess, rowAccess } from './access.js'
 import type { QueryCursorState, QueryFilter, QueryInput, QueryOperator, QuerySort } from './types.js'
 
 export type CompiledQuery = { sql: Prisma.Sql; countSql: Prisma.Sql }
+export type RecordSetInput = {
+  filter?: QueryFilter
+  attributes?: readonly LoadedAttribute[]
+}
 type SortKey = {
   expression: Prisma.Sql
   direction: 'asc' | 'desc'
@@ -390,6 +394,33 @@ function cursorSelect(keys: readonly SortKey[]): Prisma.Sql {
   const values = keys.map((key) => Prisma.sql`jsonb_build_object('isNull', ${key.expression} IS NULL, 'value', CASE WHEN ${key.expression} IS NULL THEN NULL ELSE to_jsonb(${key.expression}::text) END)`)
   return Prisma.sql`jsonb_build_array(${Prisma.join(values)}) AS "cursorValues"`
 }
+
+/** Shared visibility, policy, attribute-access, and filter predicate for record-set queries. */
+export function compileRecordSet(
+  tenant: TenantRef,
+  ctx: ActorContext,
+  schema: LoadedSchema,
+  objectType: LoadedObjectType,
+  input: RecordSetInput,
+): Prisma.Sql {
+  const attributes = new Map<string, LoadedAttribute>()
+  for (const attribute of filterAttributes(schema, objectType, input.filter)) {
+    attributes.set(attribute.id, attribute)
+  }
+  for (const attribute of input.attributes ?? []) {
+    if (attribute.objectTypeId !== objectType.id || attribute.archivedAt !== null) {
+      throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Query attribute does not belong to object type')
+    }
+    attributes.set(attribute.id, attribute)
+  }
+  const filter = input.filter === undefined
+    ? Prisma.empty
+    : Prisma.sql` AND ${filters(schema, objectType, input.filter)}`
+  return Prisma.sql`${rowAccess(tenant, ctx, objectType)}${
+    attributeReadAccess(tenant, ctx, objectType, [...attributes.values()])
+  }${filter}`
+}
+
 export function compileQuery(
   tenant: TenantRef,
   ctx: ActorContext,
@@ -400,11 +431,10 @@ export function compileQuery(
   if (tenant.organizationId !== ctx.tenant.organizationId || tenant.teamId !== ctx.tenant.teamId) throw new ServiceError(ErrorCode.TENANT_MISMATCH, 'Tenant does not match actor context')
   const limit = input.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 200) failure('limit')
   const keys = sortKeys(schema, objectType, input.sort)
-  const filter = input.filter === undefined ? Prisma.empty : Prisma.sql` AND ${filters(schema, objectType, input.filter)}`
-  const attributes = new Map<string, LoadedAttribute>()
-  for (const attribute of filterAttributes(schema, objectType, input.filter)) attributes.set(attribute.id, attribute)
-  for (const key of keys) if (key.attribute !== undefined) attributes.set(key.attribute.id, key.attribute)
-  const base = Prisma.sql`${rowAccess(tenant, ctx, objectType)}${attributeReadAccess(tenant, ctx, objectType, [...attributes.values()])}${filter}`
+  const base = compileRecordSet(tenant, ctx, schema, objectType, {
+    ...(input.filter === undefined ? {} : { filter: input.filter }),
+    attributes: keys.flatMap((key) => key.attribute === undefined ? [] : [key.attribute]),
+  })
   const fields = Prisma.sql`r.id, r.object_type_id AS "objectTypeId", r.data, r.display_name AS "displayName", r.owner_type AS "ownerType", r.owner_id AS "ownerId", r.visibility, r.created_on_behalf_of AS "createdOnBehalfOf", r.origin, r.version, r.last_activity_at AS "lastActivityAt", r.created_at AS "createdAt", r.updated_at AS "updatedAt"`
   return { sql: Prisma.sql`SELECT ${fields}, ${cursorSelect(keys)} FROM records r WHERE ${base}${afterPredicate(keys, input.after)} ORDER BY ${order(keys)} LIMIT ${limit + 1}`, countSql: Prisma.sql`SELECT count(*)::int AS total FROM records r WHERE ${base}` }
 }

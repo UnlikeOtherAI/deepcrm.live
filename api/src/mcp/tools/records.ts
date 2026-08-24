@@ -1,17 +1,19 @@
 import {
   CrmRecordAssert, CrmRecordAt, CrmRecordCreate, CrmRecordDelete, CrmRecordGetInput,
   CrmRecordHistory, CrmRecordRestore, CrmRecordsQueryToolInput, CrmRecordUpdate, Filter,
+  CrmRecordsBulkAssert,
   type ActorContext,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../deps.js'
 import { getRecord } from '../../services/record-read.js'
 import { queryRecords } from '../../services/record-query.js'
+import { enqueueBulkAssert } from '../../services/bulk-assert.js'
 import {
   assertRecord, createRecord, deleteRecord, recordAt, recordHistory, restoreRecord, updateRecord,
 } from '../../services/records.js'
 import { defineTool } from './register.js'
-import { ok } from './result.js'
+import { ok, taskCreated } from './result.js'
 
 type ToolLink = {
   relation_type: string; to_record_id: string; data?: Record<string, unknown>; label?: string
@@ -96,6 +98,21 @@ export function registerRecordTools(
       sort: args.sort, attributes: args.attributes, includeTotal: args.include_total,
       cursor: args.cursor, limit: args.limit,
     })),
+  })
+  defineTool(server, {
+    name: 'crm_records_bulk_assert',
+    description: 'Queue 1–10,000 sync-safe record upserts by one unique attribute. Returns a Task immediately; poll tasks/get, then read tasks/result. Each row is independently reported.',
+    input: CrmRecordsBulkAssert.in.shape,
+    handler: async (args) => {
+      const result = await enqueueBulkAssert(deps, ctx, {
+        objectType: args.object_type,
+        matchAttribute: args.match_attribute,
+        rows: args.rows.map((row) => ({ data: row.data, links: inlineLinks(row.links) })),
+        reason: args.reason,
+        idempotencyKey: args.idempotency_key,
+      })
+      return taskCreated(result.task)
+    },
   })
   defineTool(server, {
     name: 'crm_record_delete',

@@ -65,7 +65,7 @@ const EnvSchema = z.object({
   LEDGER_PUBLIC_URL: optionalString,
   LEDGER_PROXY_TOKEN: optionalString,
   DEEPCRM_EMBEDDING_MODEL: z.string().min(1).default('jina-embeddings-v3'),
-  DEEPCRM_MAX_BULK_ROWS: z.coerce.number().int().positive().default(10000),
+  DEEPCRM_MAX_BULK_ROWS: z.coerce.number().int().positive().max(10_000).default(10_000),
   DEEPCRM_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10485760),
   DEEPCRM_MAX_EXPORT_ROWS: z.coerce.number().int().positive().default(100000),
   DEEPCRM_EXPORT_DIR: z.string().min(1).default('./.exports'),

@@ -1,4 +1,9 @@
-export { compileQuery, type CompiledQuery } from './compile.js'
+export {
+  compileQuery,
+  compileRecordSet,
+  type CompiledQuery,
+  type RecordSetInput,
+} from './compile.js'
 export { attributeReadAccess, rowAccess } from './access.js'
 export { queryRecords } from './run.js'
 export type {

@@ -80,4 +80,13 @@ describe('createAppDeps', () => {
     expect(deps.writeAudit).toBe(writeAudit)
     await deps.db.$disconnect()
   })
+
+  it('rejects a bulk row cap above the schema wire maximum', () => {
+    expect(() => parseEnv({
+      DATABASE_URL: 'postgresql://unused',
+      NODE_ENV: 'test',
+      DEEPCRM_MAX_BULK_ROWS: '10001',
+      DEEPCRM_SECRET_KEYRING_B64: keyring,
+    })).toThrow()
+  })
 })

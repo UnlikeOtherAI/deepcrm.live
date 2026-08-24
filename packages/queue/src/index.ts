@@ -1,4 +1,4 @@
-import { Prisma, type Db, type QueueJob } from '@deepcrm/db'
+import { canonicalJson, Prisma, type Db, type QueueJob } from '@deepcrm/db'
 
 export type QueueEnqueueTx = Pick<Db, 'queueJob'>
 export type QueueCompleteTx = Pick<Db, 'queueJob'>
@@ -13,6 +13,7 @@ export type EnqueueInput = (TenantJob | SystemJob) & {
   visibleAt?: Date
   priority?: number
   maxAttempts?: number
+  matchesExistingPayload?: (payload: Prisma.JsonValue) => boolean
 }
 
 type ExistingJob = {
@@ -20,6 +21,13 @@ type ExistingJob = {
   organizationId: string | null
   teamId: string | null
   type: string
+  payload: Prisma.JsonValue
+}
+
+export class QueueIdempotencyMismatchError extends Error {
+  constructor() {
+    super('Queue job idempotency key arguments do not match')
+  }
 }
 
 function sameJobScope(existing: ExistingJob, input: EnqueueInput): boolean {
@@ -32,6 +40,19 @@ function duplicateIdempotencyKey(): never {
   throw new Error('Queue job idempotency key is already used by another job')
 }
 
+function storedJob(input: EnqueueInput) {
+  return {
+    type: input.type,
+    payload: input.payload,
+    organizationId: input.organizationId,
+    teamId: input.teamId,
+    idempotencyKey: input.idempotencyKey,
+    visibleAt: input.visibleAt,
+    priority: input.priority,
+    maxAttempts: input.maxAttempts,
+  }
+}
+
 async function existingJob(
   db: QueueEnqueueTx,
   input: EnqueueInput,
@@ -39,10 +60,15 @@ async function existingJob(
   if (input.idempotencyKey === undefined) return null
   const existing = await db.queueJob.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
-    select: { id: true, organizationId: true, teamId: true, type: true },
+    select: { id: true, organizationId: true, teamId: true, type: true, payload: true },
   })
   if (existing === null) return null
   if (!sameJobScope(existing, input)) duplicateIdempotencyKey()
+  const payloadMatches = input.matchesExistingPayload?.(existing.payload)
+    ?? canonicalJson(existing.payload) === canonicalJson(input.payload)
+  if (!payloadMatches) {
+    throw new QueueIdempotencyMismatchError()
+  }
   return { id: existing.id, created: false }
 }
 
@@ -54,7 +80,7 @@ export async function enqueue(
   if (existing !== null) return existing
   if (input.idempotencyKey !== undefined) {
     const inserted = await db.queueJob.createMany({
-      data: { ...input, visibleAt: input.visibleAt, priority: input.priority, maxAttempts: input.maxAttempts },
+      data: storedJob(input),
       skipDuplicates: true,
     })
     const stored = await existingJob(db, input)
@@ -62,7 +88,7 @@ export async function enqueue(
     return { id: stored.id, created: inserted.count === 1 }
   }
   const job = await db.queueJob.create({
-    data: { ...input, visibleAt: input.visibleAt, priority: input.priority, maxAttempts: input.maxAttempts },
+    data: storedJob(input),
     select: { id: true },
   })
   return { id: job.id, created: true }

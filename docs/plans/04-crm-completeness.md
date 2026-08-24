@@ -44,9 +44,9 @@ Outcome: activities, notes, tasks, timeline, pipeline summary, lists/views, the 
 
 **Files:**
 - Create `packages/schema-engine/src/pipeline/summary.ts` — per stage: `count` (live records), `amount_sum` (when `amount_attribute`), `avg_days_in_stage` from consecutive `set` changes on the status attribute; `conversions` from `old_value → new_value` pairs since `since`.
-- Create `api/src/mcp/tasks.ts` — MCP Tasks extension adapter: `tasks/get { taskId }` → the `queue_jobs` row **in the caller's tenant** (`NOT_FOUND` otherwise) mapped to `{ status: working|completed|failed|cancelled, progress, result }`; `tasks/cancel` (uses the queue's `cancel`; running jobs stop at the next batch boundary). Advertise `extensions: { "io.modelcontextprotocol/tasks": {} }` in `server/discover` and register handlers via `setRequestHandler` for the two methods (`tasks/update` answers −32601).
+- Create `api/src/mcp/tasks.ts` — MCP Tasks adapter: `tasks/get { taskId }` maps the tenant-scoped `queue_jobs` row to the full SDK Task shape (safe progress is summarized in `statusMessage`); `tasks/cancel` returns the full cancelled Task; `tasks/result` returns the original completed `tools/call` result; tenant mismatch and system jobs are `NOT_FOUND`; `tasks/update` answers −32601. Advertise standard `tasks.cancel` and `tasks.requests.tools.call`, retaining the named extension capability for compatibility.
 - Create `worker/src/jobs/bulk-assert.ts` — iterates rows with `assertRecord` in batches of 100 transactions, `progress({ done, total })`, result per §3. Register in `jobs/registry.ts`.
-- Tool `crm_records_bulk_assert` enqueues (`LIMIT_EXCEEDED {limit}` above `DEEPCRM_MAX_BULK_ROWS`; payload rows carry derived per-row idempotency keys so batch retries skip completed rows) and returns the task-shaped result (`taskId`).
+- Tool `crm_records_bulk_assert` enqueues (`LIMIT_EXCEEDED {limit}` above `DEEPCRM_MAX_BULK_ROWS`; payload rows carry derived per-row idempotency keys so batch retries skip completed rows) and returns SDK `CreateTaskResult` (`{ task: Task }`, camel `taskId`) with compatible text poll guidance.
 - Tests: pipeline summary over seeded stage moves; bulk assert of 250 rows through the harness + embedded worker, `tasks/get` reaches `completed` with `created: 250`.
 
 **Acceptance:** api + worker tests green.

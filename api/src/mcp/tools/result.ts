@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import {
   ErrorCode,
   isServiceError,
+  McpTask,
   type ErrorCodeValue,
 } from '@deepcrm/schemas'
 
@@ -54,6 +55,20 @@ export function ok<T extends Record<string, unknown>>(structured: T, summary: st
   return {
     content: [{ type: 'text', text: summary }],
     structuredContent: structured,
+  }
+}
+
+export function taskCreated(
+  task: ReturnType<typeof McpTask.parse>,
+): CallToolResult & { task: ReturnType<typeof McpTask.parse> } {
+  const parsed = McpTask.parse(task)
+  return {
+    task: parsed,
+    content: [{
+      type: 'text',
+      text: `Task ${parsed.taskId} started; poll tasks/get with taskId and read tasks/result when completed.`,
+    }],
+    structuredContent: { task: parsed },
   }
 }
 

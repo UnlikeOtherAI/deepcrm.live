@@ -1,11 +1,23 @@
 import { createDb, seedTenant } from '@deepcrm/db'
 import { afterAll, expect, it } from 'vitest'
-import { cancel, claimNext, complete, enqueue, fail } from '../../src/index.js'
+import {
+  cancel, claimNext, complete, enqueue, fail, QueueIdempotencyMismatchError,
+} from '../../src/index.js'
 
 const url = process.env.DATABASE_URL
 if (url === undefined) throw new Error('DATABASE_URL is required')
 const db = createDb(url)
 afterAll(async () => { await db.$disconnect() })
+
+function argumentsMatch(expected: string) {
+  return (payload: unknown): boolean => (
+    typeof payload === 'object'
+    && payload !== null
+    && !Array.isArray(payload)
+    && 'argumentsHash' in payload
+    && payload.argumentsHash === expected
+  )
+}
 
 it('enqueues, claims, completes, and deduplicates', async () => {
   const tenant = await seedTenant(db)
@@ -94,6 +106,45 @@ it('does not return a job owned by another tenant for a colliding key', async ()
   })).rejects.toThrow('Queue job idempotency key is already used by another job')
   await db.organization.delete({ where: { id: first.organizationId } })
   await db.organization.delete({ where: { id: second.organizationId } })
+})
+
+it('rejects changed payload under the same idempotency key', async () => {
+  const tenant = await seedTenant(db)
+  const key = crypto.randomUUID()
+  const scope = {
+    type: 'payload_collision_test', organizationId: tenant.organizationId,
+    teamId: tenant.teamId, idempotencyKey: key,
+  }
+  await enqueue(db, { ...scope, payload: { value: 1 } })
+  await expect(enqueue(db, { ...scope, payload: { value: 2 } }))
+    .rejects.toBeInstanceOf(QueueIdempotencyMismatchError)
+  await db.organization.delete({ where: { id: tenant.organizationId } })
+})
+
+it('deduplicates concurrent logical replays while preserving original request payload', async () => {
+  const tenant = await seedTenant(db)
+  const key = crypto.randomUUID()
+  const hash = 'a'.repeat(64)
+  const scope = {
+    type: 'logical_replay_test', organizationId: tenant.organizationId,
+    teamId: tenant.teamId, idempotencyKey: key, matchesExistingPayload: argumentsMatch(hash),
+  }
+  const results = await Promise.all([
+    enqueue(db, { ...scope, payload: { argumentsHash: hash, requestId: 'request_one' } }),
+    enqueue(db, { ...scope, payload: { argumentsHash: hash, requestId: 'request_two' } }),
+  ])
+  expect(new Set(results.map((result) => result.id)).size).toBe(1)
+  expect(results.filter((result) => result.created)).toHaveLength(1)
+  const firstResult = results[0]
+  if (firstResult === undefined) throw new Error('Expected a queue result')
+  const stored = await db.queueJob.findUniqueOrThrow({ where: { id: firstResult.id } })
+  expect(stored.payload).toEqual(expect.objectContaining({ argumentsHash: hash }))
+  await expect(enqueue(db, {
+    ...scope,
+    matchesExistingPayload: argumentsMatch('b'.repeat(64)),
+    payload: { argumentsHash: 'b'.repeat(64), requestId: 'request_three' },
+  })).rejects.toBeInstanceOf(QueueIdempotencyMismatchError)
+  await db.organization.delete({ where: { id: tenant.organizationId } })
 })
 
 it('requeues failed work', async () => {

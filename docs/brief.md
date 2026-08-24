@@ -300,7 +300,7 @@ Schema mutations that lose data (archive with values, cardinality tightening, un
 
 - `crm_record_create({object_type, data, links?})`, `crm_record_update({id, data, expected_version?})`, `crm_record_assert({object_type, match_attribute, data})` (upsert by unique attribute), `crm_record_get({id | object_type + match_attribute + value, include_links?, include_timeline?})`, `crm_record_delete({id})` (soft), `crm_record_restore({id})`.
 - `crm_records_query({object_type, filter, sort, cursor, limit, attributes?})` — structured; returns `records[]`, `next_cursor`, `total?`.
-- `crm_records_bulk_assert({object_type, match_attribute, rows[]})` — a **Task**; returns `task_id`, progress via `tasks/get`, result = per-row outcome.
+- `crm_records_bulk_assert({object_type, match_attribute, rows[]})` — a **Task**; returns `{ task: Task }` with camel `taskId`, progress via `tasks/get`, and the per-row outcome via `tasks/result`.
 - `crm_link({relation_type, from, to, data?})`, `crm_unlink({link_id | triple})`, `crm_links_list({record_id, relation_type?, direction?})`.
 - `crm_record_at({id, at})` — the record as it was at a timestamp.
 - `crm_list_create/add/remove/entries` and `crm_view_save/run`.
