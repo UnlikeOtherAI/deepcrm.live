@@ -183,7 +183,7 @@ published task/status path, and sees exactly the entitlement-visible members.
 
 ---
 
-### T61 — Files, attachments and immutable behavioural events
+### T61 ✅ — Files, attachments and immutable behavioural events
 
 **Depends on:** T60. **Spec:** this file; `docs/schema-engine.md` §§2, 4, 5,
 8; `docs/spec/events.md`.
