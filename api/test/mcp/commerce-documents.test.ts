@@ -101,7 +101,7 @@ describe('standard commerce document templates over MCP', () => {
     expect(JSON.stringify(schema)).toContain('payment')
 
     const company = RecordResult.parse(structured(await call('crm_record_create', {
-      object_type: 'company', data: { name: `Buyer ${runKey}`, domains: [`buyer-${hostKey}.example.com`] },
+      object_type: 'company', data: { name: `Buyer ${runKey}`, domains: [`buyer-${hostKey}.example`] },
     }))).record
     const person = RecordResult.parse(structured(await call('crm_record_create', {
       object_type: 'person', data: { name: { full: `Buyer Person ${runKey}` }, emails: [`buyer-${runKey}@example.test`] },

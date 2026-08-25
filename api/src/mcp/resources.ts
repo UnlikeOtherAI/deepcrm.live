@@ -71,12 +71,61 @@ const filteringHelp = {
   ],
 }
 
+function limitsHelp(deps: AppDeps) {
+  return {
+    numeric_caps: {
+      default_page_limit: 50,
+      max_page_limit: 200,
+      max_projection_attributes: 50,
+      max_filter_depth: 8,
+      max_filter_nodes: 100,
+      max_filter_json_bytes: 16_384,
+      max_bulk_rows: deps.maxBulkRows,
+      max_export_rows: deps.maxExportRows,
+      search_limit: 50,
+    },
+    choice_points: [
+      {
+        topic: 'static_vs_dynamic_lists',
+        static: 'Use a static list when a human or integration curates explicit memberships.',
+        dynamic: 'Use a dynamic list when membership is the current result of a structured filter.',
+      },
+      {
+        topic: 'product_vs_line_item',
+        product: 'Use product for current catalogue state.',
+        line_item: 'Use line_item for copied commercial snapshots; later product or parent edits do not rewrite it.',
+      },
+      {
+        topic: 'activity_vs_event',
+        activity: 'Use activity/note/task for CRM interactions and timeline work.',
+        event: 'Use behavioural events for immutable product/integration facts.',
+      },
+      {
+        topic: 'stored_vs_derived_attributes',
+        stored: 'Write ordinary facts to stored attributes.',
+        derived: 'Read formula/rollup/relation_sync/score attributes; direct writes fail.',
+      },
+      {
+        topic: 'pipeline_vs_lifecycle',
+        pipeline: 'Use pipeline tools for process stage movement and summaries.',
+        lifecycle: 'Use lifecycle/status attributes for tenant-customizable labels that are not a process engine.',
+      },
+    ],
+  }
+}
+
 export function registerResources(server: McpServer, ctx: ActorContext, deps: AppDeps): void {
   server.registerResource('filtering-help', 'crm://help/filtering', {
     title: 'Filtering grammar',
     description: 'Filter operators, limits, and examples for crm_records_query.',
     mimeType: 'application/json',
   }, async (uri) => jsonResource(uri, filteringHelp))
+
+  server.registerResource('limits-help', 'crm://help/limits', {
+    title: 'DeepCRM limits and modelling choices',
+    description: 'Numeric MCP caps and guidance for choosing equivalent CRM capability shapes.',
+    mimeType: 'application/json',
+  }, async (uri) => jsonResource(uri, limitsHelp(deps)))
 
   server.registerResource('schema', 'crm://schema', {
     title: 'Workspace schema',

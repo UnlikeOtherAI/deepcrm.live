@@ -75,6 +75,14 @@ Spec-shaped (2026-07-28 MRTR pattern). When a call needs a decision, the result 
 
 Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registered via `resources/templates/list` with RFC 6570 `uriTemplate`s.
 
+`crm://help/limits` also documents modelling choice points for Phase 8
+compatibility work: static lists versus dynamic lists, product catalogue rows
+versus line item snapshots, activities/tasks/notes versus behavioural events,
+ordinary stored attributes versus derived attributes, and pipeline movement
+versus lifecycle/status fields. Agents should read it with `crm://schema` and
+`crm://templates` before importing compatibility fixtures or selecting an
+equivalent capability shape.
+
 ## 2. Schema tools
 
 <!-- tools:start:2 -->

@@ -22,13 +22,14 @@ afterAll(async () => {
 const readResult = z.object({
   ttlMs: z.literal(300_000),
   cacheScope: z.literal('private'),
-  contents: z.array(z.object({ uri: z.literal('crm://help/filtering'), text: z.string() })),
+  contents: z.array(z.object({ uri: z.string(), text: z.string() })),
 }).passthrough()
 
 describe('filtering help resource', () => {
   it('lists and reads static filter guidance with cache metadata', async () => {
     const listed = await client.listResources()
     expect(listed.resources.map((resource) => resource.uri)).toContain('crm://help/filtering')
+    expect(listed.resources.map((resource) => resource.uri)).toContain('crm://help/limits')
 
     const result = readResult.parse(await client.request({
       method: 'resources/read', params: { uri: 'crm://help/filtering' },
@@ -59,6 +60,27 @@ describe('filtering help resource', () => {
       'company_linked_deals_with_recent_activity_filter',
       'visible_line_items_for_sku',
       'data_quality_orphans',
+    ])
+
+    const limitsResult = readResult.parse(await client.request({
+      method: 'resources/read', params: { uri: 'crm://help/limits' },
+    }, readResult))
+    const limitsContent = limitsResult.contents[0]
+    if (limitsContent === undefined) throw new Error('Expected limits resource content')
+    const limits = z.object({
+      numeric_caps: z.object({
+        max_bulk_rows: z.number().int(),
+        max_filter_nodes: z.literal(100),
+        max_export_rows: z.number().int(),
+      }).passthrough(),
+      choice_points: z.array(z.object({ topic: z.string() }).passthrough()),
+    }).parse(JSON.parse(limitsContent.text))
+    expect(limits.choice_points.map((point) => point.topic)).toEqual([
+      'static_vs_dynamic_lists',
+      'product_vs_line_item',
+      'activity_vs_event',
+      'stored_vs_derived_attributes',
+      'pipeline_vs_lifecycle',
     ])
   })
 })

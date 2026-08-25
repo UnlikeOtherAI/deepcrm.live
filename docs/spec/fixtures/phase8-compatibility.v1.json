@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "phase8-compatibility",
+  "description": "Local DeepCRM compatibility fixture covering generic sales, service, activity, commerce and segment vocabulary.",
+  "templates": ["standard_crm", "standard_sales", "standard_service", "standard_commerce"],
+  "records": {
+    "company": { "name": "Fixture Company", "domains": ["fixture.example.com"] },
+    "person": { "name": { "full": "Fixture Contact" }, "emails": ["fixture.contact@example.com"] },
+    "deal": { "name": "Fixture Deal", "stage": "qualified", "amount": { "amount": "5000", "currency": "GBP" } },
+    "lead": { "name": "Fixture Lead", "lifecycle_stage": "new", "source": "inbound" },
+    "ticket": { "subject": "Fixture Support Ticket", "status": "new", "priority": "normal" },
+    "product": { "name": "Fixture Product", "sku": "FIXTURE-SKU-1", "status": "active", "current_unit_price": { "amount": "100", "currency": "GBP" } },
+    "line_item": { "name": "Fixture Line Item", "sku": "FIXTURE-SKU-1", "quantity": 1, "unit_price": { "amount": "100", "currency": "GBP" }, "total_amount": { "amount": "100", "currency": "GBP" }, "billing_frequency": "one_time", "snapshot_at": "2026-08-24T12:00:00.000Z" },
+    "quote": { "name": "Fixture Quote", "quote_number": "FIX-Q-1", "status": "sent", "total_amount": { "amount": "100", "currency": "GBP" } },
+    "subscription": { "name": "Fixture Subscription", "subscription_ref": "FIX-SUB-1", "status": "active", "start_date": "2026-08-24", "billing_frequency": "monthly", "support_entitlement_active": true, "recurring_amount": { "amount": "100", "currency": "GBP" } },
+    "invoice": { "name": "Fixture Invoice", "invoice_number": "FIX-INV-1", "status": "open", "issue_date": "2026-08-24", "due_date": "2026-09-24", "total_amount": { "amount": "100", "currency": "GBP" }, "balance_due": { "amount": "0", "currency": "GBP" } },
+    "payment": { "name": "Fixture Payment", "payment_ref": "FIX-PAY-1", "provider": "fixture_provider", "provider_payment_ref": "FIX-PROVIDER-PAY-1", "status": "succeeded", "amount": { "amount": "100", "currency": "GBP" }, "received_at": "2026-08-24T12:05:00.000Z" },
+    "order": { "name": "Fixture Order", "order_number": "FIX-O-1", "status": "placed", "ordered_at": "2026-08-24T12:02:00.000Z", "total_amount": { "amount": "100", "currency": "GBP" } },
+    "email_activity": { "kind": "email", "occurred_at": "2026-08-24T12:10:00.000Z", "direction": "outbound", "subject": "Fixture email" },
+    "call_activity": { "kind": "call", "occurred_at": "2026-08-24T12:20:00.000Z", "direction": "outbound", "subject": "Fixture call" },
+    "meeting_activity": { "kind": "meeting", "occurred_at": "2026-08-24T12:30:00.000Z", "direction": "internal", "subject": "Fixture meeting" },
+    "note": { "title": "Fixture Note", "body": "Fixture note body." },
+    "task": { "title": "Fixture Task", "status": "open", "priority": "normal" }
+  },
+  "associations": [
+    "person.company -> company",
+    "deal.company -> company",
+    "deal.contacts -> person",
+    "lead.person/company/deal -> person/company/deal",
+    "ticket.person/company/deal -> person/company/deal",
+    "line_item.product/quote/order/invoice/subscription -> product/quote/order/invoice/subscription",
+    "quote/subscription/invoice/payment/order company/person/deal -> company/person/deal",
+    "activity_about/note_about/task_about -> company and deal"
+  ],
+  "dynamic_segment": {
+    "slug": "fixture_visible_line_items",
+    "object_type": "line_item",
+    "filter": { "attribute": "sku", "op": "eq", "value": "FIXTURE-SKU-1" }
+  }
+}

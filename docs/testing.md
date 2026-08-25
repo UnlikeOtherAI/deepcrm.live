@@ -20,6 +20,33 @@ pnpm --filter @deepcrm/db prisma migrate deploy
 pnpm test
 ```
 
+## Phase 8 compatibility fixture
+
+The versioned local compatibility fixture lives at
+`docs/spec/fixtures/phase8-compatibility.v1.json`. It is DeepCRM-owned test
+vocabulary, not a scraped third-party contract, and covers contact/company,
+deal, ticket, lead, product, line item, quote, subscription, invoice, payment,
+order, static/dynamic list behaviour, calls, emails, meetings, notes, tasks and
+named associations. The MCP harness discovers tools and resources first, applies
+the template packages, imports the fixture through supported tools, and checks
+schema descriptions, links, history, timelines, pipeline movement, derived
+rollups, dynamic list refresh, invalid attributes, hidden rows and cross-tenant
+denial.
+
+Run it against a unique disposable database:
+
+```bash
+DB=deepcrm_t66_compat_$(date +%Y%m%d%H%M%S)
+docker exec deepcrm-pg createdb -U deepcrm "$DB"
+DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB pnpm --filter @deepcrm/db exec prisma migrate deploy
+DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB pnpm --filter @deepcrm/api exec vitest run test/mcp/phase8-compatibility.test.ts
+docker exec deepcrm-pg dropdb -U deepcrm "$DB"
+```
+
+Use only the exact database named in `DB`. The harness uses deterministic local
+fixtures and the in-process MCP test server; it does not need production
+credentials, a production endpoint or a third-party CRM account.
+
 ## CI (`.github/workflows/ci.yml`)
 
 Jobs: `lint` (root `pnpm lint` incl. migrations + tenant-where lints), `typecheck`, `test` (service `pgvector/pgvector:pg16`, `DATABASE_URL` set), `build` (Docker image build, no push), `upgrade-path` (restore `packages/db/upgrade-fixtures/baseline.sql.gz` then `prisma migrate deploy` — added once the first migration is frozen).
