@@ -253,7 +253,7 @@ policy. `pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md` exits 0.
 
 ---
 
-### T63 — Standard sales and service templates
+### T63 ✅ — Standard sales and service templates
 
 **Depends on:** T62. **Spec:** this file; `docs/schema-engine.md` §9;
 `docs/mcp-surface.md` §§1–3, §6.
