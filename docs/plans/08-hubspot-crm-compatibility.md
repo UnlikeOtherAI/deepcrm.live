@@ -217,7 +217,7 @@ diff --exit-code docs/mcp-surface.md` exits 0. **Docs:**
 
 ---
 
-### T62 — Association limits, attribute groups and actor-role semantics
+### T62 ✅ — Association limits, attribute groups and actor-role semantics
 
 **Depends on:** T61. **Spec:** this file; `docs/schema-engine.md` §§2–5;
 `docs/mcp-surface.md` §§1–4.
