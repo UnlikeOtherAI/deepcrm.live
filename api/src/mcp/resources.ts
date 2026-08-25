@@ -61,6 +61,10 @@ const filteringHelp = {
       ] },
     },
     {
+      name: 'visible_line_items_for_sku',
+      filter: { attribute: 'sku', op: 'eq', value: 'SKU-123' },
+    },
+    {
       name: 'data_quality_orphans',
       filter: { quality: { category: 'orphans' } },
     },

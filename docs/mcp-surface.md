@@ -147,6 +147,13 @@ Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registere
 | `crm_view_delete` | Delete a saved view by slug and invalidate the schema resource version. This does not delete records. Errors: policy denial or NOT_FOUND. | `{ view: string }` | `{ deleted: true }` |
 <!-- tools:end -->
 
+Dynamic commerce segments are ordinary dynamic lists or saved views. For example,
+after `standard_commerce` is applied, create a dynamic `line_item` list with
+`{ attribute: "sku", op: "eq", value: "SKU-123" }`, then combine ad hoc reads
+with `linked_to` filters for product, quote, order, invoice or subscription
+parents. Membership is still evaluated only over visible, policy-permitted rows
+inside the caller's tenant.
+
 ## 6. Activities, timeline, tasks, pipeline
 
 <!-- tools:start:6 -->

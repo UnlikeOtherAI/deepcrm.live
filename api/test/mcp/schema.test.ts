@@ -151,13 +151,13 @@ describe('schema MCP tools and resources', () => {
   it('defines a custom object with a record_reference attribute', async () => {
     const team = await devTeam()
     await db.objectType.deleteMany({
-      where: { organizationId: team.organizationId, teamId: team.id, slug: 'subscription' },
+      where: { organizationId: team.organizationId, teamId: team.id, slug: 'custom_plan' },
     })
     const result = structured(await call('crm_object_type_define', {
-      slug: 'subscription',
-      singular_name: 'Subscription',
-      plural_name: 'Subscriptions',
-      description: 'A customer subscription.',
+      slug: 'custom_plan',
+      singular_name: 'Custom plan',
+      plural_name: 'Custom plans',
+      description: 'A customer-specific custom plan.',
       primary_attribute: 'name',
       attributes: [
         {
@@ -171,7 +171,7 @@ describe('schema MCP tools and resources', () => {
       ],
     }))
     const detail = z.object({
-      slug: z.literal('subscription'), primary_attribute: z.literal('name'),
+      slug: z.literal('custom_plan'), primary_attribute: z.literal('name'),
       attributes: z.array(z.object({ slug: z.string(), type: z.string() })),
     }).parse(result)
     expect(detail.attributes).toEqual(expect.arrayContaining([
@@ -181,21 +181,21 @@ describe('schema MCP tools and resources', () => {
 
   it('defines attribute groups and relation edge limits in the schema surface', async () => {
     const grouped = structured(await call('crm_attribute_group_define', {
-      object_type: 'subscription',
+      object_type: 'custom_plan',
       slug: 'overview',
       name: 'Overview',
-      description: 'Primary subscription fields.',
+      description: 'Primary custom plan fields.',
       attributes: ['name'],
     }))
-    expect(grouped).toMatchObject({ object_type: 'subscription', slug: 'overview', position: 0 })
-    const subscription = structured(await call('crm_schema_get', { object_type: 'subscription' }))
-    expect(subscription).toMatchObject({
+    expect(grouped).toMatchObject({ object_type: 'custom_plan', slug: 'overview', position: 0 })
+    const customPlan = structured(await call('crm_schema_get', { object_type: 'custom_plan' }))
+    expect(customPlan).toMatchObject({
       attribute_groups: [expect.objectContaining({ slug: 'overview' })],
       attributes: expect.arrayContaining([expect.objectContaining({ slug: 'name', group: 'overview' })]),
     })
     const relation = structured(await call('crm_relation_type_define', {
-      slug: 'subscription_ceo',
-      from_object_type: 'subscription',
+      slug: 'custom_plan_ceo',
+      from_object_type: 'custom_plan',
       to_object_type: 'person',
       forward_name: 'CEO',
       inverse_name: 'CEO of',
@@ -207,7 +207,7 @@ describe('schema MCP tools and resources', () => {
       },
     }))
     expect(relation).toMatchObject({
-      slug: 'subscription_ceo',
+      slug: 'custom_plan_ceo',
       edge_limits: {
         max_active_edges_from: 1,
         max_active_edges_to: null,

@@ -157,17 +157,62 @@ describe('templates', () => {
     await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
     await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_crm'))
     const commerce = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_commerce'))
-    expect(commerce.added).toEqual({ objectTypes: 2, attributes: 31, relationTypes: 2, pipelines: 0, matchingRules: 3 })
+    expect(commerce.added).toEqual({ objectTypes: 7, attributes: 105, relationTypes: 27, pipelines: 4, matchingRules: 14 })
     const repeated = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_commerce'))
     expect(repeated.added).toEqual({
       objectTypes: 0, attributes: 0, relationTypes: 0, pipelines: 0, matchingRules: 0,
     })
     const relations = await db.relationType.findMany({
-      where: { organizationId: value.organizationId, teamId: value.teamId, slug: { in: ['line_item_product', 'line_item_deal'] } },
+      where: {
+        organizationId: value.organizationId,
+        teamId: value.teamId,
+        slug: {
+          in: [
+            'line_item_product', 'line_item_deal', 'line_item_quote', 'line_item_order',
+            'line_item_invoice', 'line_item_subscription', 'payment_invoice', 'payment_subscription',
+            'quote_company', 'subscription_company', 'invoice_order', 'order_quote',
+          ],
+        },
+      },
       orderBy: { slug: 'asc' },
     })
     expect(relations.map((relation) => `${relation.slug}:${relation.cardinality}:${relation.onDelete}`).sort())
-      .toEqual(['line_item_deal:many_to_one:cascade', 'line_item_product:many_to_one:unlink'])
+      .toEqual([
+        'invoice_order:many_to_one:unlink',
+        'line_item_deal:many_to_one:cascade',
+        'line_item_invoice:many_to_one:cascade',
+        'line_item_order:many_to_one:cascade',
+        'line_item_product:many_to_one:unlink',
+        'line_item_quote:many_to_one:cascade',
+        'line_item_subscription:many_to_one:cascade',
+        'order_quote:many_to_one:unlink',
+        'payment_invoice:many_to_one:unlink',
+        'payment_subscription:many_to_one:unlink',
+        'quote_company:many_to_one:unlink',
+        'subscription_company:many_to_one:unlink',
+      ])
+    const commercialObjects = await db.objectType.findMany({
+      where: {
+        organizationId: value.organizationId,
+        teamId: value.teamId,
+        slug: { in: ['quote', 'subscription', 'invoice', 'payment', 'order'] },
+      },
+      orderBy: { slug: 'asc' },
+    })
+    expect(commercialObjects.map((objectType) => objectType.slug))
+      .toEqual(['invoice', 'order', 'payment', 'quote', 'subscription'])
+    const pipelines = await db.pipeline.findMany({
+      where: { organizationId: value.organizationId, teamId: value.teamId },
+      include: { stages: true },
+      orderBy: { slug: 'asc' },
+    })
+    expect(pipelines.map((pipeline) => `${pipeline.slug}:${pipeline.objectTypeId !== null}:${pipeline.stages.length}:${pipeline.isDefault}`))
+      .toEqual([
+        'invoice_lifecycle:true:5:true',
+        'order_lifecycle:true:5:true',
+        'quote_lifecycle:true:5:true',
+        'subscription_lifecycle:true:5:true',
+      ])
     const derived = await db.attribute.findMany({
       where: {
         organizationId: value.organizationId,
@@ -186,20 +231,51 @@ describe('templates', () => {
       .toEqual([
         'deal:line_item_count:rollup',
         'deal:line_item_total:rollup',
+        'invoice:line_item_count:rollup',
+        'invoice:line_item_total:rollup',
+        'order:line_item_count:rollup',
+        'order:line_item_total:rollup',
         'product:line_item_count:rollup',
         'product:line_item_revenue_total:rollup',
+        'quote:line_item_count:rollup',
+        'quote:line_item_total:rollup',
+        'subscription:line_item_count:rollup',
+        'subscription:line_item_total:rollup',
       ])
+    const paymentAttributes = await db.attribute.findMany({
+      where: {
+        organizationId: value.organizationId,
+        teamId: value.teamId,
+        objectType: { slug: 'payment' },
+      },
+      orderBy: { slug: 'asc' },
+    })
+    expect(paymentAttributes.map((attribute) => attribute.slug))
+      .not.toEqual(expect.arrayContaining(['card_number', 'bank_account', 'provider_payload', 'secret', 'token']))
     const rules = await db.matchingRule.findMany({
       where: { organizationId: value.organizationId, teamId: value.teamId },
       include: { objectType: true },
     })
     expect(rules.map((rule) => `${rule.objectType.slug}:${rule.method}:${rule.attributeSlugs.join('+')}`).sort())
       .toEqual(expect.arrayContaining([
+        'invoice:normalized:external_ref',
+        'invoice:normalized:invoice_number',
         'line_item:normalized:external_ref',
+        'order:normalized:external_ref',
+        'order:normalized:order_number',
+        'payment:normalized:external_ref',
+        'payment:normalized:payment_ref',
+        'payment:normalized:provider_payment_ref',
         'product:normalized:external_ref',
         'product:normalized:sku',
+        'quote:normalized:external_ref',
+        'quote:normalized:quote_number',
+        'subscription:normalized:external_ref',
+        'subscription:normalized:subscription_ref',
       ]))
-    expect(rules.some((rule) => ['line_item', 'product'].includes(rule.objectType.slug) && rule.method === 'fuzzy'))
+    expect(rules.some((rule) => [
+      'line_item', 'product', 'quote', 'subscription', 'invoice', 'payment', 'order',
+    ].includes(rule.objectType.slug) && rule.method === 'fuzzy'))
       .toBe(false)
   })
 
