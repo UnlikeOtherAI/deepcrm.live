@@ -1,6 +1,7 @@
 export { pipelineSummary } from './summary.js'
 export {
   definePipeline,
+  definePipelineBatch,
   listPipeline,
   setRecordStage,
   updatePipeline,

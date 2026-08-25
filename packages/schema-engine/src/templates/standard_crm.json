@@ -36,7 +36,9 @@
           "type": "phone",
           "is_multi": true,
           "sensitivity": "confidential",
-          "config": { "type": "phone" }
+          "config": {
+            "type": "phone"
+          }
         },
         {
           "slug": "title",
@@ -73,6 +75,42 @@
           "name": "Location",
           "description": "Where they are based.",
           "type": "location"
+        },
+        {
+          "slug": "lifecycle_stage",
+          "name": "Lifecycle stage",
+          "description": "Tenant-customizable contact lifecycle label, separate from lead, deal or ticket pipeline stages.",
+          "type": "select",
+          "is_indexed": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "prospect",
+                "label": "Prospect"
+              },
+              {
+                "id": "active",
+                "label": "Active"
+              },
+              {
+                "id": "customer",
+                "label": "Customer"
+              },
+              {
+                "id": "partner",
+                "label": "Partner"
+              },
+              {
+                "id": "former",
+                "label": "Former"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
         },
         {
           "slug": "source",
@@ -283,6 +321,42 @@
           "name": "Headquarters",
           "description": "Main office.",
           "type": "location"
+        },
+        {
+          "slug": "lifecycle_stage",
+          "name": "Lifecycle stage",
+          "description": "Tenant-customizable account lifecycle label, separate from lead, deal or ticket pipeline stages.",
+          "type": "select",
+          "is_indexed": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "prospect",
+                "label": "Prospect"
+              },
+              {
+                "id": "customer",
+                "label": "Customer"
+              },
+              {
+                "id": "partner",
+                "label": "Partner"
+              },
+              {
+                "id": "vendor",
+                "label": "Vendor"
+              },
+              {
+                "id": "churned",
+                "label": "Churned"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
         },
         {
           "slug": "tags",

@@ -1,0 +1,462 @@
+{
+  "slug": "standard_sales",
+  "description": "Sales workspace additions: lead records with structural qualification data, lead relations, and a lead qualification pipeline.",
+  "object_types": [
+    {
+      "slug": "lead",
+      "kind": "standard",
+      "singular_name": "Lead",
+      "plural_name": "Leads",
+      "description": "A distinct sales pursuit before or alongside a deal; multiple leads can involve the same person.",
+      "icon": "lead",
+      "primary_attribute": "name",
+      "attributes": [
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "Lead title or pursuit name.",
+          "type": "text",
+          "is_required": true,
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 200
+          }
+        },
+        {
+          "slug": "lifecycle_stage",
+          "name": "Lifecycle stage",
+          "description": "Qualification or disqualification lifecycle label, distinct from pipeline stage history.",
+          "type": "select",
+          "is_required": true,
+          "is_indexed": true,
+          "default_value": "new",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "new",
+                "label": "New"
+              },
+              {
+                "id": "working",
+                "label": "Working"
+              },
+              {
+                "id": "qualified",
+                "label": "Qualified"
+              },
+              {
+                "id": "disqualified",
+                "label": "Disqualified"
+              },
+              {
+                "id": "converted",
+                "label": "Converted"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "owner",
+          "name": "Owner",
+          "description": "Human or agent accountable for this lead.",
+          "type": "actor_reference",
+          "config": {
+            "type": "actor_reference",
+            "allow": [
+              "human",
+              "agent"
+            ],
+            "role": "owner"
+          }
+        },
+        {
+          "slug": "source",
+          "name": "Source",
+          "description": "How this lead was acquired.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "inbound",
+                "label": "Inbound"
+              },
+              {
+                "id": "outbound",
+                "label": "Outbound"
+              },
+              {
+                "id": "referral",
+                "label": "Referral"
+              },
+              {
+                "id": "event",
+                "label": "Event"
+              },
+              {
+                "id": "partner",
+                "label": "Partner"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "score",
+          "name": "Score",
+          "description": "Structural lead score from an integration or rule.",
+          "type": "number",
+          "is_indexed": true
+        },
+        {
+          "slug": "qualified_at",
+          "name": "Qualified at",
+          "description": "When qualification was decided.",
+          "type": "datetime"
+        },
+        {
+          "slug": "disqualified_at",
+          "name": "Disqualified at",
+          "description": "When disqualification was decided.",
+          "type": "datetime"
+        },
+        {
+          "slug": "disqualification_reason",
+          "name": "Disqualification reason",
+          "description": "Structural reason captured when disqualified.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "no_budget",
+                "label": "No budget"
+              },
+              {
+                "id": "no_authority",
+                "label": "No authority"
+              },
+              {
+                "id": "bad_fit",
+                "label": "Poor fit"
+              },
+              {
+                "id": "timing",
+                "label": "Timing"
+              },
+              {
+                "id": "duplicate",
+                "label": "Duplicate"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "qualification_notes",
+          "name": "Qualification notes",
+          "description": "Notes supporting the qualification outcome.",
+          "type": "rich_text",
+          "sensitivity": "confidential"
+        },
+        {
+          "slug": "person",
+          "name": "Person",
+          "description": "Contact this lead involves.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "person"
+            ],
+            "relationTypeSlug": "lead_person"
+          }
+        },
+        {
+          "slug": "company",
+          "name": "Company",
+          "description": "Account this lead involves.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "company"
+            ],
+            "relationTypeSlug": "lead_company"
+          }
+        },
+        {
+          "slug": "deal",
+          "name": "Deal",
+          "description": "Deal this lead converted into or supports.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "deal"
+            ],
+            "relationTypeSlug": "lead_deal"
+          }
+        },
+        {
+          "slug": "external_ref",
+          "name": "External reference",
+          "description": "Opaque source-system lead id for structural sync.",
+          "type": "text",
+          "is_unique": true,
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 300
+          }
+        },
+        {
+          "slug": "last_activity_at",
+          "name": "Last activity",
+          "description": "Most recent interaction (computed).",
+          "type": "timestamp_system",
+          "is_system": true,
+          "config": {
+            "type": "timestamp_system",
+            "source": "last_activity_at"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "activity",
+      "kind": "system",
+      "singular_name": "Activity",
+      "plural_name": "Activities",
+      "description": "An interaction that happened: an email, call, meeting, message or custom event, linked to the records it was about.",
+      "icon": "activity",
+      "attributes": [
+        {
+          "slug": "channel",
+          "name": "Channel",
+          "description": "Specific activity channel for email, call, meeting or message records.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "email",
+                "label": "Email"
+              },
+              {
+                "id": "phone",
+                "label": "Phone"
+              },
+              {
+                "id": "video",
+                "label": "Video"
+              },
+              {
+                "id": "chat",
+                "label": "Chat"
+              },
+              {
+                "id": "sms",
+                "label": "SMS"
+              },
+              {
+                "id": "social",
+                "label": "Social"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "outcome",
+          "name": "Outcome",
+          "description": "Structured result of the interaction.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "sent",
+                "label": "Sent"
+              },
+              {
+                "id": "received",
+                "label": "Received"
+              },
+              {
+                "id": "connected",
+                "label": "Connected"
+              },
+              {
+                "id": "no_answer",
+                "label": "No answer"
+              },
+              {
+                "id": "scheduled",
+                "label": "Scheduled"
+              },
+              {
+                "id": "completed",
+                "label": "Completed"
+              },
+              {
+                "id": "cancelled",
+                "label": "Cancelled"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "thread_ref",
+          "name": "Thread reference",
+          "description": "Opaque source thread or conversation identifier.",
+          "type": "text",
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 300
+          }
+        },
+        {
+          "slug": "started_at",
+          "name": "Started at",
+          "description": "When the interaction started when separate from occurred_at.",
+          "type": "datetime"
+        },
+        {
+          "slug": "ended_at",
+          "name": "Ended at",
+          "description": "When the interaction ended.",
+          "type": "datetime"
+        },
+        {
+          "slug": "duration_seconds",
+          "name": "Duration seconds",
+          "description": "Duration of a call, meeting or message exchange.",
+          "type": "number"
+        },
+        {
+          "slug": "transcript",
+          "name": "Transcript",
+          "description": "Sensitive transcript or detailed message content when policy permits storing it.",
+          "type": "rich_text",
+          "sensitivity": "restricted"
+        },
+        {
+          "slug": "attachment_refs",
+          "name": "Attachment references",
+          "description": "Policy-filtered attachment metadata or external file references, never raw file bytes.",
+          "type": "json",
+          "sensitivity": "restricted"
+        }
+      ]
+    }
+  ],
+  "relation_types": [
+    {
+      "slug": "lead_person",
+      "from_object_type": "lead",
+      "to_object_type": "person",
+      "forward_name": "person",
+      "inverse_name": "leads",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Person associated with this lead; many leads can involve one person."
+    },
+    {
+      "slug": "lead_company",
+      "from_object_type": "lead",
+      "to_object_type": "company",
+      "forward_name": "company",
+      "inverse_name": "leads",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Account associated with this lead."
+    },
+    {
+      "slug": "lead_deal",
+      "from_object_type": "lead",
+      "to_object_type": "deal",
+      "forward_name": "deal",
+      "inverse_name": "source leads",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Deal associated with this lead after conversion."
+    }
+  ],
+  "pipelines": [
+    {
+      "object_type": "lead",
+      "slug": "lead_qualification",
+      "name": "Lead qualification",
+      "description": "Qualification pipeline for lead pursuits.",
+      "is_default": true,
+      "stages": [
+        {
+          "slug": "new",
+          "name": "New",
+          "position": 0,
+          "probability": 0.05,
+          "category": "open"
+        },
+        {
+          "slug": "contacted",
+          "name": "Contacted",
+          "position": 1,
+          "probability": 0.2,
+          "category": "open"
+        },
+        {
+          "slug": "qualified",
+          "name": "Qualified",
+          "position": 2,
+          "probability": 0.65,
+          "category": "won"
+        },
+        {
+          "slug": "disqualified",
+          "name": "Disqualified",
+          "position": 3,
+          "probability": 0,
+          "category": "lost"
+        },
+        {
+          "slug": "converted",
+          "name": "Converted",
+          "position": 4,
+          "probability": 1,
+          "category": "won"
+        }
+      ]
+    }
+  ],
+  "matching_rules": {
+    "lead": [
+      {
+        "attributes": [
+          "external_ref"
+        ],
+        "method": "normalized",
+        "action": "block"
+      }
+    ]
+  }
+}

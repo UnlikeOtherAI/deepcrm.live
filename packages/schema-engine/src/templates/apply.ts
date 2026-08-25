@@ -1,6 +1,7 @@
 import { tenantWhere, type TenantRef, writeAudit } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
+import { definePipelineBatch } from '../pipeline/index.js'
 import {
   bumpSchemaVersion,
   defineAttributeBatch,
@@ -12,17 +13,24 @@ import {
 } from '../schema/mutate.js'
 import type { SchemaTx } from '../schema/tx.js'
 import standardCrmJson from './standard_crm.json' with { type: 'json' }
+import standardSalesJson from './standard_sales.json' with { type: 'json' }
+import standardServiceJson from './standard_service.json' with { type: 'json' }
 import systemJson from './system.json' with { type: 'json' }
 import { TemplateSchema, type Template, type TemplateAdded } from './types.js'
 
-const templates = [TemplateSchema.parse(systemJson), TemplateSchema.parse(standardCrmJson)] as const
+const templates = [
+  TemplateSchema.parse(systemJson),
+  TemplateSchema.parse(standardCrmJson),
+  TemplateSchema.parse(standardSalesJson),
+  TemplateSchema.parse(standardServiceJson),
+] as const
 
 function emptyAdded(): TemplateAdded {
-  return { objectTypes: 0, attributes: 0, relationTypes: 0, matchingRules: 0 }
+  return { objectTypes: 0, attributes: 0, relationTypes: 0, pipelines: 0, matchingRules: 0 }
 }
 
 function total(added: TemplateAdded): number {
-  return added.objectTypes + added.attributes + added.relationTypes + added.matchingRules
+  return added.objectTypes + added.attributes + added.relationTypes + added.pipelines + added.matchingRules
 }
 
 function templateFor(slug: string): Template {
@@ -103,6 +111,22 @@ export async function applyTemplateBatch(
       })
       added.attributes += 1
     }
+  }
+
+  for (const item of template.pipelines) {
+    const exists = await tx.pipeline.findFirst({
+      where: { ...tenantWhere(tenant), slug: item.slug, archivedAt: null },
+    })
+    if (exists !== null) continue
+    await definePipelineBatch(tx, tenant, actor, {
+      objectType: item.object_type,
+      slug: item.slug,
+      name: item.name,
+      description: item.description,
+      isDefault: item.is_default,
+      stages: item.stages,
+    })
+    added.pipelines += 1
   }
 
   for (const object of template.object_types) {

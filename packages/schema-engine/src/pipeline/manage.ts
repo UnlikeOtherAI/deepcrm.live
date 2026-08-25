@@ -65,6 +65,16 @@ function objectType(schema: LoadedSchema, slug: string): LoadedObjectType {
   return found
 }
 
+async function objectTypeId(tx: SchemaTx, tenant: TenantRef, schema: LoadedSchema | undefined, slug: string) {
+  if (schema !== undefined) return objectType(schema, slug).id
+  const found = await tx.objectType.findFirst({
+    where: { ...tenantWhere(tenant), slug, archivedAt: null },
+    select: { id: true },
+  })
+  if (found === null) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Object type does not exist', { object_type: slug })
+  return found.id
+}
+
 function validateStages(stages: readonly PipelineStageInput[]): void {
   const slugs = new Set<string>()
   const positions = new Set<number>()
@@ -113,20 +123,21 @@ async function auditSchema(
   })
 }
 
-export async function definePipeline(
+async function definePipelineInternal(
   tx: SchemaTx,
   tenant: TenantRef,
   actor: AuditActor,
-  schema: LoadedSchema,
+  schema: LoadedSchema | undefined,
   input: PipelineDefineInput,
+  finalize: boolean,
 ): Promise<PipelineDetail> {
   validateStages(input.stages)
-  const object = objectType(schema, input.objectType)
-  if (input.isDefault) await clearDefault(tx, tenant, object.id)
+  const selectedObjectTypeId = await objectTypeId(tx, tenant, schema, input.objectType)
+  if (input.isDefault) await clearDefault(tx, tenant, selectedObjectTypeId)
   const pipeline = await tx.pipeline.create({
     data: {
       ...tenantWhere(tenant),
-      objectTypeId: object.id,
+      objectTypeId: selectedObjectTypeId,
       slug: input.slug,
       name: input.name,
       description: input.description ?? '',
@@ -148,9 +159,30 @@ export async function definePipeline(
       },
     })
   }
-  await bumpSchemaVersion(tx, tenant)
-  await auditSchema(tx, tenant, actor, 'define', pipeline.id)
+  if (finalize) {
+    await bumpSchemaVersion(tx, tenant)
+    await auditSchema(tx, tenant, actor, 'define', pipeline.id)
+  }
   return listPipeline(tx, tenant, input.objectType, input.slug)
+}
+
+export async function definePipeline(
+  tx: SchemaTx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  schema: LoadedSchema,
+  input: PipelineDefineInput,
+): Promise<PipelineDetail> {
+  return definePipelineInternal(tx, tenant, actor, schema, input, true)
+}
+
+export async function definePipelineBatch(
+  tx: SchemaTx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  input: PipelineDefineInput,
+): Promise<PipelineDetail> {
+  return definePipelineInternal(tx, tenant, actor, undefined, input, false)
 }
 
 export async function updatePipeline(

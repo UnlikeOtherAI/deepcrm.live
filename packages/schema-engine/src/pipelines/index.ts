@@ -1,5 +1,6 @@
 export {
   definePipeline,
+  definePipelineBatch,
   listPipeline,
   pipelineSummary,
   setRecordStage,

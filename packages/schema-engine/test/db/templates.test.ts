@@ -31,10 +31,25 @@ describe('templates', () => {
       new URL('../../../../docs/spec/templates/standard_crm.json', import.meta.url),
       'utf8',
     )
+    const copiedSales = readFileSync(new URL('../../src/templates/standard_sales.json', import.meta.url), 'utf8')
+    const authoritativeSales = readFileSync(
+      new URL('../../../../docs/spec/templates/standard_sales.json', import.meta.url),
+      'utf8',
+    )
+    const copiedService = readFileSync(new URL('../../src/templates/standard_service.json', import.meta.url), 'utf8')
+    const authoritativeService = readFileSync(
+      new URL('../../../../docs/spec/templates/standard_service.json', import.meta.url),
+      'utf8',
+    )
     expect(source).toContain("import systemJson from './system.json'")
+    expect(source).toContain("import standardSalesJson from './standard_sales.json'")
+    expect(source).toContain("import standardServiceJson from './standard_service.json'")
     expect(source).not.toContain('readFile')
     expect(copied).toBe(authoritative)
-    expect(listTemplates().map((template) => template.slug)).toEqual(['system', 'standard_crm'])
+    expect(copiedSales).toBe(authoritativeSales)
+    expect(copiedService).toBe(authoritativeService)
+    expect(listTemplates().map((template) => template.slug))
+      .toEqual(['system', 'standard_crm', 'standard_sales', 'standard_service'])
     const value = await tenant()
     await expect(db.$transaction((tx) => applyTemplate(tx, value, actor(), 'missing')))
       .rejects.toMatchObject({ code: ErrorCode.UNKNOWN_TEMPLATE })
@@ -43,9 +58,13 @@ describe('templates', () => {
   it('applies exact system and standard metadata once with claims, primaries, rules, and final audit', async () => {
     const value = await tenant()
     const system = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
-    expect(system.added).toEqual({ objectTypes: 3, attributes: 15, relationTypes: 3, matchingRules: 0 })
+    expect(system.added).toEqual({
+      objectTypes: 3, attributes: 15, relationTypes: 3, pipelines: 0, matchingRules: 0,
+    })
     const standard = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_crm'))
-    expect(standard.added).toEqual({ objectTypes: 3, attributes: 27, relationTypes: 3, matchingRules: 5 })
+    expect(standard.added).toEqual({
+      objectTypes: 3, attributes: 29, relationTypes: 3, pipelines: 0, matchingRules: 5,
+    })
     const [objects, attributes, relations, rules, team, audits] = await Promise.all([
       db.objectType.findMany({ where: { organizationId: value.organizationId, teamId: value.teamId } }),
       db.attribute.findMany({ where: { organizationId: value.organizationId, teamId: value.teamId } }),
@@ -75,12 +94,55 @@ describe('templates', () => {
     await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
     const before = await db.team.findFirstOrThrow({ where: { id: value.teamId, organizationId: value.organizationId } })
     const second = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
-    expect(second.added).toEqual({ objectTypes: 0, attributes: 0, relationTypes: 0, matchingRules: 0 })
+    expect(second.added).toEqual({
+      objectTypes: 0, attributes: 0, relationTypes: 0, pipelines: 0, matchingRules: 0,
+    })
     const after = await db.team.findFirstOrThrow({ where: { id: value.teamId, organizationId: value.organizationId } })
     expect(after.schemaVersion).toBe(before.schemaVersion)
     await db.attribute.deleteMany({ where: { organizationId: value.organizationId, teamId: value.teamId, slug: 'priority' } })
     const partial = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
-    expect(partial.added).toEqual({ objectTypes: 0, attributes: 1, relationTypes: 0, matchingRules: 0 })
+    expect(partial.added).toEqual({ objectTypes: 0, attributes: 1, relationTypes: 0, pipelines: 0, matchingRules: 0 })
+  })
+
+  it('adds sales and service templates idempotently without overwriting existing shells', async () => {
+    const value = await tenant()
+    await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
+    await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_crm'))
+    const customLead = await db.objectType.create({ data: {
+      organizationId: value.organizationId,
+      teamId: value.teamId,
+      slug: 'lead',
+      singularName: 'Custom lead',
+      pluralName: 'Custom leads',
+      description: 'Pre-existing custom lead shell.',
+      kind: 'custom',
+      createdByType: 'system',
+      createdById: 'template-test',
+    } })
+    const sales = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_sales'))
+    expect(sales.added).toEqual({ objectTypes: 0, attributes: 22, relationTypes: 3, pipelines: 1, matchingRules: 0 })
+    const repeatedSales = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_sales'))
+    expect(repeatedSales.added).toEqual({
+      objectTypes: 0, attributes: 0, relationTypes: 0, pipelines: 0, matchingRules: 0,
+    })
+    await expect(db.objectType.findUniqueOrThrow({ where: { id: customLead.id } }))
+      .resolves.toMatchObject({ singularName: 'Custom lead', kind: 'custom' })
+    const service = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_service'))
+    expect(service.added).toEqual({ objectTypes: 1, attributes: 20, relationTypes: 7, pipelines: 1, matchingRules: 1 })
+    const pipelines = await db.pipeline.findMany({
+      where: { organizationId: value.organizationId, teamId: value.teamId },
+      include: { stages: true },
+      orderBy: { slug: 'asc' },
+    })
+    expect(pipelines.map((pipeline) => `${pipeline.slug}:${pipeline.stages.length}:${pipeline.isDefault}`))
+      .toEqual(['lead_qualification:5:true', 'ticket_resolution:6:true'])
+    const rules = await db.matchingRule.findMany({
+      where: { organizationId: value.organizationId, teamId: value.teamId },
+      include: { objectType: true },
+    })
+    expect(rules.map((rule) => `${rule.objectType.slug}:${rule.method}:${rule.attributeSlugs.join('+')}`).sort())
+      .toContain('ticket:normalized:external_ref')
+    expect(rules.some((rule) => rule.objectType.slug === 'ticket' && rule.method === 'fuzzy')).toBe(false)
   })
 
   it('rolls back the batch, version increment, and audit with its caller transaction', async () => {

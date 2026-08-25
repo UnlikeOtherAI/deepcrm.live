@@ -510,7 +510,7 @@ export const CrmMatchingRuleSet = { in: z.object({ object_type: Slug,
   out: z.object({ rules: z.array(MatchingRule), activation: MatchingRuleActivation }) }
 export const CrmTemplateApply = { in: z.object({ template: Slug.describe('a slug from crm://templates; unknown ⇒ UNKNOWN_TEMPLATE') }),
   out: z.object({ added: z.object({ object_types: z.number().int(), attributes: z.number().int(),
-    relation_types: z.number().int(), matching_rules: z.number().int() }) }) }
+    relation_types: z.number().int(), pipelines: z.number().int(), matching_rules: z.number().int() }) }) }
 
 // ── records ──────────────────────────────────────────────────────────────────
 const WriteCommon = { reason: Reason, idempotency_key: IdempotencyKey }

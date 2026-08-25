@@ -127,7 +127,7 @@ describe('schema MCP tools and resources', () => {
     expect(applied).toMatchObject({
       added: {
         object_types: expect.any(Number), attributes: expect.any(Number),
-        relation_types: expect.any(Number), matching_rules: expect.any(Number),
+        relation_types: expect.any(Number), pipelines: expect.any(Number), matching_rules: expect.any(Number),
       },
     })
     const text = z.object({ type: z.literal('text'), text: z.string() })
@@ -142,7 +142,10 @@ describe('schema MCP tools and resources', () => {
     ]))
 
     const unknown = structured(await call('crm_template_apply', { template: 'not_a_template' }))
-    expect(unknown).toMatchObject({ code: 'UNKNOWN_TEMPLATE', available: ['system', 'standard_crm'] })
+    expect(unknown).toMatchObject({
+      code: 'UNKNOWN_TEMPLATE',
+      available: ['system', 'standard_crm', 'standard_sales', 'standard_service'],
+    })
   })
 
   it('defines a custom object with a record_reference attribute', async () => {
@@ -356,7 +359,7 @@ describe('schema MCP tools and resources', () => {
     const templatesResource = await client.readResource({ uri: 'crm://templates' })
     const templatesText = textContent(templatesResource.contents)
     expect(z.object({ templates: z.array(z.object({ slug: z.string() })) }).parse(JSON.parse(templatesText)))
-      .toMatchObject({ templates: expect.arrayContaining([{ slug: 'standard_crm' }]) })
+      .toMatchObject({ templates: expect.arrayContaining([{ slug: 'standard_sales' }, { slug: 'standard_service' }]) })
 
     const templates = await client.listResourceTemplates()
     expect(templates.resourceTemplates.map((template) => template.uriTemplate))

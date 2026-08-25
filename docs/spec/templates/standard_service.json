@@ -1,0 +1,598 @@
+{
+  "slug": "standard_service",
+  "description": "Service workspace additions: ticket records, support relations, activity metadata, and a ticket resolution pipeline.",
+  "object_types": [
+    {
+      "slug": "ticket",
+      "kind": "standard",
+      "singular_name": "Ticket",
+      "plural_name": "Tickets",
+      "description": "A service request, support issue or customer case.",
+      "icon": "ticket",
+      "primary_attribute": "subject",
+      "attributes": [
+        {
+          "slug": "subject",
+          "name": "Subject",
+          "description": "Short ticket title.",
+          "type": "text",
+          "is_required": true,
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 300
+          }
+        },
+        {
+          "slug": "description",
+          "name": "Description",
+          "description": "Customer-visible issue description or case notes.",
+          "type": "rich_text",
+          "sensitivity": "confidential"
+        },
+        {
+          "slug": "status",
+          "name": "Status",
+          "description": "Tenant-customizable ticket lifecycle label, separate from pipeline stage history.",
+          "type": "status",
+          "is_required": true,
+          "is_indexed": true,
+          "default_value": "new",
+          "config": {
+            "type": "status",
+            "options": [
+              {
+                "id": "new",
+                "label": "New",
+                "category": "open",
+                "position": 0
+              },
+              {
+                "id": "open",
+                "label": "Open",
+                "category": "open",
+                "position": 1
+              },
+              {
+                "id": "waiting_customer",
+                "label": "Waiting on customer",
+                "category": "neutral",
+                "position": 2
+              },
+              {
+                "id": "resolved",
+                "label": "Resolved",
+                "category": "won",
+                "position": 3
+              },
+              {
+                "id": "closed",
+                "label": "Closed",
+                "category": "won",
+                "position": 4
+              },
+              {
+                "id": "cancelled",
+                "label": "Cancelled",
+                "category": "lost",
+                "position": 5
+              }
+            ]
+          }
+        },
+        {
+          "slug": "priority",
+          "name": "Priority",
+          "description": "Ticket urgency.",
+          "type": "select",
+          "default_value": "normal",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "normal",
+                "label": "Normal"
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "urgent",
+                "label": "Urgent"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "category",
+          "name": "Category",
+          "description": "Service category.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "question",
+                "label": "Question"
+              },
+              {
+                "id": "incident",
+                "label": "Incident"
+              },
+              {
+                "id": "problem",
+                "label": "Problem"
+              },
+              {
+                "id": "request",
+                "label": "Request"
+              },
+              {
+                "id": "billing",
+                "label": "Billing"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "source_channel",
+          "name": "Source channel",
+          "description": "Where the ticket originated.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "email",
+                "label": "Email"
+              },
+              {
+                "id": "portal",
+                "label": "Portal"
+              },
+              {
+                "id": "chat",
+                "label": "Chat"
+              },
+              {
+                "id": "phone",
+                "label": "Phone"
+              },
+              {
+                "id": "api",
+                "label": "API"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "opened_at",
+          "name": "Opened at",
+          "description": "When the ticket was opened.",
+          "type": "datetime",
+          "is_indexed": true
+        },
+        {
+          "slug": "closed_at",
+          "name": "Closed at",
+          "description": "When the ticket was closed.",
+          "type": "datetime",
+          "is_indexed": true
+        },
+        {
+          "slug": "first_response_due_at",
+          "name": "First response due",
+          "description": "SLA deadline for first response.",
+          "type": "datetime",
+          "is_indexed": true
+        },
+        {
+          "slug": "first_responded_at",
+          "name": "First responded at",
+          "description": "When the first response was sent.",
+          "type": "datetime"
+        },
+        {
+          "slug": "resolution_due_at",
+          "name": "Resolution due",
+          "description": "SLA deadline for resolution.",
+          "type": "datetime",
+          "is_indexed": true
+        },
+        {
+          "slug": "resolved_at",
+          "name": "Resolved at",
+          "description": "When the ticket was resolved.",
+          "type": "datetime"
+        },
+        {
+          "slug": "sla_policy",
+          "name": "SLA policy",
+          "description": "Opaque SLA policy or entitlement label.",
+          "type": "text",
+          "config": {
+            "type": "text",
+            "maxLength": 120
+          }
+        },
+        {
+          "slug": "owner",
+          "name": "Owner",
+          "description": "Human or agent accountable for the ticket.",
+          "type": "actor_reference",
+          "config": {
+            "type": "actor_reference",
+            "allow": [
+              "human",
+              "agent"
+            ],
+            "role": "owner"
+          }
+        },
+        {
+          "slug": "assignee",
+          "name": "Assignee",
+          "description": "Human or agent currently assigned.",
+          "type": "actor_reference",
+          "config": {
+            "type": "actor_reference",
+            "allow": [
+              "human",
+              "agent"
+            ],
+            "role": "assignee"
+          }
+        },
+        {
+          "slug": "person",
+          "name": "Person",
+          "description": "Customer contact for the ticket.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "person"
+            ],
+            "relationTypeSlug": "ticket_person"
+          }
+        },
+        {
+          "slug": "company",
+          "name": "Company",
+          "description": "Account for the ticket.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "company"
+            ],
+            "relationTypeSlug": "ticket_company"
+          }
+        },
+        {
+          "slug": "deal",
+          "name": "Deal",
+          "description": "Commercial deal related to the ticket.",
+          "type": "record_reference",
+          "is_indexed": true,
+          "config": {
+            "type": "record_reference",
+            "objectTypes": [
+              "deal"
+            ],
+            "relationTypeSlug": "ticket_deal"
+          }
+        },
+        {
+          "slug": "external_ref",
+          "name": "External reference",
+          "description": "Opaque source-system ticket id for structural sync.",
+          "type": "text",
+          "is_unique": true,
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 300
+          }
+        },
+        {
+          "slug": "last_activity_at",
+          "name": "Last activity",
+          "description": "Most recent interaction (computed).",
+          "type": "timestamp_system",
+          "is_system": true,
+          "config": {
+            "type": "timestamp_system",
+            "source": "last_activity_at"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "activity",
+      "kind": "system",
+      "singular_name": "Activity",
+      "plural_name": "Activities",
+      "description": "An interaction that happened: an email, call, meeting, message or custom event, linked to the records it was about.",
+      "icon": "activity",
+      "attributes": [
+        {
+          "slug": "channel",
+          "name": "Channel",
+          "description": "Specific activity channel for email, call, meeting or message records.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "email",
+                "label": "Email"
+              },
+              {
+                "id": "phone",
+                "label": "Phone"
+              },
+              {
+                "id": "video",
+                "label": "Video"
+              },
+              {
+                "id": "chat",
+                "label": "Chat"
+              },
+              {
+                "id": "sms",
+                "label": "SMS"
+              },
+              {
+                "id": "social",
+                "label": "Social"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "outcome",
+          "name": "Outcome",
+          "description": "Structured result of the interaction.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "sent",
+                "label": "Sent"
+              },
+              {
+                "id": "received",
+                "label": "Received"
+              },
+              {
+                "id": "connected",
+                "label": "Connected"
+              },
+              {
+                "id": "no_answer",
+                "label": "No answer"
+              },
+              {
+                "id": "scheduled",
+                "label": "Scheduled"
+              },
+              {
+                "id": "completed",
+                "label": "Completed"
+              },
+              {
+                "id": "cancelled",
+                "label": "Cancelled"
+              },
+              {
+                "id": "other",
+                "label": "Other"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "thread_ref",
+          "name": "Thread reference",
+          "description": "Opaque source thread or conversation identifier.",
+          "type": "text",
+          "is_indexed": true,
+          "config": {
+            "type": "text",
+            "maxLength": 300
+          }
+        },
+        {
+          "slug": "started_at",
+          "name": "Started at",
+          "description": "When the interaction started when separate from occurred_at.",
+          "type": "datetime"
+        },
+        {
+          "slug": "ended_at",
+          "name": "Ended at",
+          "description": "When the interaction ended.",
+          "type": "datetime"
+        },
+        {
+          "slug": "duration_seconds",
+          "name": "Duration seconds",
+          "description": "Duration of a call, meeting or message exchange.",
+          "type": "number"
+        },
+        {
+          "slug": "transcript",
+          "name": "Transcript",
+          "description": "Sensitive transcript or detailed message content when policy permits storing it.",
+          "type": "rich_text",
+          "sensitivity": "restricted"
+        },
+        {
+          "slug": "attachment_refs",
+          "name": "Attachment references",
+          "description": "Policy-filtered attachment metadata or external file references, never raw file bytes.",
+          "type": "json",
+          "sensitivity": "restricted"
+        }
+      ]
+    }
+  ],
+  "relation_types": [
+    {
+      "slug": "ticket_person",
+      "from_object_type": "ticket",
+      "to_object_type": "person",
+      "forward_name": "person",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Customer contact associated with the ticket."
+    },
+    {
+      "slug": "ticket_company",
+      "from_object_type": "ticket",
+      "to_object_type": "company",
+      "forward_name": "company",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Account associated with the ticket."
+    },
+    {
+      "slug": "ticket_deal",
+      "from_object_type": "ticket",
+      "to_object_type": "deal",
+      "forward_name": "deal",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink",
+      "description": "Deal associated with the ticket."
+    },
+    {
+      "slug": "ticket_product",
+      "from_object_type": "ticket",
+      "to_object_type": null,
+      "forward_name": "product",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_many",
+      "on_delete": "unlink",
+      "description": "Product records associated with the ticket when a product template is installed."
+    },
+    {
+      "slug": "ticket_related",
+      "from_object_type": "ticket",
+      "to_object_type": "ticket",
+      "forward_name": "related ticket",
+      "inverse_name": "related ticket",
+      "cardinality": "many_to_many",
+      "on_delete": "unlink",
+      "description": "Related tickets, duplicates or parent cases."
+    },
+    {
+      "slug": "ticket_activity",
+      "from_object_type": "ticket",
+      "to_object_type": "activity",
+      "forward_name": "activity",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_many",
+      "on_delete": "unlink",
+      "description": "Activities explicitly associated with this ticket in addition to activity_about timeline links."
+    },
+    {
+      "slug": "ticket_task",
+      "from_object_type": "ticket",
+      "to_object_type": "task",
+      "forward_name": "task",
+      "inverse_name": "tickets",
+      "cardinality": "many_to_many",
+      "on_delete": "unlink",
+      "description": "Tasks associated with this ticket."
+    }
+  ],
+  "pipelines": [
+    {
+      "object_type": "ticket",
+      "slug": "ticket_resolution",
+      "name": "Ticket resolution",
+      "description": "Support pipeline for triage through closure.",
+      "is_default": true,
+      "stages": [
+        {
+          "slug": "new",
+          "name": "New",
+          "position": 0,
+          "probability": 0,
+          "category": "open"
+        },
+        {
+          "slug": "triage",
+          "name": "Triage",
+          "position": 1,
+          "probability": 0,
+          "category": "open"
+        },
+        {
+          "slug": "in_progress",
+          "name": "In progress",
+          "position": 2,
+          "probability": 0,
+          "category": "open"
+        },
+        {
+          "slug": "waiting_customer",
+          "name": "Waiting on customer",
+          "position": 3,
+          "probability": 0,
+          "category": "neutral"
+        },
+        {
+          "slug": "resolved",
+          "name": "Resolved",
+          "position": 4,
+          "probability": 1,
+          "category": "won"
+        },
+        {
+          "slug": "closed",
+          "name": "Closed",
+          "position": 5,
+          "probability": 1,
+          "category": "won"
+        }
+      ]
+    }
+  ],
+  "matching_rules": {
+    "ticket": [
+      {
+        "attributes": [
+          "external_ref"
+        ],
+        "method": "normalized",
+        "action": "block"
+      }
+    ]
+  }
+}

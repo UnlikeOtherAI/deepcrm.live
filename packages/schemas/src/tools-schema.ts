@@ -219,6 +219,7 @@ export const CrmTemplateApply = {
       object_types: z.number().int().nonnegative(),
       attributes: z.number().int().nonnegative(),
       relation_types: z.number().int().nonnegative(),
+      pipelines: z.number().int().nonnegative(),
       matching_rules: z.number().int().nonnegative(),
     }),
   }),
