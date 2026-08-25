@@ -355,7 +355,7 @@ docs/mcp-surface.md` exits 0. **Docs:** `docs/schema-engine.md` §9;
 
 ---
 
-### T66 — MCP schema discoverability and compatibility fixture
+### T66 ✅ — MCP schema discoverability and compatibility fixture
 
 **Depends on:** T65. **Spec:** this file; `docs/mcp-surface.md`; all T57–T65
 contracts.
