@@ -148,7 +148,7 @@ docs/mcp-surface.md` exits 0. **Docs:** `docs/schema-engine.md` §§2–5, §8;
 
 ---
 
-### T60 — Dynamic lists and segment evaluation
+### T60 ✅ — Dynamic lists and segment evaluation
 
 **Depends on:** T59. **Spec:** this file; `docs/schema-engine.md` §5;
 `docs/mcp-surface.md` §5.
