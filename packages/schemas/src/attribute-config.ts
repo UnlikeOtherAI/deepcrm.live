@@ -46,6 +46,8 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('actor_reference'),
     allow: z.array(z.enum(['human', 'agent'])).default(['human', 'agent']),
+    role: z.enum(['owner', 'collaborator', 'assignee', 'created_by', 'modified_by']).default('collaborator')
+      .describe('semantic role for policy: owner, collaborator and assignee may grant edit access'),
   }),
   z.object({
     type: z.literal('record_reference'),

@@ -162,4 +162,23 @@ describe('record_reference projection acceptance', () => {
       [ada.id, grace.id], [grace.id, lin.id],
     ]).toContainEqual(active.map((link) => link.toRecordId))
   })
+
+  it('uses relation edge limits for projected record_reference links', async () => {
+    const { tenant, ctx, schema, links, company, people } = await setup()
+    const [ada, grace] = people
+    if (ada === undefined || grace === undefined) throw new Error('Missing people')
+    const contacts = schema.resolveBackingRelation('deal', 'contacts')
+    if (contacts === undefined) throw new Error('Missing contacts backing relation')
+    await db.relationType.update({ where: { id: contacts.id }, data: { maxActiveEdgesFrom: 1 } })
+    await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
+    const limited = await loadSchema(db, tenant, { useCache: false })
+
+    await expect(db.$transaction((tx) => createRecord(tx, ctx, limited, {
+      objectType: 'deal',
+      data: { name: 'Limited', company: company.id, contacts: [ada.id, grace.id] },
+    }, links))).rejects.toMatchObject({
+      code: 'CARDINALITY_VIOLATION',
+      details: { relation_type: contacts.slug, direction: 'from', label: null, bound: 1 },
+    })
+  })
 })

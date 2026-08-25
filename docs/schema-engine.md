@@ -282,6 +282,7 @@ model ObjectType {
   createdAt          DateTime       @default(now()) @map("created_at")
   updatedAt          DateTime       @updatedAt @map("updated_at")
   attributes         Attribute[]
+  attributeGroups    AttributeGroup[]
   records            Record[]
   relationsFrom      RelationType[] @relation("RelationFrom")
   relationsTo        RelationType[] @relation("RelationTo")
@@ -299,6 +300,7 @@ model Attribute {
   teamId         String        @map("team_id") @db.Uuid
   objectTypeId   String?       @map("object_type_id") @db.Uuid
   listId         String?       @map("list_id") @db.Uuid
+  groupId        String?       @map("group_id") @db.Uuid
   slug           String
   name           String
   description    String
@@ -317,12 +319,36 @@ model Attribute {
   updatedAt      DateTime      @updatedAt @map("updated_at")
   objectType     ObjectType?   @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
   list           List?         @relation(fields: [listId], references: [id], onDelete: Cascade)
+  group          AttributeGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   uniqueKeys     RecordUniqueKey[]
 
   @@unique([objectTypeId, slug])
   @@unique([listId, slug])
   @@index([organizationId, teamId])
   @@map("attributes")
+}
+
+model AttributeGroup {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  teamId         String      @map("team_id") @db.Uuid
+  objectTypeId   String      @map("object_type_id") @db.Uuid
+  slug           String
+  name           String
+  description    String      @default("")
+  position       Int
+  archivedAt     DateTime?   @map("archived_at")
+  createdByType  ActorType   @map("created_by_type")
+  createdById    String      @map("created_by_id")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  objectType     ObjectType  @relation(fields: [objectTypeId], references: [id], onDelete: Cascade)
+  attributes     Attribute[]
+
+  @@unique([organizationId, teamId, objectTypeId, slug])
+  @@unique([objectTypeId, position])
+  @@index([organizationId, teamId])
+  @@map("attribute_groups")
 }
 
 model RelationType {
@@ -336,6 +362,9 @@ model RelationType {
   inverseName            String      @map("inverse_name")
   description            String      @default("")
   cardinality            Cardinality
+  maxActiveEdgesFrom     Int?        @map("max_active_edges_from")
+  maxActiveEdgesTo       Int?        @map("max_active_edges_to")
+  edgeLimitConfig        Json        @default("{}") @map("edge_limit_config")
   onDelete               OnDelete    @default(unlink) @map("on_delete")
   edgeAttributes         Json        @default("[]") @map("edge_attributes")  // AttributeSpec[] for link.data
   projectionAttributeSlug String?    @map("projection_attribute_slug")      // set when backing a record_reference attribute
@@ -985,7 +1014,7 @@ type AttributeTypeDef = {
 | `registry_id` | company/registry number string | `{jurisdiction?}` | uppercase; strip spaces, hyphens, dots; strip leading zeros | unique-capable; the one normalizer for Companies-House-style ids (R19) |
 | `location` | `{line1?: ≤200, line2?: ≤200, city?: ≤120, region?: ≤120, country?: ISO2, postal?: ≤32, lat?, lng?}` | — | — | latitude −90…90; longitude −180…180 |
 | `personal_name` | `{first?: ≤120, last?: ≤120, full?: ≤250}` | — | lower(full) collapse | at least one field; `full` derived when absent |
-| `actor_reference` | `{type: human\|agent, id}` | `{allow: [human, agent]}` | `type:id` | |
+| `actor_reference` | `{type: human\|agent, id}` | `{allow: [human, agent], role: owner\|collaborator\|assignee\|created_by\|modified_by}` | `type:id` | role is immutable after define; owner/collaborator/assignee can grant record edit through policy |
 | `record_reference` | record id (string) or array when `isMulti` | `{objectTypes: [slug…], relationTypeSlug}` | record id | backed by a `RelationType`; see §4.4 |
 | `timestamp_system` | ISO datetime | `{source: created_at\|updated_at\|last_activity_at}` | — | virtual, computed and read-only; it is never stored in `records.data`; T12 owns the write-time rejection gate |
 | `json` | any JSON ≤ 64 KiB | `{schema?: JSON Schema}` | — | unindexed, not unique, **no type filterOps**; global null tests are handled outside the registry — promote queryable keys to real attributes (R19) |
@@ -994,7 +1023,7 @@ Registry notes: `currency`, `percent`, `rating` and `location` have no `normaliz
 
 Capability matrix (`multi`, `unique`, `indexed`): text Y/Y/Y; rich_text Y/N/N; number Y/Y/Y; currency Y/N/N; percent Y/N/Y; boolean Y/Y/Y; date Y/Y/Y; datetime Y/Y/Y; select Y/Y/Y; status N/N/Y; rating Y/N/Y; email Y/Y/Y; phone Y/Y/Y; url Y/Y/Y; domain Y/Y/Y; registry_id Y/Y/Y; location Y/N/N; personal_name Y/Y/N; actor_reference Y/Y/N; record_reference Y/N/Y; timestamp_system N/N/N; json Y/N/N. `record_reference` indexing is satisfied only by the existing `record_links` indexes and `EXISTS` compilation; it creates no JSON expression index.
 
-Validation details: number precision rejects excess fractional precision rather than rounding, uses `decimal.js`, and stores canonical non-exponent decimals. Dates are real Gregorian `YYYY-MM-DD`; datetimes require RFC3339 with `Z` or an explicit offset and normalize to UTC millisecond `Z`. Currency codes must be members of the maintained supported ISO-4217 set (not merely `/^[A-Z]{3}$/`); `fixedCurrency` requires such a code and comparisons otherwise remain explicitly currency-agnostic. Phone input is already international: a leading `+` is required, whitespace is the only allowed presentation formatting, and extensions or regional/default-country interpretation are refused. Select/status option ids use `Slug`, labels are 1–120 characters, and optional colors are 1–32 characters; select ids are unique, and status ids and positions are unique with positions contiguous from zero. URLs require absolute http(s), lowercase host, remove a trailing slash only from an otherwise empty path, and preserve meaningful path/query. Domains validate their host whether supplied as a hostname or absolute http(s) URL, then normalize with `tldts` to lowercase registrable domain. Rich-text search removes Markdown delimiters while retaining ordinary punctuation. Location and personal-name fields observe the caps in the registry table. JSON Schema validation uses Draft 2020-12 with Ajv v8, no external references; Ajv is a direct T09 dependency.
+Validation details: number precision rejects excess fractional precision rather than rounding, uses `decimal.js`, and stores canonical non-exponent decimals. Dates are real Gregorian `YYYY-MM-DD`; datetimes require RFC3339 with `Z` or an explicit offset and normalize to UTC millisecond `Z`. Currency codes must be members of the maintained supported ISO-4217 set (not merely `/^[A-Z]{3}$/`); `fixedCurrency` requires such a code and comparisons otherwise remain explicitly currency-agnostic. Phone input is already international: a leading `+` is required, whitespace is the only allowed presentation formatting, and extensions or regional/default-country interpretation are refused. Select/status option ids use `Slug`, labels are 1–120 characters, and optional colors are 1–32 characters; select ids are unique, and status ids and positions are unique with positions contiguous from zero. Actor references validate human ids through `principal_last_seen` and agent ids against the current app namespace; no UOA profile or membership data is persisted. URLs require absolute http(s), lowercase host, remove a trailing slash only from an otherwise empty path, and preserve meaningful path/query. Domains validate their host whether supplied as a hostname or absolute http(s) URL, then normalize with `tldts` to lowercase registrable domain. Rich-text search removes Markdown delimiters while retaining ordinary punctuation. Location and personal-name fields observe the caps in the registry table. JSON Schema validation uses Draft 2020-12 with Ajv v8, no external references; Ajv is a direct T09 dependency.
 
 Reserved attribute slugs on every object type (system, not stored in `data`): `id`, `created_at`, `updated_at`, `last_activity_at`, `display_name`, `owner`.
 
@@ -1183,6 +1212,16 @@ Intent semantics per §4 step 3: an omitted key produces **no intent** (existing
 ### 4f. `record_reference` owns one backing relation
 
 Every `record_reference` attribute owns exactly one backing `RelationType` (never shares one). Scalar references back a `many_to_one` relation; multi (`is_multi: true`) references back a `many_to_many` relation. `config.objectTypes` with exactly one slug sets the relation's `to_object_type_id` to that type; multiple slugs (open target) store `to_object_type_id = null`, and validation of the submitted target ids against `config.objectTypes` is config enforcement in the write path (§4 steps 3/5), not a schema constraint. When `config.relationTypeSlug` is supplied it must name an existing relation whose `cardinality`, `from_object_type_id` (this object type), `to_object_type_id` and `projection_attribute_slug` (this attribute's slug, or unset) are all compatible with the attribute — any mismatch is `SCHEMA_CONFLICT`. A compatible supplied relation with an unset `projection_attribute_slug` is atomically claimed by setting it to this attribute slug; one already claimed by another attribute is `SCHEMA_CONFLICT`. When absent, the relation is created with slug `<objectType>_<attr>` (T10).
+
+Relation active-edge limits are part of the generic relation type, not a
+HubSpot-specific layer. `max_active_edges_from`, `max_active_edges_to` and
+`edge_limit_config.label_limits` are enforced after cardinality replacement and
+under the relation-topology transaction lock for both `crm_link` and projected
+`record_reference` writes. Failures return `CARDINALITY_VIOLATION` with only
+`relation_type`, `direction`, `label` and `bound`; they never reveal the
+competing record id. Lowering a limit through schema update first checks active
+edges and fails with `relation_limit_requires_resolution_plan` when live data
+already exceeds the requested bound.
 
 ## 5. Query grammar — tenant-, principal- and policy-bound SQL
 

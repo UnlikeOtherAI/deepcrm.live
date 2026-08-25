@@ -7,6 +7,7 @@ import { lockLinkTopology, lockRecords } from "../records/locks.js";
 import { refreshMatchingRecords } from "../matching/index.js";
 import type { LoadedRelationType, LoadedSchema } from "../schema/load.js";
 import type { RecordTx } from "../schema/tx.js";
+import { enforceRelationEdgeLimits } from "./edge-limits.js";
 import type { LinkInput, LinkOperationResult, ResolvedLinkOperationHandler } from "./types.js";
 type ActiveRecord = {
   id: string; objectTypeId: string; version: number; deletedAt: Date | null; mergedIntoId: string | null
@@ -18,7 +19,6 @@ function relation(schema: LoadedSchema, slug: string): LoadedRelationType {
     throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, "Relation type is not active");
   return found;
 }
-
 function inputData(
   value: Record<string, unknown> | undefined,
   relationType: LoadedRelationType,
@@ -104,7 +104,6 @@ function inputData(
   }
   return result;
 }
-
 function prismaJson(value: JsonValue): Prisma.InputJsonValue | null {
   if (value === null) return null;
   if (Array.isArray(value)) return value.map(prismaJson);
@@ -373,6 +372,7 @@ export async function linkRecords(
     };
   }
   const ended = await endLinks(tx, ctx, conflicts);
+  await enforceRelationEdgeLimits(tx, ctx, relationType, from.id, to.id, input.label ?? null);
   const created = await tx.recordLink.create({
     data: {
       ...tenantWhere(ctx.tenant),

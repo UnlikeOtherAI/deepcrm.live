@@ -11,7 +11,7 @@ import {
 } from './schema-specs.js'
 import { MatchingRule, MatchingRuleActivation } from './matching.js'
 import { Reason, Slug } from './primitives.js'
-import { AttributeDerivationDetail, AttributeValueSource } from './semantic-foundation.js'
+import { AttributeDerivationDetail, AttributeGroupDetail, AttributeValueSource, RelationEdgeLimit } from './semantic-foundation.js'
 
 const DerivedValueSource = AttributeValueSource.exclude(['stored', 'system'])
 
@@ -95,6 +95,34 @@ export const CrmAttributeArchive = {
   }),
 }
 
+export const CrmAttributeGroupDefine = {
+  in: z.object({
+    object_type: Slug.describe('object type that owns the group'),
+    slug: Slug.describe('stable group slug'),
+    name: z.string().min(1).max(120).describe('group display name'),
+    description: z.string().max(500).default('').describe('agent-facing purpose for fields in this group'),
+    attributes: z.array(Slug).max(100).optional().describe('existing active attributes to assign to this group'),
+  }),
+  out: AttributeGroupDetail,
+}
+
+export const CrmAttributeGroupReorder = {
+  in: z.object({
+    object_type: Slug.describe('object type that owns the groups'),
+    groups: z.array(Slug).describe('complete ordered list of active group slugs for this object type'),
+  }),
+  out: z.object({ groups: z.array(AttributeGroupDetail).describe('groups after applying the requested order') }),
+}
+
+export const CrmAttributeGroupArchive = {
+  in: z.object({
+    object_type: Slug.describe('object type that owns the group'),
+    group: Slug.describe('active group slug to archive'),
+    reason: Reason.describe('why this display group is being archived'),
+  }),
+  out: z.object({ archived: z.literal(true) }),
+}
+
 export const CrmDerivedAttributeDefine = {
   in: AttributeSpec.omit({ default_value: true, is_multi: true, is_unique: true }).extend({
     object_type: Slug.describe('object type that owns the derived attribute'),
@@ -139,6 +167,22 @@ export const CrmRelationTypeDefine = {
     cardinality: Cardinality.describe('allowed relationship cardinality'),
     on_delete: OnDelete.default('unlink').describe('what happens to links when a record is deleted'),
     edge_attributes: z.array(AttributeSpec).max(20).optional().describe('typed attributes stored on each link'),
+    edge_limits: RelationEdgeLimit.optional().describe('active-edge bounds enforced for direct and projected links'),
+  }),
+  out: RelationTypeDetail,
+}
+
+export const CrmRelationTypeUpdate = {
+  in: z.object({
+    relation_type: Slug.describe('existing relation type slug'),
+    forward_name: z.string().min(1).max(80).optional().describe('replacement source-to-target name'),
+    inverse_name: z.string().min(1).max(80).optional().describe('replacement target-to-source name'),
+    description: z.string().max(500).optional().describe('replacement relationship description'),
+    cardinality: Cardinality.optional().describe('replacement cardinality; owned projection relations keep their shape'),
+    on_delete: OnDelete.optional().describe('replacement endpoint delete behavior'),
+    edge_attributes: z.array(AttributeSpec).max(20).optional().describe('replacement typed link attributes'),
+    edge_limits: RelationEdgeLimit.optional()
+      .describe('replacement active-edge bounds; lowering below live data fails with resolution-plan evidence'),
   }),
   out: RelationTypeDetail,
 }

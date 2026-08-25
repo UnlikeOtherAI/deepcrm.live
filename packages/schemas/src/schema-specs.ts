@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AttributeType } from './attribute-config.js'
 import { IsoDateTime, Slug, Uuid } from './primitives.js'
 import { MatchingRule } from './matching.js'
-import { AttributeDerivationDetail, PipelineDetail, RelationEdgeLimit } from './semantic-foundation.js'
+import { AttributeDerivationDetail, AttributeGroupDetail, PipelineDetail, RelationEdgeLimit } from './semantic-foundation.js'
 export const Sensitivity = z.enum(['public','internal','confidential','restricted'])
   .describe('data sensitivity used for policy and redaction')
 export const Cardinality = z.enum(['one_to_one','one_to_many','many_to_one','many_to_many'])
@@ -28,11 +28,12 @@ export const AttributeDetail = AttributeSpec.extend({
   id: Uuid,
   value_source: z.enum(['stored', 'formula', 'rollup', 'relation_sync', 'score', 'system']),
   derivation: AttributeDerivationDetail.nullable().optional(),
+  group: Slug.nullable(),
   is_system: z.boolean(),
   position: z.number().int(),
   archived_at: IsoDateTime.nullable(),
 })
-export const ObjectTypeDetail = z.object({ id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(), icon: z.string().nullable(), kind: z.enum(['system','standard','custom']), primary_attribute: Slug.nullable(), attributes: z.array(AttributeDetail), relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(), other_object_type: Slug.nullable(), cardinality: Cardinality })), pipelines: z.array(PipelineDetail).default([]), archived_at: IsoDateTime.nullable() })
+export const ObjectTypeDetail = z.object({ id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(), icon: z.string().nullable(), kind: z.enum(['system','standard','custom']), primary_attribute: Slug.nullable(), attribute_groups: z.array(AttributeGroupDetail).default([]), attributes: z.array(AttributeDetail), relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(), other_object_type: Slug.nullable(), cardinality: Cardinality })), pipelines: z.array(PipelineDetail).default([]), archived_at: IsoDateTime.nullable() })
 export const RelationTypeDetail = z.object({ id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(), forward_name: z.string(), inverse_name: z.string(), description: z.string(), cardinality: Cardinality, edge_limits: RelationEdgeLimit, on_delete: OnDelete, edge_attributes: z.array(AttributeSpec), is_system: z.boolean(), archived_at: IsoDateTime.nullable() })
 export { MatchingRule } from './matching.js'
 export const ViewSummary = z.object({

@@ -1,6 +1,6 @@
-import type { PolicyAction, Prisma } from '@deepcrm/db'
+import { tenantWhere, type PolicyAction, type Prisma } from '@deepcrm/db'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
-import type { CreateRecordInput, LoadedSchema, UpdateRecordInput } from '@deepcrm/schema-engine'
+import { loadSchema, type CreateRecordInput, type LoadedSchema, type UpdateRecordInput } from '@deepcrm/schema-engine'
 
 import type { AppDeps } from '../deps.js'
 import { checkPolicy } from './policy.js'
@@ -13,9 +13,62 @@ type RecordAuditDescriptor = {
   reason: string | undefined
   resourceId: string | null
 }
+const editGrantRoles = new Set(['owner', 'collaborator', 'assignee'])
 
 export function recordAuditMetadata(ctx: ActorContext): Prisma.InputJsonObject {
   return { app: ctx.app, actChain: ctx.actChain, provenance: ctx.provenance }
+}
+
+function configRole(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const role = Object.entries(value).find(([key]) => key === 'role')?.[1]
+  return typeof role === 'string' ? role : undefined
+}
+
+function actorMatches(ctx: ActorContext, value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const entries = Object.fromEntries(Object.entries(value))
+  return (
+    (entries.type === 'human' && entries.id === ctx.onBehalfOf.uoaUserId) ||
+    (entries.type === ctx.actor.type && entries.id === ctx.actor.id)
+  )
+}
+
+function valueMatches(ctx: ActorContext, value: unknown, multi: boolean): boolean {
+  return multi && Array.isArray(value)
+    ? value.some((item) => actorMatches(ctx, item))
+    : actorMatches(ctx, value)
+}
+
+async function roleAllowsRecordEdit(
+  deps: AppDeps,
+  ctx: ActorContext,
+  schema: LoadedSchema,
+  descriptor: RecordAuditDescriptor,
+): Promise<boolean> {
+  if (descriptor.resourceId === null) return false
+  const record = await deps.db.record.findFirst({
+    where: { ...tenantWhere(ctx.tenant), id: descriptor.resourceId, deletedAt: null },
+    select: { objectTypeId: true, data: true },
+  })
+  if (record === null) return false
+  const attributes = schema.attributesByObjectTypeId.get(record.objectTypeId)
+  if (
+    attributes === undefined ||
+    typeof record.data !== 'object' ||
+    record.data === null ||
+    Array.isArray(record.data)
+  ) {
+    return false
+  }
+  for (const attribute of attributes.values()) {
+    if (attribute.type !== 'actor_reference' || !editGrantRoles.has(configRole(attribute.config) ?? '')) continue
+    const storedValue = Object.entries(record.data).find(([key]) => key === attribute.slug)?.[1]
+    if (valueMatches(ctx, storedValue, attribute.isMulti)) {
+      return true
+    }
+  }
+  return false
 }
 
 export async function writeRecordDeniedAudit(
@@ -52,6 +105,13 @@ export async function authorizeRecordWrite(
     !decision.allowed || decision.requiresApproval
   ))
   if (rejected === undefined) return
+  const onlyRecordEditRejected = checked.every(({ request, decision }) => (
+    (request.resourceType === 'record' && request.action === 'edit') || (decision.allowed && !decision.requiresApproval)
+  ))
+  if (
+    onlyRecordEditRejected &&
+    await roleAllowsRecordEdit(deps, ctx, await loadSchema(deps.db, ctx.tenant), descriptor)
+  ) return
   await writeRecordDeniedAudit(deps, ctx, descriptor)
   throw new ServiceError(
     rejected.decision.requiresApproval ? ErrorCode.APPROVAL_REQUIRED : ErrorCode.POLICY_DENIED,

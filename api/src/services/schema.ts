@@ -1,9 +1,11 @@
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import {
   applyTemplate,
+  archiveAttributeGroup,
   archiveAttribute,
   archiveObjectType,
   archiveRelationType,
+  defineAttributeGroup,
   defineAttribute,
   defineDerivedAttribute,
   defineObjectType,
@@ -12,6 +14,7 @@ import {
   loadSchema,
   listTemplates,
   cancelMatchingRules,
+  reorderAttributeGroups,
   retryMatchingRules,
   setMatchingRules,
   updateAttribute,
@@ -133,6 +136,35 @@ export const defineSchemaAttribute = (
   approval?: ApprovalConsumption,
 ) => runSchemaDefine(
   deps, ctx, (tx, author) => defineAttribute(tx, ctx.tenant, author, input), approval,
+)
+
+export const defineSchemaAttributeGroup = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  input: Parameters<typeof defineAttributeGroup>[3],
+  approval?: ApprovalConsumption,
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => defineAttributeGroup(tx, ctx.tenant, author, input), approval,
+)
+
+export const reorderSchemaAttributeGroups = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  objectSlug: string,
+  groups: readonly string[],
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => reorderAttributeGroups(tx, ctx.tenant, author, objectSlug, groups),
+)
+
+export const archiveSchemaAttributeGroup = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  objectSlug: string,
+  slug: string,
+  reason?: string,
+  approval?: ApprovalConsumption,
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => archiveAttributeGroup(tx, ctx.tenant, author, objectSlug, slug, reason), approval,
 )
 
 export const defineSchemaDerivedAttribute = (

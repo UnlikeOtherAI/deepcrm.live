@@ -19,6 +19,13 @@ export type ObjectInput = {
 
 export type AttributeInput = AttributeSpec & { objectType: string; isSystem?: boolean }
 export type AttributeUpdateInput = Partial<AttributeInput> & { recomputeKeys?: boolean }
+export type AttributeGroupInput = {
+  objectType: string
+  slug: string
+  name: string
+  description: string
+  attributes?: string[]
+}
 
 export type RelationInput = {
   slug: string
@@ -30,5 +37,8 @@ export type RelationInput = {
   cardinality: 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
   onDelete?: 'unlink' | 'cascade' | 'restrict'
   edgeAttributes?: AttributeSpec[]
+  maxActiveEdgesFrom?: number | null
+  maxActiveEdgesTo?: number | null
+  edgeLimitConfig?: unknown
   isSystem?: boolean
 }

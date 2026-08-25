@@ -304,7 +304,8 @@ function validationTarget(schema: LoadedSchema, list: LoadedList): [LoadedSchema
   const target: LoadedObjectType = { id: list.id, organizationId: list.organizationId, teamId: list.teamId,
     slug: list.slug, singularName: list.name, pluralName: list.name, description: list.description, icon: null,
     kind: 'custom', templateSlug: null, primaryAttributeId: null, archivedAt: null, createdByType: list.createdByType,
-    createdById: list.createdById, createdAt: list.createdAt, updatedAt: list.updatedAt, attributes: list.attributes }
+    createdById: list.createdById, createdAt: list.createdAt, updatedAt: list.updatedAt, attributes: list.attributes,
+    attributeGroups: [] }
   const attributes = new Map(schema.attributesByObjectTypeId)
   attributes.set(list.id, schema.attributesByListId.get(list.id) ?? new Map())
   const archived = new Map(schema.archivedAttributeSlugsByObjectTypeId)

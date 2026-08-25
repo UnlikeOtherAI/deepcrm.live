@@ -37,6 +37,7 @@ function presentAttribute(attribute: LoadedList['attributes'][number]) {
   return AttributeDetail.parse({
     id: attribute.id, slug: attribute.slug, name: attribute.name, description: attribute.description,
     type: attribute.type, config: attribute.config, is_multi: attribute.isMulti,
+    group: null,
     is_required: attribute.isRequired, is_unique: attribute.isUnique, is_indexed: attribute.isIndexed,
     sensitivity: attribute.sensitivity, default_value: attribute.defaultValue ?? undefined,
     is_system: attribute.isSystem, position: attribute.position,

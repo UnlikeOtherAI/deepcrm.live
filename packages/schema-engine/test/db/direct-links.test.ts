@@ -112,6 +112,26 @@ async function setup() {
           ],
         },
       ),
+      defineRelationType(
+        tx,
+        tenant,
+        {
+          type: ctx.actor.type,
+          id: ctx.actor.id,
+          onBehalfOf: null,
+          requestId: ctx.requestId,
+        },
+        {
+          slug: "direct_limited",
+          fromObjectType: "person",
+          toObjectType: "company",
+          forwardName: "limited",
+          inverseName: "limited by",
+          cardinality: "many_to_many",
+          maxActiveEdgesFrom: 2,
+          edgeLimitConfig: { ceo: { max_active_edges_from: 1 } },
+        },
+      ),
     ]),
   );
   const schema = await loadSchema(db, tenant);
@@ -307,5 +327,48 @@ describe("direct links", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: ErrorCode.VALIDATION_FAILED });
+  });
+
+  it("enforces relation edge limits without leaking competing record ids", async () => {
+    const { ctx, schema, person, companies } = await setup();
+    const [first, second] = companies;
+    if (first === undefined || second === undefined)
+      throw new Error("Missing company fixtures");
+    await db.$transaction((tx) =>
+      linkRecords(tx, ctx, schema, {
+        relationType: "direct_limited",
+        fromRecordId: person.id,
+        toRecordId: first.id,
+        label: "ceo",
+      }),
+    );
+    await expect(db.$transaction((tx) =>
+      linkRecords(tx, ctx, schema, {
+        relationType: "direct_limited",
+        fromRecordId: person.id,
+        toRecordId: second.id,
+        label: "ceo",
+      }),
+    )).rejects.toMatchObject({
+      code: ErrorCode.CARDINALITY_VIOLATION,
+      details: { relation_type: "direct_limited", direction: "from", label: "ceo", bound: 1 },
+    });
+  });
+
+  it("serializes concurrent edge-limit races under the topology lock", async () => {
+    const { ctx, schema, person, companies } = await setup();
+    const [first, second] = companies;
+    if (first === undefined || second === undefined)
+      throw new Error("Missing company fixtures");
+    const attempts = await Promise.allSettled([
+      db.$transaction((tx) => linkRecords(tx, ctx, schema, {
+        relationType: "direct_limited", fromRecordId: person.id, toRecordId: first.id, label: "ceo",
+      })),
+      db.$transaction((tx) => linkRecords(tx, ctx, schema, {
+        relationType: "direct_limited", fromRecordId: person.id, toRecordId: second.id, label: "ceo",
+      })),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
   });
 });

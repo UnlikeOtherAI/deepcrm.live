@@ -5,6 +5,7 @@ import { equalityFilterOps, type AttributeTypeDef } from './types.js'
 const actorType = z.enum(['human', 'agent'])
 const configSchema = z.object({
   allow: z.array(actorType).min(1).default(['human', 'agent']),
+  role: z.enum(['owner', 'collaborator', 'assignee', 'created_by', 'modified_by']).default('collaborator'),
 }).strict().superRefine((config, context) => {
   if (new Set(config.allow).size !== config.allow.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'allow entries must be unique', path: ['allow'] })

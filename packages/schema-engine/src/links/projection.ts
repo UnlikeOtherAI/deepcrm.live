@@ -3,11 +3,12 @@ import { ErrorCode, ServiceError, type ActorContext } from "@deepcrm/schemas";
 
 import type { ChangeIntent } from "../records/changes.js";
 import { canonicalJsonValue, type JsonValue } from "../records/json.js";
-import { lockRecords } from "../records/locks.js";
+import { lockLinkTopology, lockRecords } from "../records/locks.js";
 import type { LinkIntent } from "../records/types.js";
 import type { LinkWriteResult, LinkWriter } from "../records/write.js";
 import type { LoadedRelationType, LoadedSchema } from "../schema/load.js";
 import type { RecordTx } from "../schema/tx.js";
+import { enforceRelationEdgeLimits } from "./edge-limits.js";
 import { deleteLinks, restoreLinks } from "./projection-lifecycle.js";
 
 export type ActiveLink = {
@@ -143,6 +144,7 @@ async function project(
   operation: LinkIntent,
 ): Promise<LinkWriteResult> {
   const relationType = relation(schema, operation.relationTypeId);
+  await lockLinkTopology(tx, ctx.tenant.teamId);
   const activeWhere = {
     ...tenantWhere(ctx.tenant),
     relationTypeId: relationType.id,
@@ -308,6 +310,7 @@ async function project(
       }
       continue;
     }
+    await enforceRelationEdgeLimits(tx, ctx, relationType, recordId, targetId, null);
     const created = await tx.recordLink.create({
       data: {
         ...tenantWhere(ctx.tenant),

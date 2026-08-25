@@ -1,6 +1,7 @@
 import {
   tenantWhere,
   type Attribute,
+  type AttributeGroup,
   type AttributeDerivation,
   type AttributeDerivationDependency,
   type Db,
@@ -21,6 +22,7 @@ export type LoadedAttribute = Readonly<Attribute & {
 }>
 export type LoadedObjectType = Readonly<ObjectType & {
   attributes: readonly LoadedAttribute[]
+  attributeGroups: readonly AttributeGroup[]
 }>
 export type LoadedRelationType = Readonly<RelationType>
 export type LoadedPipeline = Readonly<Pipeline & { stages: readonly PipelineStage[] }>
@@ -67,7 +69,7 @@ export type LoadedSchema = Readonly<{
 
 type TeamVersion = { id: string; schemaVersion: number }
 type MetadataRows = {
-  objectTypes: Array<ObjectType & { attributes: LoadedAttribute[] }>
+  objectTypes: Array<ObjectType & { attributes: LoadedAttribute[]; attributeGroups?: AttributeGroup[] }>
   relationTypes: RelationType[]
   pipelines: Array<Pipeline & { stages: PipelineStage[] }>
   lists: Array<List & { attributes: Attribute[] }>
@@ -231,6 +233,7 @@ function buildSchema(
     (objectType) => Object.freeze({
       ...objectType,
       attributes: Object.freeze(objectType.attributes.filter((attribute) => attribute.archivedAt === null)),
+      attributeGroups: Object.freeze((objectType.attributeGroups ?? []).filter((group) => group.archivedAt === null)),
     }),
   ))
   const relationTypes: readonly LoadedRelationType[] = copied.relationTypes
@@ -416,6 +419,7 @@ export async function loadSchema(
               include: { derivation: { include: { dependencies: true } } },
               orderBy: { position: 'asc' },
             },
+            attributeGroups: { where: tenantWhere(target), orderBy: { position: 'asc' } },
           },
           orderBy: { slug: 'asc' },
         }),
@@ -469,6 +473,7 @@ export async function loadSchemaForMatchingBootstrap(
               include: { derivation: { include: { dependencies: true } } },
               orderBy: { position: 'asc' },
             },
+            attributeGroups: { where: tenantWhere(target), orderBy: { position: 'asc' } },
           },
           orderBy: { slug: 'asc' },
         }),

@@ -17,6 +17,7 @@ export {
   retryMatchingRules,
   setMatchingRules, updateAttribute, updateObjectType, updateRelationType,
 } from './mutate.js'
+export { archiveAttributeGroup, defineAttributeGroup, reorderAttributeGroups } from './attribute-groups.js'
 export { defineDerivedAttribute, updateDerivedAttribute } from './derived-attributes.js'
 export type {
   MatchingAuditMetadata, MatchingBackfillFinalResult, MatchingBackfillIdentity,

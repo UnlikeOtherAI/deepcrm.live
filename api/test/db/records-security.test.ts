@@ -51,6 +51,13 @@ function context(tenant: Tenant, userId = 'uoa_records_user'): ActorContext {
   }
 }
 
+function agentContext(tenantValue: Tenant, agentId: string): ActorContext {
+  return {
+    ...context(tenantValue, 'uoa_agent_operator'),
+    actor: { type: 'agent', id: agentId },
+  }
+}
+
 async function tenant(): Promise<Tenant> {
   const created = await seedTenant(db)
   organizations.push(created.organizationId)
@@ -195,6 +202,33 @@ describe('record service security boundaries', () => {
     await expect(updateRecord(deps, caller, {
       recordId: created.record.id, data: { name: 'Visible' },
     })).resolves.toMatchObject({ changed: true, record: { display_name: 'visible' } })
+  })
+
+  it('allows explicit collaborator actor_reference semantics to grant record edit', async () => {
+    const target = await tenant()
+    const owner = context(target, 'uoa_role_owner')
+    const agent = agentContext(target, 'agent:test:collab')
+    const person = await db.objectType.findFirstOrThrow({
+      where: { organizationId: target.organizationId, teamId: target.teamId, slug: 'person' },
+      select: { id: true },
+    })
+    await db.attribute.create({
+      data: {
+        organizationId: target.organizationId, teamId: target.teamId, objectTypeId: person.id,
+        slug: 'collaborator', name: 'Collaborator', description: 'Agent collaborator',
+        type: 'actor_reference', config: { allow: ['agent'], role: 'collaborator' }, position: 4,
+      },
+    })
+    await db.team.update({ where: { id: target.teamId }, data: { schemaVersion: { increment: 1 } } })
+    const created = await createRecord(deps, owner, {
+      objectType: 'person',
+      data: { name: 'Delegated', collaborator: { type: 'agent', id: agent.actor.id } },
+    })
+
+    await expect(updateRecord(deps, agent, {
+      recordId: created.record.id,
+      data: { name: 'Agent Edited' },
+    })).resolves.toMatchObject({ changed: true, record: { display_name: 'agent edited' } })
   })
 
   it('redacts an invisible duplicate id but preserves a visible duplicate id', async () => {

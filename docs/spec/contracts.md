@@ -99,7 +99,9 @@ export const AttributeConfig = z.discriminatedUnion('type', [
   z.object({ type: z.literal('location') }),
   z.object({ type: z.literal('personal_name') }),
   z.object({ type: z.literal('actor_reference'),
-             allow: z.array(z.enum(['human','agent'])).default(['human','agent']) }),
+             allow: z.array(z.enum(['human','agent'])).default(['human','agent']),
+             role: z.enum(['owner','collaborator','assignee','created_by','modified_by']).default('collaborator')
+               .describe('semantic role for policy: owner, collaborator and assignee may grant edit access') }),
   z.object({ type: z.literal('record_reference'),
              objectTypes: z.array(Slug).min(1).describe('allowed target object types'),
              relationTypeSlug: Slug.optional().describe('backing relation (one per attribute, never shared — schema-engine §4f); generated as <objectType>_<attr> when absent') }),
@@ -133,12 +135,14 @@ export const AttributeSpec = z.object({
 export type AttributeSpec = z.infer<typeof AttributeSpec>
 
 export const AttributeDetail = AttributeSpec.extend({
-  id: Uuid, is_system: z.boolean(), position: z.number().int(), archived_at: IsoDateTime.nullable(),
+  id: Uuid, group: Slug.nullable(), is_system: z.boolean(), position: z.number().int(),
+  archived_at: IsoDateTime.nullable(),
 })
 export const ObjectTypeDetail = z.object({
   id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(),
   icon: z.string().nullable(), kind: z.enum(['system','standard','custom']),
-  primary_attribute: Slug.nullable(), attributes: z.array(AttributeDetail),
+  primary_attribute: Slug.nullable(), attribute_groups: z.array(AttributeGroupDetail).default([]),
+  attributes: z.array(AttributeDetail),
   relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(),
     other_object_type: Slug.nullable(), cardinality: Cardinality })),
   archived_at: IsoDateTime.nullable(),
@@ -146,7 +150,8 @@ export const ObjectTypeDetail = z.object({
 export const RelationTypeDetail = z.object({
   id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(),
   forward_name: z.string(), inverse_name: z.string(), description: z.string(),
-  cardinality: Cardinality, on_delete: OnDelete, edge_attributes: z.array(AttributeSpec),
+  cardinality: Cardinality, edge_limits: RelationEdgeLimit, on_delete: OnDelete,
+  edge_attributes: z.array(AttributeSpec),
   is_system: z.boolean(), archived_at: IsoDateTime.nullable(),
 })
 export const MatchingRule = z.object({
@@ -455,6 +460,16 @@ export const CrmAttributeUpdate = { in: z.object({ object_type: Slug, attribute:
   sensitivity: Sensitivity.optional(), default_value: z.unknown().optional() }), out: AttributeDetail }
 export const CrmAttributeArchive = { in: z.object({ object_type: Slug, attribute: Slug, reason: Reason }),
   out: z.object({ archived: z.literal(true), records_with_values: z.number().int() }) }
+export const CrmAttributeGroupDefine = { in: z.object({
+  object_type: Slug, slug: Slug, name: z.string().min(1).max(120),
+  description: z.string().max(500).default(''), attributes: z.array(Slug).max(100).optional(),
+}), out: AttributeGroupDetail }
+export const CrmAttributeGroupReorder = { in: z.object({
+  object_type: Slug, groups: z.array(Slug),
+}), out: z.object({ groups: z.array(AttributeGroupDetail) }) }
+export const CrmAttributeGroupArchive = { in: z.object({
+  object_type: Slug, group: Slug, reason: Reason,
+}), out: z.object({ archived: z.literal(true) }) }
 const DerivedValueSource = AttributeValueSource.exclude(['stored','system'])
 export const CrmDerivedAttributeDefine = { in: AttributeSpec.omit({
   default_value: true, is_multi: true, is_unique: true,
@@ -474,8 +489,14 @@ export const CrmRelationTypeDefine = { in: z.object({ slug: Slug,
   forward_name: z.string().min(1).max(80).describe('e.g. "works at"'),
   inverse_name: z.string().min(1).max(80).describe('e.g. "employs"'),
   description: z.string().max(500).optional(), cardinality: Cardinality,
-  on_delete: OnDelete.default('unlink'), edge_attributes: z.array(AttributeSpec).max(20).optional() }),
+  on_delete: OnDelete.default('unlink'), edge_attributes: z.array(AttributeSpec).max(20).optional(),
+  edge_limits: RelationEdgeLimit.optional() }),
   out: RelationTypeDetail }
+export const CrmRelationTypeUpdate = { in: z.object({ relation_type: Slug,
+  forward_name: z.string().min(1).max(80).optional(), inverse_name: z.string().min(1).max(80).optional(),
+  description: z.string().max(500).optional(), cardinality: Cardinality.optional(),
+  on_delete: OnDelete.optional(), edge_attributes: z.array(AttributeSpec).max(20).optional(),
+  edge_limits: RelationEdgeLimit.optional() }), out: RelationTypeDetail }
 export const CrmRelationTypeArchive = { in: z.object({ relation_type: Slug, reason: Reason }),
   out: z.object({ archived: z.literal(true), links: z.number().int() }) }
 export const MatchingRuleActivation = z.discriminatedUnion('state', [

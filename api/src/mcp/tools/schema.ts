@@ -4,6 +4,9 @@ import {
   ConfirmContent,
   CrmAttributeArchive,
   CrmAttributeDefine,
+  CrmAttributeGroupArchive,
+  CrmAttributeGroupDefine,
+  CrmAttributeGroupReorder,
   CrmAttributeUpdate,
   CrmDerivedAttributeDefine,
   CrmDerivedAttributeUpdate,
@@ -14,6 +17,7 @@ import {
   CrmObjectTypeUpdate,
   CrmRelationTypeArchive,
   CrmRelationTypeDefine,
+  CrmRelationTypeUpdate,
   CrmSchemaGet,
   CrmTemplateApply,
   ErrorCode,
@@ -24,9 +28,11 @@ import type { AppDeps } from '../../deps.js'
 import { listViews } from '../../services/lists.js'
 import {
   applySchemaTemplate,
+  archiveSchemaAttributeGroup,
   archiveSchemaAttribute,
   archiveSchemaObject,
   archiveSchemaRelation,
+  defineSchemaAttributeGroup,
   defineSchemaAttribute,
   defineSchemaDerivedAttribute,
   defineSchemaObjectWithAttributes,
@@ -36,12 +42,20 @@ import {
   previewSchemaAttributeArchive,
   previewSchemaObjectArchive,
   previewSchemaRelationArchive,
+  reorderSchemaAttributeGroups,
   replaceSchemaMatchingRules,
   updateSchemaAttribute,
   updateSchemaDerivedAttribute,
   updateSchemaObject,
+  updateSchemaRelation,
 } from '../../services/schema.js'
-import { presentAttribute, presentObjectType, presentRelation, presentSchema } from '../schema-presenters.js'
+import {
+  presentAttribute,
+  presentAttributeGroup,
+  presentObjectType,
+  presentRelation,
+  presentSchema,
+} from '../schema-presenters.js'
 import { inputRequired, verifyRequestState, type MrtrInput } from './input-required.js'
 import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
@@ -338,6 +352,56 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
+    name: 'crm_attribute_group_define',
+    description: 'Create ordered display metadata for attributes on an object type. Optionally assigns existing fields to the group; record values and visibility rules are unchanged.',
+    input: CrmAttributeGroupDefine.in.shape,
+    handler: withApproval(deps, ctx, 'crm_attribute_group_define', CrmAttributeGroupDefine.in.shape, {
+      resourceType: 'schema',
+      message: (args) => `Approve defining attribute group '${args.slug}' on '${args.object_type}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
+      await defineSchemaAttributeGroup(deps, ctx, {
+        objectType: args.object_type,
+        slug: args.slug,
+        name: args.name,
+        description: args.description,
+        attributes: args.attributes,
+      }, approval)
+      return jsonResult(presentAttributeGroup(await latestSchema(deps, ctx), args.object_type, args.slug))
+    }),
+  })
+
+  defineTool(server, {
+    name: 'crm_attribute_group_reorder',
+    description: 'Replace the display order for all active attribute groups on an object type. Does not change field values, sensitivity, or visibility behavior.',
+    input: CrmAttributeGroupReorder.in.shape,
+    handler: async (args) => {
+      await reorderSchemaAttributeGroups(deps, ctx, args.object_type, args.groups)
+      const schema = await latestSchema(deps, ctx)
+      const objectType = schema.objectTypesBySlug.get(args.object_type)
+      if (objectType === undefined) throw new Error('Object type was not found after group reorder')
+      return jsonResult({
+        groups: objectType.attributeGroups.map((group) => (
+          presentAttributeGroup(schema, args.object_type, group.slug)
+        )),
+      })
+    },
+  })
+
+  defineTool(server, {
+    name: 'crm_attribute_group_archive',
+    description: 'Archive an attribute display group and leave its fields active as ungrouped fields. Does not alter any stored record values.',
+    input: CrmAttributeGroupArchive.in.shape,
+    handler: withApproval(deps, ctx, 'crm_attribute_group_archive', CrmAttributeGroupArchive.in.shape, {
+      resourceType: 'schema',
+      reason: (args) => args.reason,
+      message: (args) => `Approve archiving attribute group '${args.group}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
+      await archiveSchemaAttributeGroup(deps, ctx, args.object_type, args.group, args.reason, approval)
+      return jsonResult({ archived: true })
+    }),
+  })
+
+  defineTool(server, {
     name: 'crm_relation_type_define',
     description: 'Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. All four cardinalities are supported; a record_reference attribute owns exactly one backing relation, never shared.',
     input: CrmRelationTypeDefine.in.shape,
@@ -355,9 +419,32 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         cardinality: args.cardinality,
         onDelete: args.on_delete,
         edgeAttributes: args.edge_attributes,
+        maxActiveEdgesFrom: args.edge_limits?.max_active_edges_from,
+        maxActiveEdgesTo: args.edge_limits?.max_active_edges_to,
+        edgeLimitConfig: args.edge_limits?.label_limits,
       }, approval)
       return jsonResult(presentRelation(await latestSchema(deps, ctx), args.slug))
     }),
+  })
+
+  defineTool(server, {
+    name: 'crm_relation_type_update',
+    description: 'Update relation metadata, edge attributes, delete behavior or active-edge limits. Limit reductions that conflict with live data fail with relation/label/bound evidence only.',
+    input: CrmRelationTypeUpdate.in.shape,
+    handler: async (args) => {
+      await updateSchemaRelation(deps, ctx, args.relation_type, {
+        forwardName: args.forward_name,
+        inverseName: args.inverse_name,
+        description: args.description,
+        cardinality: args.cardinality,
+        onDelete: args.on_delete,
+        edgeAttributes: args.edge_attributes,
+        maxActiveEdgesFrom: args.edge_limits?.max_active_edges_from,
+        maxActiveEdgesTo: args.edge_limits?.max_active_edges_to,
+        edgeLimitConfig: args.edge_limits?.label_limits,
+      })
+      return jsonResult(presentRelation(await latestSchema(deps, ctx), args.relation_type))
+    },
   })
 
   defineTool(server, {

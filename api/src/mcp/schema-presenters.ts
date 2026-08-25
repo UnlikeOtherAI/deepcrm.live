@@ -48,6 +48,12 @@ function derivation(schema: LoadedSchema, attributeValue: LoadedAttribute) {
   }
 }
 
+function groupSlug(schema: LoadedSchema, attributeValue: LoadedAttribute): string | null {
+  if (attributeValue.groupId === null || attributeValue.objectTypeId === null) return null
+  const objectType = schema.objectTypesById.get(attributeValue.objectTypeId)
+  return objectType?.attributeGroups.find((group) => group.id === attributeValue.groupId)?.slug ?? null
+}
+
 function attribute(schema: LoadedSchema, attributeValue: LoadedAttribute) {
   return AttributeDetail.parse({
     id: attributeValue.id,
@@ -57,6 +63,7 @@ function attribute(schema: LoadedSchema, attributeValue: LoadedAttribute) {
     type: attributeValue.type,
     value_source: attributeValue.valueSource,
     derivation: derivation(schema, attributeValue),
+    group: groupSlug(schema, attributeValue),
     config: attributeValue.config,
     is_multi: attributeValue.isMulti,
     is_required: attributeValue.isRequired,
@@ -167,6 +174,26 @@ function pipelineSummaries(schema: LoadedSchema, objectType: LoadedObjectType) {
   }))
 }
 
+function attributeGroups(objectType: LoadedObjectType) {
+  return objectType.attributeGroups.map((group) => ({
+    id: group.id,
+    object_type: objectType.slug,
+    slug: group.slug,
+    name: group.name,
+    description: group.description,
+    position: group.position,
+    archived_at: iso(group.archivedAt),
+  }))
+}
+
+export function presentAttributeGroup(schema: LoadedSchema, objectTypeSlug: string, groupSlugValue: string) {
+  const objectType = schema.objectTypesBySlug.get(objectTypeSlug)
+  if (objectType === undefined) throw new Error('Object type was not found after group mutation')
+  const group = attributeGroups(objectType).find((value) => value.slug === groupSlugValue)
+  if (group === undefined) throw new Error('Attribute group was not found after mutation')
+  return group
+}
+
 export function presentObjectType(schema: LoadedSchema, objectType: LoadedObjectType) {
   return ObjectTypeDetail.parse({
     id: objectType.id,
@@ -177,6 +204,7 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
     icon: objectType.icon,
     kind: objectType.kind,
     primary_attribute: primaryAttribute(objectType),
+    attribute_groups: attributeGroups(objectType),
     attributes: objectType.attributes.map((attributeValue) => attribute(schema, attributeValue)),
     relation_types: relationSummaries(schema, objectType),
     pipelines: pipelineSummaries(schema, objectType),

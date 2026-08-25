@@ -111,7 +111,7 @@ describe('schema MCP tools and resources', () => {
   it('lists schema tool input descriptions', async () => {
     const tools = await client.listTools()
     const schemaTools = tools.tools.filter((tool) => tool.name.startsWith('crm_'))
-    expect(schemaTools).toHaveLength(71)
+    expect(schemaTools).toHaveLength(75)
     for (const tool of schemaTools) {
       const parsed = z.object({ properties: z.record(z.object({ description: z.string().min(1) })) })
         .parse(tool.inputSchema)
@@ -174,6 +174,43 @@ describe('schema MCP tools and resources', () => {
     expect(detail.attributes).toEqual(expect.arrayContaining([
       expect.objectContaining({ slug: 'company', type: 'record_reference' }),
     ]))
+  })
+
+  it('defines attribute groups and relation edge limits in the schema surface', async () => {
+    const grouped = structured(await call('crm_attribute_group_define', {
+      object_type: 'subscription',
+      slug: 'overview',
+      name: 'Overview',
+      description: 'Primary subscription fields.',
+      attributes: ['name'],
+    }))
+    expect(grouped).toMatchObject({ object_type: 'subscription', slug: 'overview', position: 0 })
+    const subscription = structured(await call('crm_schema_get', { object_type: 'subscription' }))
+    expect(subscription).toMatchObject({
+      attribute_groups: [expect.objectContaining({ slug: 'overview' })],
+      attributes: expect.arrayContaining([expect.objectContaining({ slug: 'name', group: 'overview' })]),
+    })
+    const relation = structured(await call('crm_relation_type_define', {
+      slug: 'subscription_ceo',
+      from_object_type: 'subscription',
+      to_object_type: 'person',
+      forward_name: 'CEO',
+      inverse_name: 'CEO of',
+      cardinality: 'many_to_many',
+      edge_limits: {
+        max_active_edges_from: 1,
+        max_active_edges_to: null,
+        label_limits: { ceo: { max_active_edges_from: 1 } },
+      },
+    }))
+    expect(relation).toMatchObject({
+      slug: 'subscription_ceo',
+      edge_limits: {
+        max_active_edges_from: 1,
+        max_active_edges_to: null,
+        label_limits: { ceo: { max_active_edges_from: 1 } },
+      },
+    })
   })
 
   it('archives an attribute only after a valid MRTR retry and re-challenges tampering', async () => {
