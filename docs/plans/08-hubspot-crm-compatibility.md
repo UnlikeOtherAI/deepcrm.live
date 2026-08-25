@@ -387,7 +387,7 @@ the local fixture through MCP with no `NOT_YET` tools; `git diff --check` exits
 
 ---
 
-### T67 — Full endpoint and worker regression loop
+### T67 ✅ — Full endpoint and worker regression loop
 
 **Depends on:** T66. **Spec:** `docs/testing.md`; `docs/mcp-surface.md`; this
 file.
