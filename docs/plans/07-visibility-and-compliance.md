@@ -102,11 +102,12 @@ definitions. The only deferred database object is `record_search_model`.
 
 ---
 
-### T54 — DeepSignal binding note (cross-repo, after T44)
+### T54 ✅ — DeepSignal binding note (cross-repo, after T44)
 
 **Depends on:** T53, T44. Written in the **deepsignal.live checkout** (worktree rule exempt): a short reply doc `docs/plans/deepcrm-policy-asks-response.md` recording what shipped for each ask (§1 visibility, §2 webhook principal + value-free push, §3 suppression/erasure, §4 Q5 decided org+team — org scope explicitly not available, §5 origin guard, §6 per-app registry + act chain) with links to the DeepCRM docs, so DeepSignal's integration plans build on the actual contract.
 
-**Acceptance:** the file exists in deepsignal.live and links resolve.
+**Acceptance:** the file exists in deepsignal.live and links resolve. Evidence:
+`/Volumes/External/Projects/deepsignal.live/docs/plans/deepcrm-policy-asks-response.md`.
 
 ---
 
