@@ -288,7 +288,7 @@ diff --exit-code docs/mcp-surface.md` exits 0. **Docs:**
 
 ---
 
-### T64 — Product and line-item revenue foundation
+### T64 ✅ — Product and line-item revenue foundation
 
 **Depends on:** T63. **Spec:** this file; `docs/schema-engine.md` §§3–5, §9;
 `docs/mcp-surface.md` §§2–4.
