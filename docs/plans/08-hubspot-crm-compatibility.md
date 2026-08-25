@@ -110,7 +110,7 @@ returns the expected duration/count from `crm_pipeline_summary`; `pnpm docs:mcp
 
 ---
 
-### T59 — Derived attributes: formula, rollup, relation sync and score
+### T59 ✅ — Derived attributes: formula, rollup, relation sync and score
 
 **Depends on:** T58. **Spec:** this file; `docs/schema-engine.md` §§3–5, §8;
 `docs/auth-and-tenancy.md` §3.
