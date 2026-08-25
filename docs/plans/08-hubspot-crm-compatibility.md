@@ -321,7 +321,7 @@ diff --exit-code docs/mcp-surface.md` exits 0. **Docs:**
 
 ---
 
-### T65 — Quote, subscription, invoice, payment and order templates
+### T65 ✅ — Quote, subscription, invoice, payment and order templates
 
 **Depends on:** T64. **Spec:** this file; `docs/schema-engine.md` §9;
 `docs/mcp-surface.md` §§1–4, §8.
