@@ -2,6 +2,7 @@ import { tenantWhere, type TenantRef, writeAudit } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
 import { definePipelineBatch } from '../pipeline/index.js'
+import { defineDerivedAttributeBatch } from '../schema/derived-attributes.js'
 import {
   bumpSchemaVersion,
   defineAttributeBatch,
@@ -12,6 +13,7 @@ import {
   type AuditActor,
 } from '../schema/mutate.js'
 import type { SchemaTx } from '../schema/tx.js'
+import standardCommerceJson from './standard_commerce.json' with { type: 'json' }
 import standardCrmJson from './standard_crm.json' with { type: 'json' }
 import standardSalesJson from './standard_sales.json' with { type: 'json' }
 import standardServiceJson from './standard_service.json' with { type: 'json' }
@@ -23,6 +25,7 @@ const templates = [
   TemplateSchema.parse(standardCrmJson),
   TemplateSchema.parse(standardSalesJson),
   TemplateSchema.parse(standardServiceJson),
+  TemplateSchema.parse(standardCommerceJson),
 ] as const
 
 function emptyAdded(): TemplateAdded {
@@ -108,6 +111,33 @@ export async function applyTemplateBatch(
         ...item,
         objectType: object.slug,
         isSystem: item.is_system,
+      })
+      added.attributes += 1
+    }
+  }
+
+  for (const object of template.object_types) {
+    const owner = await tx.objectType.findFirst({
+      where: { ...tenantWhere(tenant), slug: object.slug, archivedAt: null },
+    })
+    if (owner === null) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Template object missing')
+    for (const item of object.derived_attributes) {
+      const exists = await tx.attribute.findFirst({
+        where: { ...tenantWhere(tenant), objectTypeId: owner.id, slug: item.slug, archivedAt: null },
+      })
+      if (exists !== null) continue
+      await defineDerivedAttributeBatch(tx, tenant, actor, {
+        objectType: object.slug,
+        slug: item.slug,
+        name: item.name,
+        description: item.description,
+        type: item.type,
+        config: item.config,
+        isRequired: item.is_required,
+        isIndexed: item.is_indexed,
+        sensitivity: item.sensitivity,
+        valueSource: item.value_source,
+        derivationConfig: item.derivation_config,
       })
       added.attributes += 1
     }

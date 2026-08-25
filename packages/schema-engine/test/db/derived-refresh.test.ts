@@ -153,4 +153,55 @@ describe('derived attribute refresh', () => {
       where: { organizationId: target.tenant.organizationId, teamId: target.tenant.teamId, refreshState: 'ready' },
     })).toBe(2)
   })
+
+  it('does not silently sum mixed-currency rollups', async () => {
+    const target = await fixture()
+    await db.$transaction(async (tx) => {
+      await defineAttribute(tx, target.tenant, actor(), {
+        objectType: 'deal', slug: 'currency_amount', name: 'Currency amount',
+        description: 'Currency amount for mixed-currency rollup testing.',
+        type: 'currency', config: { type: 'currency' },
+        is_multi: false, is_required: false, is_unique: false, is_indexed: false, sensitivity: 'internal',
+      })
+      await defineDerivedAttribute(tx, target.tenant, actor(), {
+        objectType: 'company', slug: 'currency_total', name: 'Currency total',
+        description: 'Sum of active related deal currency amounts only when currencies match.',
+        type: 'currency', config: { type: 'currency' },
+        isRequired: false, isIndexed: false, sensitivity: 'internal',
+        valueSource: 'rollup',
+        derivationConfig: {
+          relation_type: 'company_deals',
+          direction: 'outgoing',
+          operation: 'sum',
+          source_attribute: 'currency_amount',
+        },
+      })
+    })
+    const schema = await loadSchema(db, target.tenant)
+    const deal = await db.record.findUniqueOrThrow({ where: { id: target.dealId } })
+    await db.$transaction((tx) => updateRecord(tx, target.ctx, schema, {
+      recordId: target.dealId,
+      data: { currency_amount: { amount: '100', currency: 'GBP' } },
+      expectedVersion: deal.version,
+    }, noLinks))
+    const secondDeal = await db.$transaction((tx) => createRecord(tx, target.ctx, schema, {
+      objectType: 'deal',
+      data: {
+        name: 'Expansion USD',
+        amount: 50,
+        currency_amount: { amount: '50', currency: 'USD' },
+      },
+    }, noLinks))
+    await db.$transaction((tx) => linkRecords(tx, target.ctx, schema, {
+      relationType: 'company_deals',
+      fromRecordId: target.companyId,
+      toRecordId: secondDeal.record.id,
+    }))
+    await refreshDerivedFromSources(db, target.tenant, [target.dealId, secondDeal.record.id], target.ctx.now)
+    const company = await db.record.findUniqueOrThrow({ where: { id: target.companyId } })
+    expect(company.data).not.toHaveProperty('currency_total')
+    expect(await db.attributeDerivation.findFirstOrThrow({
+      where: { organizationId: target.tenant.organizationId, teamId: target.tenant.teamId, attribute: { slug: 'currency_total' } },
+    })).toMatchObject({ refreshState: 'ready' })
+  })
 })

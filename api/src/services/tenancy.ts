@@ -30,7 +30,7 @@ function cacheKey(principal: Principal): string {
 }
 
 function totalAdded(added: TemplateAdded): number {
-  return added.objectTypes + added.attributes + added.relationTypes + added.matchingRules
+  return added.objectTypes + added.attributes + added.relationTypes + added.pipelines + added.matchingRules
 }
 
 function enforceOrgAllowlist(deps: AppDeps, principal: Principal): void {

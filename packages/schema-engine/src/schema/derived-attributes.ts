@@ -212,11 +212,12 @@ async function enqueueDerivedBackfill(
   }
 }
 
-export async function defineDerivedAttribute(
+async function defineDerivedAttributeInternal(
   tx: SchemaTx,
   tenant: TenantRef,
   actor: AuditActor,
   input: DerivedAttributeDefinition,
+  finalize: (objectTypeId: string, attributeId: string) => Promise<void>,
 ) {
   const objectType = await object(tx, tenant, input.objectType)
   const created = await defineAttributeInternal(tx, tenant, actor, derivedAttributeSpec(input), false)
@@ -225,10 +226,30 @@ export async function defineDerivedAttribute(
   )
   await tx.attribute.update({ where: { id: created.id }, data: { valueSource: input.valueSource } })
   await replaceDerivation(tx, tenant, created.id, input.valueSource, prepared.config, prepared.dependencies)
-  await bumpSchemaVersion(tx, tenant)
   await enqueueDerivedBackfill(tx, tenant, objectType.id, created.id, actor)
-  await audit(tx, tenant, actor, 'define', 'attribute', created.id)
+  await finalize(objectType.id, created.id)
   return tx.attribute.findFirstOrThrow({ where: { ...tenantWhere(tenant), id: created.id } })
+}
+
+export async function defineDerivedAttribute(
+  tx: SchemaTx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  input: DerivedAttributeDefinition,
+) {
+  return defineDerivedAttributeInternal(tx, tenant, actor, input, async (_objectTypeId, attributeId) => {
+    await bumpSchemaVersion(tx, tenant)
+    await audit(tx, tenant, actor, 'define', 'attribute', attributeId)
+  })
+}
+
+export async function defineDerivedAttributeBatch(
+  tx: SchemaTx,
+  tenant: TenantRef,
+  actor: AuditActor,
+  input: DerivedAttributeDefinition,
+) {
+  return defineDerivedAttributeInternal(tx, tenant, actor, input, async () => {})
 }
 
 export async function updateDerivedAttribute(

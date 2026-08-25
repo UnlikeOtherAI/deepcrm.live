@@ -144,7 +144,7 @@ describe('schema MCP tools and resources', () => {
     const unknown = structured(await call('crm_template_apply', { template: 'not_a_template' }))
     expect(unknown).toMatchObject({
       code: 'UNKNOWN_TEMPLATE',
-      available: ['system', 'standard_crm', 'standard_sales', 'standard_service'],
+      available: ['system', 'standard_crm', 'standard_sales', 'standard_service', 'standard_commerce'],
     })
   })
 
@@ -359,7 +359,9 @@ describe('schema MCP tools and resources', () => {
     const templatesResource = await client.readResource({ uri: 'crm://templates' })
     const templatesText = textContent(templatesResource.contents)
     expect(z.object({ templates: z.array(z.object({ slug: z.string() })) }).parse(JSON.parse(templatesText)))
-      .toMatchObject({ templates: expect.arrayContaining([{ slug: 'standard_sales' }, { slug: 'standard_service' }]) })
+      .toMatchObject({ templates: expect.arrayContaining([
+        { slug: 'standard_sales' }, { slug: 'standard_service' }, { slug: 'standard_commerce' },
+      ]) })
 
     const templates = await client.listResourceTemplates()
     expect(templates.resourceTemplates.map((template) => template.uriTemplate))

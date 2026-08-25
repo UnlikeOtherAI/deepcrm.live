@@ -480,7 +480,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
 
   defineTool(server, {
     name: 'crm_template_apply',
-    description: 'Apply a schema template by slug (see crm://templates), e.g. standard_crm, standard_sales, or standard_service. Idempotent: existing slugs untouched. Unknown slug ⇒ UNKNOWN_TEMPLATE {available}.',
+    description: 'Apply a schema template by slug (see crm://templates), e.g. standard_crm, standard_sales, standard_service, or standard_commerce. Idempotent: existing slugs untouched. Unknown slug ⇒ UNKNOWN_TEMPLATE {available}.',
     input: CrmTemplateApply.in.shape,
     handler: async (args) => {
       const result = await applySchemaTemplate(deps, ctx, args.template)

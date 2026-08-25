@@ -43,6 +43,18 @@ async function allow(resourceType: PolicyResourceType, action: PolicyAction): Pr
   } })
 }
 
+async function denyAttributeView(sensitivity: 'confidential' | 'restricted'): Promise<void> {
+  await db.policyRule.create({ data: {
+    organizationId, teamId, scope: 'team', scopeId: teamId, resourceType: 'attribute', action: 'view',
+    effect: 'deny', priority: 200, requiresApproval: false, conditions: { sensitivity },
+    createdById: createdBy,
+    bindings: { create: [
+      { actorType: 'agent', actorId: 'agent:dev:agent_dev' },
+      { actorType: 'role', actorId: 'owner' },
+    ] },
+  } })
+}
+
 beforeAll(async () => {
   const started = await startTestServer()
   client = started.client
@@ -65,6 +77,7 @@ beforeAll(async () => {
       { actorType: 'role', actorId: 'owner' },
     ] },
   } })
+  await denyAttributeView('restricted')
 })
 
 afterAll(async () => {

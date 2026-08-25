@@ -235,9 +235,12 @@ function aggregate(values: readonly JsonValue[], operation: string, target: Load
     const total = numbers.reduce((sum, item) => sum.plus(item ?? 0), new Decimal(0))
     const result = operation === 'average' ? total.div(values.length) : total
     if (target.type !== 'currency') return result.toNumber()
-    const first = values[0]
-    const currency = objectFields(first)?.['currency'] ?? null
-    return typeof currency === 'string' ? { amount: result.toFixed(2), currency } : null
+    const currencies = values.map((value) => objectFields(value)?.['currency'] ?? null)
+    const firstCurrency = currencies[0]
+    if (typeof firstCurrency !== 'string' || currencies.some((currency) => currency !== firstCurrency)) return null
+    const fixedCurrency = objectFields(target.config)?.['fixedCurrency'] ?? null
+    if (fixedCurrency !== null && fixedCurrency !== firstCurrency) return null
+    return { amount: result.toFixed(2), currency: firstCurrency }
   }
   const sorted = [...values].sort((left, right) => compare(left, right) ?? 0)
   if (operation === 'min' || operation === 'earliest_date') return sorted[0] ?? null

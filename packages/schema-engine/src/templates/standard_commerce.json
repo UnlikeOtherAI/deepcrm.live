@@ -1,0 +1,370 @@
+{
+  "slug": "standard_commerce",
+  "description": "Commerce workspace additions: catalogue products, historical line-item snapshots, product/deal links, and rollup totals.",
+  "object_types": [
+    {
+      "slug": "product",
+      "kind": "standard",
+      "singular_name": "Product",
+      "plural_name": "Products",
+      "description": "Catalogue product data that may change over time; historical revenue uses line item snapshots instead.",
+      "icon": "package",
+      "primary_attribute": "name",
+      "attributes": [
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "Current catalogue product name.",
+          "type": "text",
+          "is_required": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 200 }
+        },
+        {
+          "slug": "sku",
+          "name": "SKU",
+          "description": "Current catalogue stock-keeping unit or product code.",
+          "type": "text",
+          "is_required": true,
+          "is_unique": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 120 }
+        },
+        {
+          "slug": "description",
+          "name": "Description",
+          "description": "Current catalogue description; line item descriptions are historical snapshots.",
+          "type": "rich_text"
+        },
+        {
+          "slug": "status",
+          "name": "Status",
+          "description": "Current catalogue availability state.",
+          "type": "select",
+          "is_required": true,
+          "is_indexed": true,
+          "default_value": "active",
+          "config": {
+            "type": "select",
+            "options": [
+              { "id": "active", "label": "Active" },
+              { "id": "inactive", "label": "Inactive" },
+              { "id": "archived", "label": "Archived" }
+            ]
+          }
+        },
+        {
+          "slug": "category",
+          "name": "Category",
+          "description": "Catalogue grouping used for filtering and reporting.",
+          "type": "text",
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 120 }
+        },
+        {
+          "slug": "current_unit_price",
+          "name": "Current unit price",
+          "description": "Current catalogue list price; does not rewrite existing line item snapshots.",
+          "type": "currency",
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "current_unit_cost",
+          "name": "Current unit cost",
+          "description": "Current internal unit cost; does not rewrite existing line item snapshots.",
+          "type": "currency",
+          "sensitivity": "confidential",
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "billing_frequency",
+          "name": "Billing frequency",
+          "description": "Default billing cadence for new commercial line items.",
+          "type": "select",
+          "config": {
+            "type": "select",
+            "options": [
+              { "id": "one_time", "label": "One-time" },
+              { "id": "monthly", "label": "Monthly" },
+              { "id": "quarterly", "label": "Quarterly" },
+              { "id": "annual", "label": "Annual" },
+              { "id": "usage", "label": "Usage" }
+            ]
+          }
+        },
+        {
+          "slug": "external_ref",
+          "name": "External reference",
+          "description": "Structural upstream product identifier for idempotent sync.",
+          "type": "text",
+          "is_unique": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 200 }
+        }
+      ],
+      "derived_attributes": [
+        {
+          "slug": "line_item_count",
+          "name": "Line item count",
+          "description": "Count of active line item snapshots linked to this product.",
+          "type": "number",
+          "is_indexed": true,
+          "config": { "type": "number", "min": 0 },
+          "value_source": "rollup",
+          "derivation_config": {
+            "relation_type": "line_item_product",
+            "direction": "incoming",
+            "operation": "count"
+          }
+        },
+        {
+          "slug": "line_item_revenue_total",
+          "name": "Line item revenue total",
+          "description": "Sum of active linked line item total amounts when all contributing line items share one currency; mixed currencies materialize null.",
+          "type": "currency",
+          "config": { "type": "currency" },
+          "value_source": "rollup",
+          "derivation_config": {
+            "relation_type": "line_item_product",
+            "direction": "incoming",
+            "operation": "sum",
+            "source_attribute": "total_amount"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "line_item",
+      "kind": "standard",
+      "singular_name": "Line item",
+      "plural_name": "Line items",
+      "description": "Historical commercial snapshot for a product on a deal or future commercial parent.",
+      "icon": "receipt",
+      "primary_attribute": "name",
+      "attributes": [
+        {
+          "slug": "name",
+          "name": "Name",
+          "description": "Line item display name copied at the commercial moment.",
+          "type": "text",
+          "is_required": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 200 }
+        },
+        {
+          "slug": "sku",
+          "name": "SKU",
+          "description": "Product SKU copied into this historical line item snapshot.",
+          "type": "text",
+          "is_required": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 120 }
+        },
+        {
+          "slug": "description",
+          "name": "Description",
+          "description": "Commercial description copied into this line item snapshot.",
+          "type": "rich_text"
+        },
+        {
+          "slug": "quantity",
+          "name": "Quantity",
+          "description": "Snapshot quantity for this commercial line item.",
+          "type": "number",
+          "is_required": true,
+          "is_indexed": true,
+          "config": { "type": "number", "min": 0 }
+        },
+        {
+          "slug": "unit_price",
+          "name": "Unit price",
+          "description": "Snapshot unit price; later product price changes do not alter it.",
+          "type": "currency",
+          "is_required": true,
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "unit_cost",
+          "name": "Unit cost",
+          "description": "Snapshot internal unit cost.",
+          "type": "currency",
+          "sensitivity": "confidential",
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "discount_percent",
+          "name": "Discount percent",
+          "description": "Snapshot percentage discount from 0 to 100.",
+          "type": "number",
+          "is_indexed": true,
+          "config": { "type": "number", "min": 0, "max": 100 }
+        },
+        {
+          "slug": "discount_amount",
+          "name": "Discount amount",
+          "description": "Snapshot absolute discount amount in the line item currency.",
+          "type": "currency",
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "tax_percent",
+          "name": "Tax percent",
+          "description": "Snapshot tax percentage from 0 to 100.",
+          "type": "number",
+          "is_indexed": true,
+          "config": { "type": "number", "min": 0, "max": 100 }
+        },
+        {
+          "slug": "tax_amount",
+          "name": "Tax amount",
+          "description": "Snapshot tax amount in the line item currency.",
+          "type": "currency",
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "total_amount",
+          "name": "Total amount",
+          "description": "Snapshot total amount after quantity, discount and tax; DeepCRM stores the submitted commercial fact and does not infer arithmetic.",
+          "type": "currency",
+          "is_required": true,
+          "config": { "type": "currency" }
+        },
+        {
+          "slug": "billing_frequency",
+          "name": "Billing frequency",
+          "description": "Snapshot billing cadence for this line item.",
+          "type": "select",
+          "is_required": true,
+          "default_value": "one_time",
+          "config": {
+            "type": "select",
+            "options": [
+              { "id": "one_time", "label": "One-time" },
+              { "id": "monthly", "label": "Monthly" },
+              { "id": "quarterly", "label": "Quarterly" },
+              { "id": "annual", "label": "Annual" },
+              { "id": "usage", "label": "Usage" }
+            ]
+          }
+        },
+        {
+          "slug": "billing_start_date",
+          "name": "Billing start date",
+          "description": "Snapshot billing start date.",
+          "type": "date",
+          "is_indexed": true
+        },
+        {
+          "slug": "billing_terms",
+          "name": "Billing terms",
+          "description": "Snapshot billing terms or term label.",
+          "type": "text",
+          "config": { "type": "text", "maxLength": 200 }
+        },
+        {
+          "slug": "snapshot_at",
+          "name": "Snapshot at",
+          "description": "When the line item commercial snapshot was captured.",
+          "type": "datetime",
+          "is_required": true,
+          "is_indexed": true
+        },
+        {
+          "slug": "product",
+          "name": "Product",
+          "description": "Catalogue product this snapshot came from; omitted or unlinked snapshots still retain their copied fields.",
+          "type": "record_reference",
+          "config": { "type": "record_reference", "objectTypes": ["product"], "relationTypeSlug": "line_item_product" }
+        },
+        {
+          "slug": "deal",
+          "name": "Deal",
+          "description": "Deal this line item belongs to as a commercial parent.",
+          "type": "record_reference",
+          "is_required": true,
+          "config": { "type": "record_reference", "objectTypes": ["deal"], "relationTypeSlug": "line_item_deal" }
+        },
+        {
+          "slug": "external_ref",
+          "name": "External reference",
+          "description": "Structural upstream line-item identifier for idempotent sync.",
+          "type": "text",
+          "is_unique": true,
+          "is_indexed": true,
+          "config": { "type": "text", "maxLength": 200 }
+        }
+      ]
+    },
+    {
+      "slug": "deal",
+      "kind": "standard",
+      "singular_name": "Deal",
+      "plural_name": "Deals",
+      "description": "Commercial opportunity.",
+      "primary_attribute": "name",
+      "attributes": [],
+      "derived_attributes": [
+        {
+          "slug": "line_item_count",
+          "name": "Line item count",
+          "description": "Count of active line item snapshots linked to this deal.",
+          "type": "number",
+          "is_indexed": true,
+          "config": { "type": "number", "min": 0 },
+          "value_source": "rollup",
+          "derivation_config": {
+            "relation_type": "line_item_deal",
+            "direction": "incoming",
+            "operation": "count"
+          }
+        },
+        {
+          "slug": "line_item_total",
+          "name": "Line item total",
+          "description": "Sum of active linked line item totals when all contributing line items share one currency; mixed currencies materialize null.",
+          "type": "currency",
+          "config": { "type": "currency" },
+          "value_source": "rollup",
+          "derivation_config": {
+            "relation_type": "line_item_deal",
+            "direction": "incoming",
+            "operation": "sum",
+            "source_attribute": "total_amount"
+          }
+        }
+      ]
+    }
+  ],
+  "relation_types": [
+    {
+      "slug": "line_item_product",
+      "from_object_type": "line_item",
+      "to_object_type": "product",
+      "forward_name": "references product",
+      "inverse_name": "has line item snapshots",
+      "description": "Connects a historical line item snapshot to its catalogue product.",
+      "cardinality": "many_to_one",
+      "on_delete": "unlink"
+    },
+    {
+      "slug": "line_item_deal",
+      "from_object_type": "line_item",
+      "to_object_type": "deal",
+      "forward_name": "belongs to deal",
+      "inverse_name": "has line items",
+      "description": "Connects a line item snapshot to the deal commercial parent.",
+      "cardinality": "many_to_one",
+      "on_delete": "cascade"
+    }
+  ],
+  "pipelines": [],
+  "matching_rules": {
+    "product": [
+      { "attributes": ["sku"], "method": "normalized", "action": "block" },
+      { "attributes": ["external_ref"], "method": "normalized", "action": "block" }
+    ],
+    "line_item": [
+      { "attributes": ["external_ref"], "method": "normalized", "action": "block" }
+    ]
+  }
+}

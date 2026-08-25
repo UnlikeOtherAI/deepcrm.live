@@ -41,15 +41,22 @@ describe('templates', () => {
       new URL('../../../../docs/spec/templates/standard_service.json', import.meta.url),
       'utf8',
     )
+    const copiedCommerce = readFileSync(new URL('../../src/templates/standard_commerce.json', import.meta.url), 'utf8')
+    const authoritativeCommerce = readFileSync(
+      new URL('../../../../docs/spec/templates/standard_commerce.json', import.meta.url),
+      'utf8',
+    )
     expect(source).toContain("import systemJson from './system.json'")
     expect(source).toContain("import standardSalesJson from './standard_sales.json'")
     expect(source).toContain("import standardServiceJson from './standard_service.json'")
+    expect(source).toContain("import standardCommerceJson from './standard_commerce.json'")
     expect(source).not.toContain('readFile')
     expect(copied).toBe(authoritative)
     expect(copiedSales).toBe(authoritativeSales)
     expect(copiedService).toBe(authoritativeService)
+    expect(copiedCommerce).toBe(authoritativeCommerce)
     expect(listTemplates().map((template) => template.slug))
-      .toEqual(['system', 'standard_crm', 'standard_sales', 'standard_service'])
+      .toEqual(['system', 'standard_crm', 'standard_sales', 'standard_service', 'standard_commerce'])
     const value = await tenant()
     await expect(db.$transaction((tx) => applyTemplate(tx, value, actor(), 'missing')))
       .rejects.toMatchObject({ code: ErrorCode.UNKNOWN_TEMPLATE })
@@ -143,6 +150,57 @@ describe('templates', () => {
     expect(rules.map((rule) => `${rule.objectType.slug}:${rule.method}:${rule.attributeSlugs.join('+')}`).sort())
       .toContain('ticket:normalized:external_ref')
     expect(rules.some((rule) => rule.objectType.slug === 'ticket' && rule.method === 'fuzzy')).toBe(false)
+  })
+
+  it('adds commerce templates with snapshot relations and rollup derivations', async () => {
+    const value = await tenant()
+    await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'system'))
+    await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_crm'))
+    const commerce = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_commerce'))
+    expect(commerce.added).toEqual({ objectTypes: 2, attributes: 31, relationTypes: 2, pipelines: 0, matchingRules: 3 })
+    const repeated = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_commerce'))
+    expect(repeated.added).toEqual({
+      objectTypes: 0, attributes: 0, relationTypes: 0, pipelines: 0, matchingRules: 0,
+    })
+    const relations = await db.relationType.findMany({
+      where: { organizationId: value.organizationId, teamId: value.teamId, slug: { in: ['line_item_product', 'line_item_deal'] } },
+      orderBy: { slug: 'asc' },
+    })
+    expect(relations.map((relation) => `${relation.slug}:${relation.cardinality}:${relation.onDelete}`).sort())
+      .toEqual(['line_item_deal:many_to_one:cascade', 'line_item_product:many_to_one:unlink'])
+    const derived = await db.attribute.findMany({
+      where: {
+        organizationId: value.organizationId,
+        teamId: value.teamId,
+        slug: { in: ['line_item_count', 'line_item_revenue_total', 'line_item_total'] },
+        valueSource: 'rollup',
+      },
+      include: { objectType: true, derivation: true },
+      orderBy: [{ objectType: { slug: 'asc' } }, { slug: 'asc' }],
+    })
+    const derivedLabels = derived.map((attribute) => {
+      if (attribute.objectType === null || attribute.derivation === null) throw new Error('commerce derivation missing')
+      return `${attribute.objectType.slug}:${attribute.slug}:${attribute.derivation.valueSource}`
+    })
+    expect(derivedLabels)
+      .toEqual([
+        'deal:line_item_count:rollup',
+        'deal:line_item_total:rollup',
+        'product:line_item_count:rollup',
+        'product:line_item_revenue_total:rollup',
+      ])
+    const rules = await db.matchingRule.findMany({
+      where: { organizationId: value.organizationId, teamId: value.teamId },
+      include: { objectType: true },
+    })
+    expect(rules.map((rule) => `${rule.objectType.slug}:${rule.method}:${rule.attributeSlugs.join('+')}`).sort())
+      .toEqual(expect.arrayContaining([
+        'line_item:normalized:external_ref',
+        'product:normalized:external_ref',
+        'product:normalized:sku',
+      ]))
+    expect(rules.some((rule) => ['line_item', 'product'].includes(rule.objectType.slug) && rule.method === 'fuzzy'))
+      .toBe(false)
   })
 
   it('rolls back the batch, version increment, and audit with its caller transaction', async () => {

@@ -7,6 +7,10 @@ const object = z.object({
   plural_name: z.string(), description: z.string(), icon: z.string().optional(),
   primary_attribute: z.string().optional(),
   attributes: z.array(AttributeSpec.extend({ is_system: z.boolean().optional() })),
+  derived_attributes: z.array(AttributeSpec.extend({
+    value_source: z.enum(['formula', 'rollup', 'relation_sync', 'score']),
+    derivation_config: z.record(z.unknown()),
+  })).default([]),
 }).strict()
 const relation = z.object({
   slug: z.string(), from_object_type: z.string().nullable(), to_object_type: z.string().nullable(),
@@ -25,7 +29,7 @@ const pipeline = z.object({
   is_default: z.boolean().default(false), stages: z.array(pipelineStage).min(1),
 }).strict()
 export const TemplateSchema = z.object({
-  slug: z.enum(['system', 'standard_crm', 'standard_sales', 'standard_service']),
+  slug: z.enum(['system', 'standard_crm', 'standard_sales', 'standard_service', 'standard_commerce']),
   description: z.string(), object_types: z.array(object),
   relation_types: z.array(relation), pipelines: z.array(pipeline).default([]),
   matching_rules: z.record(z.array(matching)),
