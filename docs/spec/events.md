@@ -34,6 +34,27 @@ Redaction: every event passes the same `redactForActor` pass as a record read, b
 - Returns up to `limit` events with `seq > cursor`, ascending, filtered by `object_types`/`kinds`; `next_cursor` = last `seq` returned (or the input cursor when empty); `has_more`.
 - Retention: change rows are immutable **except** they cascade when retention hard-deletes a record `DEEPCRM_RETENTION_DAYS` after its soft delete. A cursor therefore never expires, but a consumer lagging more than the retention window can miss the tail of hard-deleted records' histories — documented, accepted (review B41). Consumers store the cursor (Nessie: on the trigger's state).
 
+## 2a. Behavioural events — `crm_event_*`
+
+Behavioural events are not change-feed rows and are not webhook delivery units.
+They are tenant-scoped CRM facts ingested through `crm_event_type_define`,
+`crm_event_ingest` and `crm_events_query`: for example a product integration can
+define `product_feature_used`, ingest source/idempotency-scoped occurrences, and
+later query them for a visible subject record.
+
+An event type has a stable slug, optional subject object type, and a closed JSON
+object property schema. Ingest validates the subject's tenant, visibility and
+object type before storing properties; `(event_type, source, external_id)` is
+idempotent and returns the existing event on replay. Events are append-only:
+correction is represented by a new event whose `correction_of_event_id` points
+to the earlier event. DeepCRM never interprets the property text or classifies
+the behaviour; callers decide what the typed fact means.
+
+`crm_events_query` returns events ordered by occurrence time using an opaque
+cursor. If a specific subject id is supplied and it is hidden or belongs to
+another tenant, the standard no-oracle `NOT_FOUND` contract applies. Broad
+queries omit events whose subject is no longer visible to the caller.
+
 ## 3. Push — webhooks
 
 ### Registration

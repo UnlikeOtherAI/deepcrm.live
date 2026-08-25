@@ -1,6 +1,12 @@
 import {
   CrmChangesSince,
+  CrmEventIngest,
+  CrmEventsQuery,
+  CrmEventTypeDefine,
   CrmExportInputShape,
+  CrmFileLink,
+  CrmFileList,
+  CrmFileRegister,
   CrmWebhookDelete,
   CrmWebhookList,
   CrmWebhookSet,
@@ -10,6 +16,14 @@ import {
 import type { AppDeps } from '../../deps.js'
 import { changesSince } from '../../services/io.js'
 import { enqueueExport } from '../../services/exports.js'
+import {
+  defineEventType,
+  ingestEvent,
+  linkFile,
+  listFiles,
+  queryEvents,
+  registerFile,
+} from '../../services/files-events.js'
 import { deleteWebhook, listWebhooks, setWebhook } from '../../services/webhooks.js'
 import { withApproval } from './approval.js'
 import { defineTool } from './register.js'
@@ -54,6 +68,62 @@ export function registerIoTools(
       })
       return ok(result, JSON.stringify(result))
     },
+  })
+  defineTool(server, {
+    name: 'crm_file_register',
+    description: 'Register external file metadata only. DeepCRM stores provider/key, size, MIME and checksum, never blobs, signed URLs or secrets. Conflicting provider keys fail.',
+    input: CrmFileRegister.in.shape,
+    handler: async (args) => ok(await registerFile(deps, ctx, {
+      provider: args.provider, providerKey: args.provider_key, filename: args.filename,
+      mimeType: args.mime_type, sizeBytes: args.size_bytes, checksumSha256: args.checksum_sha256,
+      metadata: args.metadata,
+    }), 'file registered'),
+  })
+  defineTool(server, {
+    name: 'crm_file_link',
+    description: 'Attach a registered file to a visible record/activity or event with a typed purpose. Target visibility is checked before the attachment is stored.',
+    input: CrmFileLink.in.shape,
+    handler: async (args) => ok(await linkFile(deps, ctx, {
+      fileId: args.file_id, targetType: args.target_type, recordId: args.record_id,
+      eventId: args.event_id, purpose: args.purpose, metadata: args.metadata,
+    }), 'file linked'),
+  })
+  defineTool(server, {
+    name: 'crm_file_list',
+    description: 'List authorized file links and short-lived storage access URLs. URLs expire quickly; provider keys remain metadata and are not bearer credentials.',
+    input: CrmFileList.in.shape,
+    handler: async (args) => ok(await listFiles(deps, ctx, {
+      targetType: args.target_type, recordId: args.record_id, eventId: args.event_id,
+      limit: args.limit,
+    }), 'files listed'),
+  })
+  defineTool(server, {
+    name: 'crm_event_type_define',
+    description: 'Define an immutable behavioural event vocabulary and property schema. Use this before ingesting product or integration events.',
+    input: CrmEventTypeDefine.in.shape,
+    handler: async (args) => ok(await defineEventType(deps, ctx, {
+      slug: args.slug, name: args.name, description: args.description,
+      subjectObjectType: args.subject_object_type, propertySchema: args.property_schema,
+    }), 'event type defined'),
+  })
+  defineTool(server, {
+    name: 'crm_event_ingest',
+    description: 'Append one immutable behavioural event. source plus external_id is idempotent; corrections are new events linked to the original, never updates.',
+    input: CrmEventIngest.in.shape,
+    handler: async (args) => ok(await ingestEvent(deps, ctx, {
+      eventType: args.event_type, source: args.source, externalId: args.external_id,
+      occurredAt: args.occurred_at, subjectRecordId: args.subject_record_id,
+      actor: args.actor, properties: args.properties, correctionOfEventId: args.correction_of_event_id,
+    }), 'event ingested'),
+  })
+  defineTool(server, {
+    name: 'crm_events_query',
+    description: 'Query immutable behavioural events by type, source or visible subject record. Cross-tenant and hidden subjects return NOT_FOUND or are omitted.',
+    input: CrmEventsQuery.in.shape,
+    handler: async (args) => ok(await queryEvents(deps, ctx, {
+      eventType: args.event_type, subjectRecordId: args.subject_record_id,
+      source: args.source, cursor: args.cursor, limit: args.limit,
+    }), 'events listed'),
   })
   defineTool(server, {
     name: 'crm_webhook_set',

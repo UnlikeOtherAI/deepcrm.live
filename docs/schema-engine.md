@@ -1090,6 +1090,25 @@ fixed-currency sums come from open stage intervals; closed interval durations
 come from `record_stage_history.started_at/ended_at`; conversions are counted
 from ordered adjacent intervals at or after `since`.
 
+Files are metadata rows, not object storage. `crm_file_register` stores a
+provider key, MIME type, size, checksum and redacted metadata; it rejects signed
+URLs, credential-shaped metadata and conflicting `(tenant, provider, key)`
+registrations. `crm_file_link` attaches that metadata row to a visible
+record/activity or visible event by typed purpose. `crm_file_list` returns only
+authorized links and a short-lived access URL derived after the target
+visibility check; provider keys remain metadata and are never bearer material.
+
+Behavioural events are a generic append-only vocabulary. `crm_event_type_define`
+creates a tenant-scoped event type with an optional subject object type and a
+closed JSON object property schema. `crm_event_ingest` requires a visible subject
+when the type constrains one, validates properties structurally, and treats
+`(event_type, source, external_id)` as the idempotency key. A correction is a
+separate event linked by `correction_of_event_id`; there is no update/delete
+tool and no natural-language classification. `crm_events_query` pages ordered
+events by occurrence time and omits rows whose subject is no longer visible
+unless the hidden subject was named explicitly, in which case the usual
+`NOT_FOUND`/policy contract applies.
+
 ## 4. Write path — `applyWrite(tx, ctx, schema, op)`
 
 Ops: `create`, `update`, `assert`, `delete`, `restore`, `erase`, `link`, `unlink`, `merge`, `unmerge`. All inside `prisma.$transaction` (ReadCommitted) with explicit advisory locks. **Advisory locks use the two-int form** `pg_advisory_xact_lock(namespace, hashtext(tenantId ∥ key))` with a fixed namespace constant per concern (`1` records, `2` unique/match keys, `3` provisioning, `4` webhooks, `5` audit, `6` idempotency, `7` link topology), so concerns and tenants never false-share a 32-bit bucket.
@@ -1120,7 +1139,7 @@ Resolve `match_attribute` (must be `isUnique`, else `VALIDATION_FAILED` naming t
 
 ### 4c′. Visibility interactions (normative)
 
-- **Every row, count, sum and derived aggregate is computed over the caller's visibility-filtered row set** — `crm_records_count`, `include_total`, `crm_pipeline_summary`, `crm_data_quality` buckets, `crm_export` rows and `crm_list_entries` included; for the semantic path the visibility predicate is part of the same SQL predicate the HNSW iterative scan filters on — pre-filter, never post-filter of a top-k (R15). Query, search, timeline, links-list, duplicates and the change feed apply the gate per row; a link whose far end is invisible is omitted from listings, and a `DUPLICATE_FOUND` against an invisible record returns the generic form (no `record_id`, no candidates).
+- **Every row, count, sum and derived aggregate is computed over the caller's visibility-filtered row set** — `crm_records_count`, `include_total`, `crm_pipeline_summary`, `crm_data_quality` buckets, `crm_export` rows and `crm_list_entries` included; for the semantic path the visibility predicate is part of the same SQL predicate the HNSW iterative scan filters on — pre-filter, never post-filter of a top-k (R15). Query, search, timeline, links-list, file-list, event-query, duplicates and the change feed apply the gate per row; a link/file/event whose far end or subject is invisible is omitted from listings, and a `DUPLICATE_FOUND` against an invisible record returns the generic form (no `record_id`, no candidates).
 - The search index stores no visibility copy — filtering happens at query time against `visibility`/grants.
 - Changing visibility is `record.edit` on the record — except **widening a record the caller cannot see** (recovering an orphaned private record), which only a team owner may do, approval-gated; existence is disclosed to the owner, data is not until the change lands.
 - Merge requires the actor to see **all** records in the merge set; the survivor keeps the most restrictive visibility and the union of grants.
@@ -1577,7 +1596,7 @@ Input: `survivor_id`, `merged_ids[]` (1–10), `field_choices?: {slug: record_id
 
 ## 8. Search document
 
-`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). Max 8 KiB. Content assembly order (the 8 KiB cap truncates from the end): `display_name`, attributes by `position` (rich_text stripped + 2 KiB-capped per value), then linked names — for `activity` records the newest content wins the budget (R14). A `display_name` change enqueues one `record.reindex_neighbours` job that re-renders inbound-linked records' content in batches, re-embedding only when a stored `content_hash` changed (review M9); the `crm_search` description states the eventual-consistency window. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Embedding requests are batched (≤ 64 records per call) behind a circuit breaker — on failure records stay keyword-searchable and the job dead-letters rather than blocking the queue. Semantic queries run a tenant-filtered iterative scan (`hnsw.iterative_scan`, pgvector ≥ 0.8) so small tenants keep recall in a shared index; an `embed.model_migrate` job re-embeds rows whose `embedding_model` differs from current — and **semantic queries always filter `embedding_model = current`** (cosine distance across models is meaningless; recall dips during migration, the keyword leg of hybrid is unaffected; a replacement model must produce `EMBEDDING_DIMENSIONS`-wide vectors or the change is a column migration, not a job; R13). Per-tenant index partitioning is deferred until one tenant exceeds ~1M vectors. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
+`buildSearchContent(record, schema, links)`: `display_name`, then each `public|internal` attribute's `toSearchText`, then for each active link the relation `forward_name` + target `display_name` (one hop). File metadata and behavioural-event properties are not copied into the record search document; agents query them through `crm_file_list` and `crm_events_query` under the same visibility gate. Max 8 KiB. Content assembly order (the 8 KiB cap truncates from the end): `display_name`, attributes by `position` (rich_text stripped + 2 KiB-capped per value), then linked names — for `activity` records the newest content wins the budget (R14). A `display_name` change enqueues one `record.reindex_neighbours` job that re-renders inbound-linked records' content in batches, re-embedding only when a stored `content_hash` changed (review M9); the `crm_search` description states the eventual-consistency window. Embedded via Ledger `/v1/jina` with `dimensions = EMBEDDING_DIMENSIONS`; `embedding_model` recorded. Embedding requests are batched (≤ 64 records per call) behind a circuit breaker — on failure records stay keyword-searchable and the job dead-letters rather than blocking the queue. Semantic queries run a tenant-filtered iterative scan (`hnsw.iterative_scan`, pgvector ≥ 0.8) so small tenants keep recall in a shared index; an `embed.model_migrate` job re-embeds rows whose `embedding_model` differs from current — and **semantic queries always filter `embedding_model = current`** (cosine distance across models is meaningless; recall dips during migration, the keyword leg of hybrid is unaffected; a replacement model must produce `EMBEDDING_DIMENSIONS`-wide vectors or the change is a column migration, not a job; R13). Per-tenant index partitioning is deferred until one tenant exceeds ~1M vectors. Hybrid search = reciprocal rank fusion (k = 60) of tsvector rank and cosine distance, top 50 each, then policy redaction.
 
 ## 9. Templates (`packages/schema-engine/src/templates/*.json`)
 
