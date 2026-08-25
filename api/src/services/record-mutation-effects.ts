@@ -1,8 +1,8 @@
-import type { Db } from '@deepcrm/db'
+import type { Db, Prisma } from '@deepcrm/db'
 import { enqueue, type QueueEnqueueTx } from '@deepcrm/queue'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
-type MutationEffectsTx = QueueEnqueueTx & Pick<Db, 'webhook'>
+type MutationEffectsTx = QueueEnqueueTx & Pick<Db, 'webhook' | 'list'>
 
 export async function enqueueDerivedRefresh(
   tx: QueueEnqueueTx,
@@ -26,6 +26,57 @@ export async function enqueueDerivedRefresh(
   })
 }
 
+function actorContextPayload(ctx: ActorContext): Prisma.InputJsonObject {
+  return {
+    app: ctx.app,
+    actChain: ctx.actChain,
+    actor: ctx.actor,
+    onBehalfOf: ctx.onBehalfOf,
+    provenance: ctx.provenance,
+    requestId: ctx.requestId,
+  }
+}
+
+export async function enqueueDynamicListRefresh(
+  tx: QueueEnqueueTx,
+  ctx: ActorContext,
+  listId: string,
+  evaluationVersion: number,
+  idempotencyKey: string,
+): Promise<void> {
+  await enqueue(tx, {
+    organizationId: ctx.tenant.organizationId,
+    teamId: ctx.tenant.teamId,
+    type: 'list.refresh',
+    payload: {
+      organizationId: ctx.tenant.organizationId,
+      teamId: ctx.tenant.teamId,
+      listId,
+      evaluationVersion,
+      actorContext: actorContextPayload(ctx),
+    },
+    idempotencyKey,
+    priority: 80,
+  })
+}
+
+async function enqueueDynamicListRefreshes(
+  tx: MutationEffectsTx,
+  ctx: ActorContext,
+  idempotencySeed: string,
+): Promise<void> {
+  const lists = await tx.list.findMany({
+    where: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId, kind: 'dynamic' },
+    select: { id: true, evaluationVersion: true },
+    orderBy: { id: 'asc' },
+  })
+  for (const list of lists) {
+    await enqueueDynamicListRefresh(
+      tx, ctx, list.id, list.evaluationVersion, `list:${ctx.tenant.teamId}:${list.id}:${list.evaluationVersion}:${idempotencySeed}`,
+    )
+  }
+}
+
 export async function enqueueRecordMutationEffects(
   tx: MutationEffectsTx,
   ctx: ActorContext,
@@ -47,6 +98,7 @@ export async function enqueueRecordMutationEffects(
     })
   }
   await enqueueDerivedRefresh(tx, ctx, touchedRecordIds, `derived:${ctx.tenant.teamId}:${lastSeq}`)
+  await enqueueDynamicListRefreshes(tx, ctx, String(lastSeq))
   const activeWebhooks = await tx.webhook.count({
     where: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId, active: true },
   })

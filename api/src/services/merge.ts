@@ -48,7 +48,7 @@ export type UnmergeRecordsResult = {
   }[]
 }
 
-type MergeServiceTx = RecordTx & Pick<Db, 'policyRule' | 'webhook'>
+type MergeServiceTx = RecordTx & Pick<Db, 'policyRule' | 'webhook' | 'list'>
 
 function auditMetadata(ctx: ActorContext, input: MergeRecordsInput): Prisma.InputJsonObject {
   return {

@@ -3,6 +3,8 @@ import {
   CrmListCreate,
   CrmListEntries,
   CrmListRemove,
+  CrmListStatus,
+  CrmListUpdate,
   CrmViewDelete,
   CrmViewRun,
   CrmViewSaveToolInput,
@@ -15,10 +17,12 @@ import {
   addListEntries,
   createList,
   deleteView,
+  listStatus,
   listEntries,
   removeListEntries,
   runView,
   saveView,
+  updateList,
 } from '../../services/lists.js'
 import { defineTool } from './register.js'
 import { ok } from './result.js'
@@ -36,8 +40,22 @@ export function registerListTools(
     input: CrmListCreate.in.shape,
     handler: async (args) => jsonResult(await createList(deps, ctx, {
       slug: args.slug, name: args.name, description: args.description,
-      objectType: args.object_type, attributes: args.attributes,
+      kind: args.kind, objectType: args.object_type, filter: args.filter, attributes: args.attributes,
     })),
+  })
+  defineTool(server, {
+    name: 'crm_list_update',
+    description: 'Update list metadata; for dynamic lists, replacing filter schedules a membership refresh and advances evaluation_version. Static lists reject filter changes.',
+    input: CrmListUpdate.in.shape,
+    handler: async (args) => jsonResult(await updateList(deps, ctx, {
+      list: args.list, name: args.name, description: args.description, filter: args.filter,
+    })),
+  })
+  defineTool(server, {
+    name: 'crm_list_status',
+    description: 'Read dynamic-list evaluation state, object scope, filter, version, error code and last completed evaluation time.',
+    input: CrmListStatus.in.shape,
+    handler: async (args) => jsonResult(await listStatus(deps, ctx, args.list)),
   })
   defineTool(server, {
     name: 'crm_list_add',

@@ -255,7 +255,9 @@ export async function updateDerivedAttribute(
   const valueSource = target.valueSource
   const derivation = await tx.attributeDerivation.findUnique({ where: { attributeId: target.id } })
   if (derivation === null) throw derivationError('missing_derivation')
-  const prepared = await dependencies(tx, tenant, objectType.id, target.id, valueSource, input.derivationConfig ?? derivation.config)
+  const prepared = await dependencies(
+    tx, tenant, objectType.id, target.id, valueSource, input.derivationConfig ?? derivation.config,
+  )
   const updated = await tx.attribute.update({
     where: { id: target.id },
     data: {

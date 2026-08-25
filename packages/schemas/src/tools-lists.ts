@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { Filter, Sort } from './filter.js'
 import { Cursor, Limit, Slug, Uuid } from './primitives.js'
 import { AttributeDetail, AttributeSpec } from './schema-specs.js'
+import { DynamicListDefinitionState, ListKind, ListRefreshState } from './semantic-foundation.js'
 import { CrmRecordsQuery, RecordOut } from './tools-records.js'
 
 export const ListDetail = z.object({
@@ -10,7 +11,12 @@ export const ListDetail = z.object({
   slug: Slug,
   name: z.string(),
   description: z.string(),
+  kind: ListKind,
   object_type: Slug.nullable(),
+  definition: DynamicListDefinitionState.nullable(),
+  refresh_state: ListRefreshState,
+  refresh_error_code: z.string().nullable(),
+  last_evaluated_at: z.string().nullable(),
   attributes: z.array(AttributeDetail),
   entry_count: z.number().int().nonnegative(),
 })
@@ -20,11 +26,32 @@ export const CrmListCreate = {
     slug: Slug.describe('stable list slug'),
     name: z.string().min(1).max(120).describe('agent-facing list name'),
     description: z.string().max(500).optional().describe('what membership in this list means'),
+    kind: ListKind.default('static').describe('static curated list or dynamic segment'),
     object_type: Slug.optional().describe('restrict entries to one active object type; omit for mixed'),
+    filter: z.record(z.unknown()).optional()
+      .describe('dynamic-list structured filter; recursive grammar/operators in crm://help/filtering'),
     attributes: z.array(AttributeSpec).max(20).optional()
       .describe('typed values stored per list entry, such as priority'),
   }),
   out: ListDetail,
+}
+
+export const CrmListUpdate = {
+  in: z.object({
+    list: Slug.describe('list slug to update'),
+    name: z.string().min(1).max(120).optional().describe('replacement agent-facing list name'),
+    description: z.string().max(500).optional().describe('replacement list description'),
+    filter: z.record(z.unknown()).optional()
+      .describe('replacement dynamic-list structured filter; only valid for dynamic lists'),
+  }),
+  out: ListDetail,
+}
+
+export const CrmListStatus = {
+  in: z.object({
+    list: Slug.describe('dynamic list slug whose evaluation status should be read'),
+  }),
+  out: z.object({ status: DynamicListDefinitionState }),
 }
 
 export const CrmListAdd = {
@@ -63,6 +90,11 @@ export const CrmListEntries = {
       record: RecordOut,
     })),
     next_cursor: z.string().nullable(),
+    list: z.object({
+      kind: ListKind,
+      refresh_state: ListRefreshState,
+      evaluation_version: z.number().int().nonnegative(),
+    }),
   }),
 }
 

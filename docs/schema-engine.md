@@ -251,6 +251,17 @@ enum JobStatus {
   cancelled
 }
 
+enum ListKind {
+  static
+  dynamic
+}
+
+enum ListRefreshState {
+  ready
+  refreshing
+  failed
+}
+
 // ───────────────────────── metadata ─────────────────────────
 
 model ObjectType {
@@ -673,21 +684,28 @@ model RecordSearch {
 // ───────────────────────── lists & views ─────────────────────────
 
 model List {
-  id             String      @id @default(uuid()) @db.Uuid
-  organizationId String      @map("organization_id") @db.Uuid
-  teamId         String      @map("team_id") @db.Uuid
-  slug           String
-  name           String
-  description    String      @default("")
-  objectTypeId   String?     @map("object_type_id") @db.Uuid   // null = mixed
-  createdByType  ActorType   @map("created_by_type")
-  createdById    String      @map("created_by_id")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
-  attributes     Attribute[]
-  entries        ListEntry[]
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @map("organization_id") @db.Uuid
+  teamId            String           @map("team_id") @db.Uuid
+  kind              ListKind         @default(static)
+  slug              String
+  name              String
+  description       String           @default("")
+  objectTypeId      String?          @map("object_type_id") @db.Uuid // null = mixed
+  definition        Json?
+  evaluationVersion Int              @default(0) @map("evaluation_version")
+  refreshState      ListRefreshState @default(ready) @map("refresh_state")
+  refreshErrorCode  String?          @map("refresh_error_code")
+  lastEvaluatedAt   DateTime?        @map("last_evaluated_at")
+  createdByType     ActorType        @map("created_by_type")
+  createdById       String           @map("created_by_id")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  attributes        Attribute[]
+  entries           ListEntry[]
 
   @@unique([organizationId, teamId, slug])
+  @@index([organizationId, teamId, kind, refreshState])
   @@map("lists")
 }
 
@@ -1202,6 +1220,16 @@ cannot become a value oracle. Output projection is applied only after the same
 per-record `redactForActor` pass used by all record serialisation. T15 keeps the
 row-access builder as one auditable query seam; T49 extracts and reuses that exact
 seam for get/history/links/search/feed without changing query semantics.
+
+Dynamic lists compile their stored `definition.filter` through this same query
+path for the list's one declared object type. A `list.refresh` job is an
+incremental cache refresh, not an authority: it evaluates only records visible to
+the queued `ActorContext`, rewrites `list_entries` for the current
+`evaluation_version`, and marks the list `ready` only after the same transaction
+writes the audit. `crm_list_entries` still applies current caller row visibility
+and policy over the cached members, so a later entitlement change cannot leak a
+stale row; if `refresh_state != ready`, dynamic-list reads fail instead of
+returning incomplete membership.
 
 ### 5.2 Operators and typed SQL
 

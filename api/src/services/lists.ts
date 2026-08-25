@@ -1,57 +1,43 @@
 import {
-  AttributeDetail,
   AttributeSpec,
   ErrorCode,
+  Filter as FilterSchema,
   ServiceError,
   type ActorContext,
   type AttributeSpec as AttributeSpecValue,
 } from '@deepcrm/schemas'
-import {
-  getAttributeType,
-  loadSchema,
-  rowAccess,
-  validateRecordData,
-  type LoadedList,
-  type LoadedObjectType,
-  type LoadedSchema,
-} from '@deepcrm/schema-engine'
+import { getAttributeType, loadSchema, validateRecordData, type LoadedList,
+  type LoadedObjectType, type LoadedSchema } from '@deepcrm/schema-engine'
 import { Prisma, tenantWhere, type Db, type PolicyAction } from '@deepcrm/db'
 
 import type { AppDeps } from '../deps.js'
 import { getManyRecords } from './record-collection.js'
 import { selectedObjectType } from './record-query-authorization.js'
 import type { RecordOut } from './redact.js'
-import {
-  checkPolicy,
-  loadPolicyEvaluator,
-  type PolicyRequest,
-  type PolicyScopeRef,
-} from './policy.js'
+import { checkPolicy, loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { requireVisibleRecord } from './record-visibility.js'
+import { enqueueDynamicListRefresh } from './record-mutation-effects.js'
+import { dynamicStatus, presentList, recordAccess, type DynamicListStatus,
+  type ListDetail } from './list-presenters.js'
 
 export type CreateListInput = {
   slug: string; name: string; description?: string; objectType?: string
-  attributes?: readonly AttributeSpecValue[]
+  kind?: 'static' | 'dynamic'; filter?: Record<string, unknown>; attributes?: readonly AttributeSpecValue[]
 }
+export type UpdateListInput = { list: string; name?: string; description?: string; filter?: Record<string, unknown> }
 export type AddListEntriesInput = {
   list: string; entries: readonly { recordId: string; data?: Record<string, unknown> }[]
 }
 export type ListEntriesInput = { list: string; cursor?: string; limit?: number }
-type PublicAttribute = ReturnType<typeof presentAttribute>
-export type ListDetail = {
-  id: string; slug: string; name: string; description: string; object_type: string | null
-  attributes: PublicAttribute[]; entry_count: number
-}
 export type ListEntriesResult = {
   entries: Array<{ entry: { id: string; data: Record<string, unknown>; position: number }; record: RecordOut }>
   next_cursor: string | null
+  list: { kind: 'static' | 'dynamic'; refresh_state: 'ready' | 'refreshing' | 'failed'; evaluation_version: number }
 }
 type VisibleEntryRow = { id: string; recordId: string; data: unknown; position: number }
 type MutableJsonObject = { [key: string]: Prisma.InputJsonValue | null }
-type ListTx = Pick<Db,
-  '$queryRaw' | '$executeRaw' | 'auditLog' | 'policyRule' | 'team' | 'list' | 'attribute' | 'listEntry'
->
+type ListTx = Pick<Db, '$queryRaw' | '$executeRaw' | 'auditLog' | 'policyRule' | 'team' | 'list' | 'attribute' | 'listEntry' | 'queueJob'>
 
 function failure(code: typeof ErrorCode.NOT_FOUND | typeof ErrorCode.SCHEMA_CONFLICT, message: string): never {
   throw new ServiceError(code, message)
@@ -151,60 +137,6 @@ async function bumpVersion(tx: ListTx, ctx: ActorContext): Promise<void> {
   if (updated.count !== 1) failure(ErrorCode.SCHEMA_CONFLICT, 'Tenant schema does not exist')
 }
 
-function presentAttribute(attribute: LoadedList['attributes'][number]) {
-  return AttributeDetail.parse({
-    id: attribute.id, slug: attribute.slug, name: attribute.name, description: attribute.description,
-    type: attribute.type, config: attribute.config, is_multi: attribute.isMulti,
-    is_required: attribute.isRequired, is_unique: attribute.isUnique, is_indexed: attribute.isIndexed,
-    sensitivity: attribute.sensitivity, default_value: attribute.defaultValue ?? undefined,
-    is_system: attribute.isSystem, position: attribute.position,
-    value_source: 'stored',
-    derivation: null,
-    archived_at: attribute.archivedAt?.toISOString() ?? null,
-  })
-}
-
-function recordAccess(schema: LoadedSchema, ctx: ActorContext, list: LoadedList): Prisma.Sql {
-  const selected = list.objectTypeId === null
-    ? schema.objectTypes
-    : schema.objectTypes.filter((objectType) => objectType.id === list.objectTypeId)
-  if (selected.length === 0) {
-    if (list.objectTypeId === null) return Prisma.sql`FALSE`
-    failure(ErrorCode.SCHEMA_CONFLICT, 'List object type is not active')
-  }
-  return Prisma.join(selected.map((objectType) => Prisma.sql`(${rowAccess(
-    ctx.tenant, ctx, objectType,
-  )})`), ' OR ')
-}
-
-async function visibleEntryCount(
-  deps: AppDeps, ctx: ActorContext, schema: LoadedSchema, list: LoadedList,
-): Promise<number> {
-  const rows = await deps.db.$queryRaw<Array<{ total: number }>>`
-    SELECT count(*)::int AS total FROM list_entries le
-    JOIN lists l ON l.id = le.list_id JOIN records r ON r.id = le.record_id
-    WHERE l.id = ${list.id}::uuid AND l.organization_id = ${ctx.tenant.organizationId}::uuid
-      AND l.team_id = ${ctx.tenant.teamId}::uuid AND r.erased_at IS NULL
-      AND (${recordAccess(schema, ctx, list)})
-  `
-  return rows[0]?.total ?? 0
-}
-
-async function presentList(
-  deps: AppDeps, ctx: ActorContext, schema: LoadedSchema, list: LoadedList,
-): Promise<ListDetail> {
-  const objectType = list.objectTypeId === null ? null : schema.objectTypesById.get(list.objectTypeId)
-  if (list.objectTypeId !== null && objectType === undefined) {
-    failure(ErrorCode.SCHEMA_CONFLICT, 'List object type is not active')
-  }
-  const entryCount = await visibleEntryCount(deps, ctx, schema, list)
-  return {
-    id: list.id, slug: list.slug, name: list.name, description: list.description,
-    object_type: objectType?.slug ?? null, attributes: list.attributes.map(presentAttribute),
-    entry_count: entryCount,
-  }
-}
-
 function configInput(spec: AttributeSpecValue): Prisma.InputJsonObject {
   const definition = getAttributeType(spec.type)
   const raw = Object.fromEntries(Object.entries(spec.config ?? {}).filter(([key]) => key !== 'type'))
@@ -255,7 +187,7 @@ function defaultJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.Json
 }
 
 async function activeList(deps: AppDeps, ctx: ActorContext, slug: string): Promise<[LoadedSchema, LoadedList]> {
-  const schema = await loadSchema(deps.db, ctx.tenant)
+  const schema = await loadSchema(deps.db, ctx.tenant, { useCache: false })
   const list = schema.listsBySlug.get(slug)
   if (list === undefined) failure(ErrorCode.NOT_FOUND, 'List not found')
   return [schema, list]
@@ -272,17 +204,29 @@ export async function createList(
 ): Promise<ListDetail> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const schema = await loadSchema(deps.db, ctx.tenant)
+    const kind = input.kind ?? 'static'
     const objectType = input.objectType === undefined
       ? undefined : selectedObjectType(schema, input.objectType)
+    if (kind === 'dynamic' && (objectType === undefined || input.filter === undefined)) {
+      throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Dynamic lists require object_type and filter')
+    }
+    if (kind === 'static' && input.filter !== undefined) {
+      throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Static lists cannot have a filter')
+    }
+    const filter = input.filter === undefined ? undefined : FilterSchema.parse(input.filter)
     const parsed = AttributeSpec.array().max(20).safeParse(input.attributes ?? [])
     if (!parsed.success) throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'List attributes are invalid')
+    if (kind === 'dynamic' && parsed.data.length > 0) failure(ErrorCode.SCHEMA_CONFLICT, 'Dynamic lists cannot have entry attributes')
     const configs = parsed.data.map(configInput)
     let id: string
     try {
       id = await mutate(deps, ctx, 'crm_list_create', null, [listRequest(ctx, undefined, 'create')], async (tx) => {
         const list = await tx.list.create({ data: {
-          ...tenantWhere(ctx.tenant), slug: input.slug, name: input.name,
+          ...tenantWhere(ctx.tenant), kind, slug: input.slug, name: input.name,
           description: input.description ?? '', objectTypeId: objectType?.id ?? null,
+          definition: filter === undefined ? undefined : { filter },
+          evaluationVersion: kind === 'dynamic' ? 1 : 0,
+          refreshState: kind === 'dynamic' ? 'refreshing' : 'ready',
           createdByType: ctx.actor.type, createdById: ctx.actor.id,
         } })
         for (const [position, spec] of parsed.data.entries()) {
@@ -298,6 +242,9 @@ export async function createList(
           } })
         }
         await bumpVersion(tx, ctx)
+        if (kind === 'dynamic') {
+          await enqueueDynamicListRefresh(tx, ctx, list.id, 1, `list-create:${ctx.tenant.teamId}:${list.id}:${ctx.requestId}`)
+        }
         await audit(deps, tx, ctx, 'crm_list_create', 'list', list.id, 'success')
         return list.id
       })
@@ -305,21 +252,59 @@ export async function createList(
       if (isUnique(error)) failure(ErrorCode.SCHEMA_CONFLICT, 'List slug or attribute slug already exists')
       throw error
     }
-    const latest = await loadSchema(deps.db, ctx.tenant)
+    const latest = await loadSchema(deps.db, ctx.tenant, { useCache: false })
     const created = latest.listsById.get(id)
     if (created === undefined) failure(ErrorCode.SCHEMA_CONFLICT, 'Created list is missing from schema')
     return presentList(deps, ctx, latest, created)
   })
 }
 
+export async function updateList(deps: AppDeps, ctx: ActorContext, input: UpdateListInput): Promise<ListDetail> {
+  return recordBoundary(deps.db, deps.ids, ctx, async () => {
+    const [, list] = await activeList(deps, ctx, input.list)
+    const filter = input.filter === undefined ? undefined : FilterSchema.parse(input.filter)
+    if (filter !== undefined && list.kind !== 'dynamic') failure(ErrorCode.SCHEMA_CONFLICT, 'Static lists cannot have a filter')
+    await mutate(deps, ctx, 'crm_list_update', list.id, [listRequest(ctx, list, 'edit')], async (tx) => {
+      const nextVersion = filter === undefined ? list.evaluationVersion : list.evaluationVersion + 1
+      await tx.list.updateMany({
+        where: { ...tenantWhere(ctx.tenant), id: list.id },
+        data: {
+          name: input.name,
+          description: input.description,
+          evaluationVersion: nextVersion,
+          definition: filter === undefined ? undefined : { filter },
+          refreshState: filter === undefined ? list.refreshState : 'refreshing',
+          refreshErrorCode: filter === undefined ? list.refreshErrorCode : null,
+        },
+      })
+      await bumpVersion(tx, ctx)
+      if (filter !== undefined) {
+        await enqueueDynamicListRefresh(tx, ctx, list.id, nextVersion, `list-update:${ctx.tenant.teamId}:${list.id}:${ctx.requestId}`)
+      }
+      await audit(deps, tx, ctx, 'crm_list_update', 'list', list.id, 'success')
+    })
+    const latest = await loadSchema(deps.db, ctx.tenant, { useCache: false })
+    const updated = latest.listsById.get(list.id)
+    if (updated === undefined) failure(ErrorCode.SCHEMA_CONFLICT, 'Updated list is missing from schema')
+    return presentList(deps, ctx, latest, updated)
+  })
+}
+
+export async function listStatus(
+  deps: AppDeps, ctx: ActorContext, slug: string,
+): Promise<{ status: DynamicListStatus }> {
+  const [schema, list] = await activeList(deps, ctx, slug)
+  await authorize(deps, ctx, listRequest(ctx, list, 'view'), 'crm_list_status', 'list', list.id)
+  const status = dynamicStatus(schema, list)
+  if (status === null) failure(ErrorCode.SCHEMA_CONFLICT, 'List is not dynamic')
+  return { status }
+}
+
 function validationTarget(schema: LoadedSchema, list: LoadedList): [LoadedSchema, LoadedObjectType] {
-  const target: LoadedObjectType = {
-    id: list.id, organizationId: list.organizationId, teamId: list.teamId, slug: list.slug,
-    singularName: list.name, pluralName: list.name, description: list.description, icon: null,
-    kind: 'custom', templateSlug: null, primaryAttributeId: null, archivedAt: null,
-    createdByType: list.createdByType, createdById: list.createdById,
-    createdAt: list.createdAt, updatedAt: list.updatedAt, attributes: list.attributes,
-  }
+  const target: LoadedObjectType = { id: list.id, organizationId: list.organizationId, teamId: list.teamId,
+    slug: list.slug, singularName: list.name, pluralName: list.name, description: list.description, icon: null,
+    kind: 'custom', templateSlug: null, primaryAttributeId: null, archivedAt: null, createdByType: list.createdByType,
+    createdById: list.createdById, createdAt: list.createdAt, updatedAt: list.updatedAt, attributes: list.attributes }
   const attributes = new Map(schema.attributesByObjectTypeId)
   attributes.set(list.id, schema.attributesByListId.get(list.id) ?? new Map())
   const archived = new Map(schema.archivedAttributeSlugsByObjectTypeId)
@@ -366,6 +351,7 @@ export async function addListEntries(
 ): Promise<{ added: number }> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, list] = await activeList(deps, ctx, input.list)
+    if (list.kind === 'dynamic') failure(ErrorCode.SCHEMA_CONFLICT, 'Dynamic lists do not accept manual entries')
     const ids = input.entries.map((entry) => entry.recordId)
     if (new Set(ids).size !== ids.length) {
       throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'List entries contain duplicate record ids')
@@ -401,6 +387,7 @@ export async function removeListEntries(
 ): Promise<{ removed: number }> {
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [, list] = await activeList(deps, ctx, listSlug)
+    if (list.kind === 'dynamic') failure(ErrorCode.SCHEMA_CONFLICT, 'Dynamic lists do not accept manual entries')
     const records = await Promise.all(recordIds.map((id) => requireVisibleRecord(deps.db, ctx, id)))
     const removed = await mutate(deps, ctx, 'crm_list_remove', list.id,
       entryWriteRequests(ctx, list, records, []), async (tx) => {
@@ -444,6 +431,9 @@ export async function listEntries(
   return recordBoundary(deps.db, deps.ids, ctx, async () => {
     const [schema, list] = await activeList(deps, ctx, input.list)
     await authorize(deps, ctx, listRequest(ctx, list, 'view'), 'crm_list_entries', 'list', list.id)
+    if (list.kind === 'dynamic' && list.refreshState !== 'ready') {
+      failure(ErrorCode.SCHEMA_CONFLICT, 'Dynamic list membership is not ready')
+    }
     const limit = input.limit ?? 50
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
       throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'List entry limit must be 1 to 200')
@@ -488,7 +478,11 @@ export async function listEntries(
     const nextCursor = rows.length <= limit || last === undefined ? null : deps.queryCursor.seal({
       values: [{ isNull: false, value: String(last.position) }], id: last.id,
     }, entryCursorBinding(ctx, list, limit))
-    return { entries, next_cursor: nextCursor }
+    return {
+      entries,
+      next_cursor: nextCursor,
+      list: { kind: list.kind, refresh_state: list.refreshState, evaluation_version: list.evaluationVersion },
+    }
   })
 }
 

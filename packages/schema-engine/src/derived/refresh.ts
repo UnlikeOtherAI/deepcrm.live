@@ -17,7 +17,10 @@ export type DerivedRefreshResult = {
 
 type Data = Record<string, JsonValue>
 type DerivedAttribute = LoadedAttribute & { derivation: NonNullable<LoadedAttribute['derivation']> }
-type LinkedRecord = { id: string; data: unknown; createdAt: Date; deletedAt: Date | null; mergedIntoId: string | null; erasedAt: Date | null }
+type LinkedRecord = {
+  id: string; data: unknown; createdAt: Date; deletedAt: Date | null
+  mergedIntoId: string | null; erasedAt: Date | null
+}
 type Related = { id: string; data: Data; createdAt: Date }
 
 function objectFields(value: unknown): Record<string, unknown> | null {
@@ -207,8 +210,12 @@ async function relatedRecords(
       ...(direction === 'outgoing' ? { fromRecordId: recordId } : { toRecordId: recordId }),
     },
     select: {
-      toRecord: { select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true } },
-      fromRecord: { select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true } },
+      toRecord: {
+        select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
+      },
+      fromRecord: {
+        select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
+      },
     },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   })

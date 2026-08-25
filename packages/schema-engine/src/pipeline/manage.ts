@@ -301,7 +301,9 @@ export async function setRecordStage(
   if (change !== null) {
     await tx.recordStageHistory.update({ where: { id: interval.id }, data: { changeId: change.id } })
   }
-  const result = { recordId: record.id, pipeline: pipeline.slug, stage: stage.slug, changed: true, intervalId: interval.id }
+  const result = {
+    recordId: record.id, pipeline: pipeline.slug, stage: stage.slug, changed: true, intervalId: interval.id,
+  }
   await input.beforeTerminalAudit?.(result)
   await writeAudit(tx, {
     organizationId: ctx.tenant.organizationId,

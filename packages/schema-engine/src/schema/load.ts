@@ -397,7 +397,9 @@ export async function loadSchemaFromSource(
   throw schemaConflict('schema_version_changed_during_load')
 }
 
-export async function loadSchema(db: Db, tenant: TenantRef, options: { useCache?: boolean } = {}): Promise<LoadedSchema> {
+export async function loadSchema(
+  db: Db, tenant: TenantRef, options: { useCache?: boolean } = {},
+): Promise<LoadedSchema> {
   const source: SchemaLoadSource = {
     readVersion: (target) => db.team.findFirst({
       where: { id: target.teamId, organizationId: target.organizationId },

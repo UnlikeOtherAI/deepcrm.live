@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
 
-import { createDb, type PolicyAction, type PolicyResourceType } from '@deepcrm/db'
-import { applyTemplate, loadSchema } from '@deepcrm/schema-engine'
+import { createDb, writeAudit, type PolicyAction, type PolicyResourceType } from '@deepcrm/db'
+import { applyTemplate, loadSchema, refreshDynamicListMembership } from '@deepcrm/schema-engine'
 import {
   CrmListAdd,
   CrmListCreate,
   CrmListEntries,
   CrmListRemove,
+  CrmListStatus,
+  CrmListUpdate,
   CrmViewDelete,
   CrmViewRun,
   CrmViewSave,
+  type ActorContext,
 } from '@deepcrm/schemas'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -22,6 +25,7 @@ const db = createDb(databaseUrl)
 const key = randomUUID().replaceAll('-', '').slice(0, 12)
 const createdBy = `lists-mcp-${key}`
 const listSlug = `targets_${key}`
+const dynamicListSlug = `dynamic_targets_${key}`
 const viewSlug = `people_${key}`
 const ToolResult = z.object({
   content: z.array(z.unknown()), structuredContent: z.unknown().optional(),
@@ -31,6 +35,8 @@ let closeServer: () => Promise<void>
 let organizationId: string
 let teamId: string
 let recordId: string
+let matchingCompanyId: string
+let changedCompanyId: string
 let auditIdsBefore = new Set<string>()
 
 function structured(result: unknown): unknown {
@@ -51,6 +57,19 @@ async function allowAgent(resourceType: PolicyResourceType, action: PolicyAction
   } })
 }
 
+function devContext(): ActorContext {
+  return {
+    tenant: { organizationId, teamId },
+    app: 'dev',
+    actChain: [],
+    actor: { type: 'agent', id: 'agent_dev' },
+    onBehalfOf: { uoaUserId: 'usr_dev', role: 'owner' },
+    provenance: { runId: 'dynamic-list-test', toolCallId: 'refresh', requestId: key },
+    requestId: randomUUID(),
+    now: new Date('2026-08-24T12:00:00.000Z'),
+  }
+}
+
 beforeAll(async () => {
   const started = await startTestServer()
   client = started.client
@@ -69,19 +88,33 @@ beforeAll(async () => {
   for (const [resource, action] of [
     ['list', 'create'], ['list', 'edit'], ['list', 'view'],
     ['view', 'create'], ['view', 'edit'], ['view', 'view'],
-    ['record', 'view'], ['attribute', 'view'], ['attribute', 'edit'],
+    ['record', 'view'], ['record', 'edit'], ['attribute', 'view'], ['attribute', 'edit'],
   ] as const) await allowAgent(resource, action)
-  const person = (await loadSchema(db, { organizationId, teamId })).objectTypesBySlug.get('person')
-  if (person === undefined) throw new Error('person template missing')
+  const schema = await loadSchema(db, { organizationId, teamId })
+  const person = schema.objectTypesBySlug.get('person')
+  const company = schema.objectTypesBySlug.get('company')
+  if (person === undefined || company === undefined) throw new Error('standard template missing')
   recordId = (await db.record.create({ data: {
     organizationId, teamId, objectTypeId: person.id,
     data: { name: { given: 'MCP', family: key } }, displayName: `MCP ${key}`,
     visibility: 'team', createdOnBehalfOf: 'usr_dev', createdByType: 'system', createdById: createdBy,
   } })).id
+  matchingCompanyId = (await db.record.create({ data: {
+    organizationId, teamId, objectTypeId: company.id,
+    data: { name: `Dynamic Match ${key}`, domains: [`dynamic-${key}.test`] },
+    displayName: `Dynamic Match ${key}`, visibility: 'team', createdOnBehalfOf: 'usr_dev',
+    createdByType: 'system', createdById: createdBy,
+  } })).id
+  changedCompanyId = (await db.record.create({ data: {
+    organizationId, teamId, objectTypeId: company.id,
+    data: { name: `Dynamic Change ${key}`, domains: [`old-${key}.test`] },
+    displayName: `Dynamic Change ${key}`, visibility: 'team', createdOnBehalfOf: 'usr_dev',
+    createdByType: 'system', createdById: createdBy,
+  } })).id
 })
 
 afterAll(async () => {
-  await db.list.deleteMany({ where: { organizationId, teamId, slug: listSlug } })
+  await db.list.deleteMany({ where: { organizationId, teamId, slug: { in: [listSlug, dynamicListSlug] } } })
   await db.view.deleteMany({ where: { organizationId, teamId, slug: viewSlug } })
   await db.record.deleteMany({ where: { organizationId, teamId, createdById: createdBy } })
   await db.policyRule.deleteMany({ where: { organizationId, teamId, createdById: createdBy } })
@@ -94,11 +127,12 @@ afterAll(async () => {
 })
 
 describe('list and view MCP tools', () => {
-  it('discovers all seven tools and executes the list/view lifecycle', async () => {
+  it('discovers all list/view tools and executes the list/view lifecycle', async () => {
     const listed = await client.listTools()
     const names = listed.tools.map((tool) => tool.name)
     for (const name of [
-      'crm_list_create', 'crm_list_add', 'crm_list_remove', 'crm_list_entries',
+      'crm_list_create', 'crm_list_update', 'crm_list_status',
+      'crm_list_add', 'crm_list_remove', 'crm_list_entries',
       'crm_view_save', 'crm_view_run', 'crm_view_delete',
     ]) expect(names).toContain(name)
     const createTool = listed.tools.find((tool) => tool.name === 'crm_list_create')
@@ -106,6 +140,7 @@ describe('list and view MCP tools', () => {
     expect(createTool?.inputSchema).toMatchObject({ properties: {
       slug: { description: expect.any(String) }, name: { description: expect.any(String) },
       description: { description: expect.any(String) }, object_type: { description: expect.any(String) },
+      kind: { description: expect.any(String) }, filter: { description: expect.any(String) },
       attributes: { description: expect.any(String) },
     } })
     const created = CrmListCreate.out.parse(structured(await client.callTool({
@@ -151,5 +186,52 @@ describe('list and view MCP tools', () => {
     expect(CrmViewDelete.out.parse(structured(await client.callTool({
       name: 'crm_view_delete', arguments: { view: viewSlug },
     })))).toEqual({ deleted: true })
+  })
+
+  it('creates a dynamic company list, refreshes after a qualifying update, and blocks manual entries', async () => {
+    const created = CrmListCreate.out.parse(structured(await client.callTool({
+      name: 'crm_list_create', arguments: {
+        slug: dynamicListSlug, name: 'Dynamic MCP companies', object_type: 'company',
+        kind: 'dynamic', filter: { attribute: 'domains', op: 'contains', value: `dynamic-${key}.test` },
+      },
+    })))
+    expect(created).toMatchObject({ kind: 'dynamic', refresh_state: 'refreshing', entry_count: 0 })
+    expect(ToolResult.parse(await client.callTool({
+      name: 'crm_list_entries', arguments: { list: dynamicListSlug },
+    })).structuredContent).toMatchObject({ code: 'SCHEMA_CONFLICT' })
+    await refreshDynamicListMembership(db, { organizationId, teamId }, devContext(), created.id, 1, devContext().now, writeAudit)
+    expect(CrmListStatus.out.parse(structured(await client.callTool({
+      name: 'crm_list_status', arguments: { list: dynamicListSlug },
+    })))).toMatchObject({ status: { refresh_state: 'ready', evaluation_version: 1 } })
+    expect(CrmListEntries.out.parse(structured(await client.callTool({
+      name: 'crm_list_entries', arguments: { list: dynamicListSlug },
+    }))).entries.map((entry) => entry.record.id)).toEqual([matchingCompanyId])
+
+    const changed = await db.record.findUniqueOrThrow({ where: { id: changedCompanyId }, select: { version: true } })
+    await client.callTool({
+      name: 'crm_record_update',
+      arguments: {
+        id: changedCompanyId, data: { domains: [`dynamic-${key}.test`] },
+        expected_version: changed.version,
+      },
+    })
+    await refreshDynamicListMembership(db, { organizationId, teamId }, devContext(), created.id, 1, devContext().now, writeAudit)
+    expect(CrmListEntries.out.parse(structured(await client.callTool({
+      name: 'crm_list_entries', arguments: { list: dynamicListSlug },
+    }))).entries.map((entry) => entry.record.id).sort()).toEqual([changedCompanyId, matchingCompanyId].sort())
+    expect(ToolResult.parse(await client.callTool({
+      name: 'crm_list_add', arguments: { list: dynamicListSlug, entries: [{ record_id: matchingCompanyId }] },
+    })).structuredContent).toMatchObject({ code: 'SCHEMA_CONFLICT' })
+
+    const updated = CrmListUpdate.out.parse(structured(await client.callTool({
+      name: 'crm_list_update', arguments: {
+        list: dynamicListSlug, filter: { attribute: 'domains', op: 'contains', value: `old-${key}.test` },
+      },
+    })))
+    expect(updated).toMatchObject({ refresh_state: 'refreshing', definition: { evaluation_version: 2 } })
+    await refreshDynamicListMembership(db, { organizationId, teamId }, devContext(), created.id, 2, devContext().now, writeAudit)
+    expect(CrmListEntries.out.parse(structured(await client.callTool({
+      name: 'crm_list_entries', arguments: { list: dynamicListSlug },
+    }))).entries).toEqual([])
   })
 })

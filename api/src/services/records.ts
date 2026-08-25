@@ -49,7 +49,7 @@ import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } f
 import { requireVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
 import { standardRecordWrite, type RecordWriteIntegration } from './record-write-integration.js'
-type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule'>
+type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule' | 'list'>
 type CommonWriteInput = { idempotencyKey?: string; reason?: string }
 export type CreateRecordServiceInput = CreateRecordInput & CommonWriteInput
 export type UpdateRecordServiceInput = UpdateRecordInput & CommonWriteInput

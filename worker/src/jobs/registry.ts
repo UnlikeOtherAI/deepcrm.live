@@ -17,6 +17,7 @@ import {
 } from './record-reindex.js'
 import { createDedupScanHandler, DEDUP_SCAN_JOB } from './dedup-scan.js'
 import { derivedRefreshHandler, DERIVED_REFRESH_JOB } from './derived-refresh.js'
+import { listRefreshHandler, LIST_REFRESH_JOB } from './list-refresh.js'
 import { createRetentionHandler, RETENTION_JOB, type RetentionConfig } from './retention.js'
 import { tenantReparentHandler, TENANT_REPARENT_JOB } from './tenant-reparent.js'
 
@@ -43,6 +44,7 @@ export function createHandlers(
     [RECORD_REINDEX_JOB]: createRecordReindexHandler(embedder),
     [RECORD_REINDEX_NEIGHBOURS_JOB]: createRecordReindexNeighboursHandler(),
     [DERIVED_REFRESH_JOB]: derivedRefreshHandler,
+    [LIST_REFRESH_JOB]: listRefreshHandler,
     [CHANGE_DELIVER_JOB]: createChangeDeliverHandler(
       secretBox,
       createSafeFetch(),

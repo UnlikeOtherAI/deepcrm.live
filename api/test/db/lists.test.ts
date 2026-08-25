@@ -1,5 +1,11 @@
 import { createDb, dropTenant, seedTenant, writeAudit, type TenantRef } from '@deepcrm/db'
-import { applyTemplate, createProjectionLinkWriter, FakeEmbedder, loadSchema } from '@deepcrm/schema-engine'
+import {
+  applyTemplate,
+  createProjectionLinkWriter,
+  FakeEmbedder,
+  loadSchema,
+  refreshDynamicListMembership,
+} from '@deepcrm/schema-engine'
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -10,7 +16,9 @@ import {
   createList,
   getList,
   listEntries,
+  listStatus,
   removeListEntries,
+  updateList,
 } from '../../src/services/lists.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import { deleteView, getView, listViews, runView, saveView } from '../../src/services/views.js'
@@ -134,6 +142,42 @@ describe('list and view services', () => {
     expect(await removeListEntries(deps, target.ctx, 'target_people', [target.people[0]!]))
       .toEqual({ removed: 1 })
     expect((await listEntries(deps, target.ctx, { list: 'target_people' })).entries).toEqual([])
+  })
+
+  it('creates dynamic object lists, refreshes visible membership, and rejects manual writes', async () => {
+    const target = await fixture()
+    const created = await createList(deps, target.ctx, {
+      slug: 'dynamic_people', name: 'Dynamic people', objectType: 'person', kind: 'dynamic',
+      filter: { system: 'display_name', op: 'starts_with', value: 'List' },
+    })
+    expect(created).toMatchObject({
+      slug: 'dynamic_people', kind: 'dynamic', refresh_state: 'refreshing',
+      definition: { object_type: 'person', evaluation_version: 1 },
+    })
+    await expect(listEntries(deps, target.ctx, { list: 'dynamic_people' }))
+      .rejects.toMatchObject({ code: 'SCHEMA_CONFLICT' })
+    await db.record.update({
+      where: { id: target.people[1]! },
+      data: { visibility: 'private', createdOnBehalfOf: 'different-user' },
+    })
+    await denyRecord(target, target.people[2]!)
+    await refreshDynamicListMembership(db, target.tenant, target.ctx, created.id, 1, now, writeAudit)
+    expect(await listStatus(deps, target.ctx, 'dynamic_people')).toMatchObject({
+      status: { refresh_state: 'ready', evaluation_version: 1 },
+    })
+    expect((await listEntries(deps, target.ctx, { list: 'dynamic_people' })).entries.map((entry) => entry.record.id))
+      .toEqual([target.people[0], target.people[3]])
+    await expect(addListEntries(deps, target.ctx, {
+      list: 'dynamic_people', entries: [{ recordId: target.people[0]!, data: {} }],
+    })).rejects.toMatchObject({ code: 'SCHEMA_CONFLICT' })
+
+    const updated = await updateList(deps, target.ctx, {
+      list: 'dynamic_people', filter: { system: 'display_name', op: 'eq', value: 'List3 Person' },
+    })
+    expect(updated).toMatchObject({ refresh_state: 'refreshing', definition: { evaluation_version: 2 } })
+    await refreshDynamicListMembership(db, target.tenant, target.ctx, created.id, 2, now, writeAudit)
+    expect((await listEntries(deps, target.ctx, { list: 'dynamic_people' })).entries.map((entry) => entry.record.id))
+      .toEqual([target.people[3]])
   })
 
   it('versions exact saved queries, runs and lists them, blocks denied target moves, then deletes', async () => {

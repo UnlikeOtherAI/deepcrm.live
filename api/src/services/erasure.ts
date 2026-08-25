@@ -15,7 +15,7 @@ import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
 import { checkPolicy } from './policy.js'
 import { requireVisibleRecord } from './record-visibility.js'
 
-type ErasureTx = RecordTx & QueueEnqueueTx & Pick<Db, 'recordSearch' | 'suppressionEntry' | 'webhook'>
+type ErasureTx = RecordTx & QueueEnqueueTx & Pick<Db, 'recordSearch' | 'suppressionEntry' | 'webhook' | 'list'>
 export type RecordEraseOutput = Pick<EraseResult, 'erased' | 'suppressed'>
 
 async function deniedAudit(deps: AppDeps, ctx: ActorContext, recordId: string): Promise<void> {
