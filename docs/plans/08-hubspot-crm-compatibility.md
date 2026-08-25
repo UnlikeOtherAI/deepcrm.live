@@ -419,7 +419,7 @@ the exact disposable database is dropped and no API/worker process remains.
 
 ---
 
-### T68 — Human MCP interoperability acceptance (HUMAN-GATED)
+### T68 ✅ — Human MCP interoperability acceptance (HUMAN-GATED)
 
 **Depends on:** T67. **Spec:** this file; `docs/done/phase-8-regression.md`.
 
