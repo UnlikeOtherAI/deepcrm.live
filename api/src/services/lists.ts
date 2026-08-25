@@ -158,6 +158,8 @@ function presentAttribute(attribute: LoadedList['attributes'][number]) {
     is_required: attribute.isRequired, is_unique: attribute.isUnique, is_indexed: attribute.isIndexed,
     sensitivity: attribute.sensitivity, default_value: attribute.defaultValue ?? undefined,
     is_system: attribute.isSystem, position: attribute.position,
+    value_source: 'stored',
+    derivation: null,
     archived_at: attribute.archivedAt?.toISOString() ?? null,
   })
 }

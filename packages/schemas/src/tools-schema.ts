@@ -11,6 +11,9 @@ import {
 } from './schema-specs.js'
 import { MatchingRule, MatchingRuleActivation } from './matching.js'
 import { Reason, Slug } from './primitives.js'
+import { AttributeDerivationDetail, AttributeValueSource } from './semantic-foundation.js'
+
+const DerivedValueSource = AttributeValueSource.exclude(['stored', 'system'])
 
 export const CrmSchemaGet = {
   in: z.object({
@@ -90,6 +93,39 @@ export const CrmAttributeArchive = {
     archived: z.literal(true),
     records_with_values: z.number().int().nonnegative(),
   }),
+}
+
+export const CrmDerivedAttributeDefine = {
+  in: AttributeSpec.omit({ default_value: true, is_multi: true, is_unique: true }).extend({
+    object_type: Slug.describe('object type that owns the derived attribute'),
+    value_source: DerivedValueSource.describe('formula, rollup, relation_sync or score'),
+    derivation_config: z.record(z.unknown()).describe('deterministic source-specific derivation definition'),
+  }),
+  out: AttributeDetail,
+}
+
+export const CrmDerivedAttributeUpdate = {
+  in: z.object({
+    object_type: Slug.describe('object type that owns the derived attribute'),
+    attribute: Slug.describe('derived attribute slug'),
+    name: z.string().min(1).max(120).optional().describe('replacement display name'),
+    description: z.string().max(500).optional().describe('replacement description'),
+    is_required: z.boolean().optional().describe('whether the materialized value is expected for every record'),
+    is_indexed: z.boolean().optional().describe('whether filtering and sorting are indexed'),
+    sensitivity: Sensitivity.optional().describe('replacement data sensitivity'),
+    derivation_config: z.record(z.unknown()).optional().describe('replacement deterministic derivation definition'),
+  }).strict(),
+  out: AttributeDetail,
+}
+
+export const CrmDerivedRefreshStatus = {
+  in: z.object({
+    object_type: Slug.optional().describe('optional object type slug to filter derived attributes'),
+    attribute: Slug.optional().describe('optional derived attribute slug; requires object_type'),
+  }).strict(),
+  out: z.object({
+    attributes: z.array(AttributeDerivationDetail),
+  }).strict(),
 }
 
 export const CrmRelationTypeDefine = {

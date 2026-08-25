@@ -28,6 +28,7 @@ import { presentLink, type PublicLink } from './link-presenter.js'
 import { checkPolicy, type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { findVisibleRecord, requireVisibleRecord, type VisibleRecord } from './record-visibility.js'
+import { enqueueDerivedRefresh } from './record-mutation-effects.js'
 
 type LinkServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook'>
 type CommonInput = { idempotencyKey?: string; reason?: string }
@@ -218,6 +219,7 @@ async function enqueueChanges(
       priority: 100,
     })
   }
+  await enqueueDerivedRefresh(tx, ctx, touchedRecordIds, `derived:${ctx.tenant.teamId}:${lastSeq}`)
   const activeWebhooks = await tx.webhook.count({
     where: { ...tenantWhere(ctx.tenant), active: true },
   })

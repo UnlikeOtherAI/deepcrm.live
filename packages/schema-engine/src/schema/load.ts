@@ -1,6 +1,8 @@
 import {
   tenantWhere,
   type Attribute,
+  type AttributeDerivation,
+  type AttributeDerivationDependency,
   type Db,
   type List,
   type MatchingRule,
@@ -14,7 +16,9 @@ import {
 } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
-export type LoadedAttribute = Readonly<Attribute>
+export type LoadedAttribute = Readonly<Attribute & {
+  derivation?: (AttributeDerivation & { dependencies: AttributeDerivationDependency[] }) | null
+}>
 export type LoadedObjectType = Readonly<ObjectType & {
   attributes: readonly LoadedAttribute[]
 }>
@@ -63,7 +67,7 @@ export type LoadedSchema = Readonly<{
 
 type TeamVersion = { id: string; schemaVersion: number }
 type MetadataRows = {
-  objectTypes: Array<ObjectType & { attributes: Attribute[] }>
+  objectTypes: Array<ObjectType & { attributes: LoadedAttribute[] }>
   relationTypes: RelationType[]
   pipelines: Array<Pipeline & { stages: PipelineStage[] }>
   lists: Array<List & { attributes: Attribute[] }>
@@ -393,7 +397,7 @@ export async function loadSchemaFromSource(
   throw schemaConflict('schema_version_changed_during_load')
 }
 
-export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchema> {
+export async function loadSchema(db: Db, tenant: TenantRef, options: { useCache?: boolean } = {}): Promise<LoadedSchema> {
   const source: SchemaLoadSource = {
     readVersion: (target) => db.team.findFirst({
       where: { id: target.teamId, organizationId: target.organizationId },
@@ -407,6 +411,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
           include: {
             attributes: {
               where: tenantWhere(target),
+              include: { derivation: { include: { dependencies: true } } },
               orderBy: { position: 'asc' },
             },
           },
@@ -438,7 +443,7 @@ export async function loadSchema(db: Db, tenant: TenantRef): Promise<LoadedSchem
       return { objectTypes, relationTypes, pipelines, lists, views, matchingRules }
     },
   }
-  return loadSchemaFromSource(source, tenant)
+  return loadSchemaFromSource(source, tenant, options)
 }
 
 export async function loadSchemaForMatchingBootstrap(
@@ -456,7 +461,13 @@ export async function loadSchemaForMatchingBootstrap(
       const [objectTypes, relationTypes, pipelines, lists, views, matchingRules] = await Promise.all([
         db.objectType.findMany({
           where: activeWhere,
-          include: { attributes: { where: tenantWhere(target), orderBy: { position: 'asc' } } },
+          include: {
+            attributes: {
+              where: tenantWhere(target),
+              include: { derivation: { include: { dependencies: true } } },
+              orderBy: { position: 'asc' },
+            },
+          },
           orderBy: { slug: 'asc' },
         }),
         db.relationType.findMany({ where: activeWhere, orderBy: { slug: 'asc' } }),

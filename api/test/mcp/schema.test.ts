@@ -111,7 +111,7 @@ describe('schema MCP tools and resources', () => {
   it('lists schema tool input descriptions', async () => {
     const tools = await client.listTools()
     const schemaTools = tools.tools.filter((tool) => tool.name.startsWith('crm_'))
-    expect(schemaTools).toHaveLength(60)
+    expect(schemaTools).toHaveLength(63)
     for (const tool of schemaTools) {
       const parsed = z.object({ properties: z.record(z.object({ description: z.string().min(1) })) })
         .parse(tool.inputSchema)

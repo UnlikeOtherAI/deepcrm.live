@@ -370,7 +370,7 @@ describe('record service security boundaries', () => {
       'create reason', 'create reason', 'create reason', 'update reason',
       'assert reason', 'delete reason', 'restore reason',
     ])
-    expect(jobs).toHaveLength(5)
+    expect(jobs).toHaveLength(10)
     expect(replays).toHaveLength(5)
     expect(replays.every((replay) => replay.result !== null)).toBe(true)
     expect(audits.map((audit) => audit.action).sort()).toEqual([

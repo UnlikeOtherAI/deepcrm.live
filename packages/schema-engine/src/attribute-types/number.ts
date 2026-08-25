@@ -13,10 +13,8 @@ const configSchema = z.object({
   }
 })
 
-function canonicalDecimal(value: number, config: unknown): string {
+function checkedDecimal(decimal: Decimal, config: unknown): string {
   const parsedConfig = configSchema.parse(config)
-  const input = z.number().finite().parse(value)
-  const decimal = new Decimal(input.toString())
   if (parsedConfig.precision !== undefined && decimal.decimalPlaces() > parsedConfig.precision) {
     throw new Error(`number has more than ${parsedConfig.precision} decimal places`)
   }
@@ -27,6 +25,17 @@ function canonicalDecimal(value: number, config: unknown): string {
     throw new Error('number is above max')
   }
   return decimal.toFixed()
+}
+
+function canonicalDecimal(value: number, config: unknown): string {
+  const input = z.number().finite().parse(value)
+  return checkedDecimal(new Decimal(input.toString()), config)
+}
+
+function storedDecimal(value: unknown, config: unknown): string {
+  if (typeof value === 'number') return canonicalDecimal(value, config)
+  if (typeof value !== 'string') throw new Error('number must be canonical decimal text')
+  return checkedDecimal(new Decimal(value), config)
 }
 
 export const number: AttributeTypeDef = {
@@ -41,7 +50,7 @@ export const number: AttributeTypeDef = {
     }
   }),
   normalize: (value, config) => canonicalDecimal(z.number().finite().parse(value), config),
-  toSearchText: (value, config) => canonicalDecimal(z.number().finite().parse(value), config),
+  toSearchText: (value, config) => storedDecimal(value, config),
   supportsMulti: true,
   supportsUnique: true,
   supportsIndexed: true,

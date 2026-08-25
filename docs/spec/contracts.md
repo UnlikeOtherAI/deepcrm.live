@@ -455,6 +455,19 @@ export const CrmAttributeUpdate = { in: z.object({ object_type: Slug, attribute:
   sensitivity: Sensitivity.optional(), default_value: z.unknown().optional() }), out: AttributeDetail }
 export const CrmAttributeArchive = { in: z.object({ object_type: Slug, attribute: Slug, reason: Reason }),
   out: z.object({ archived: z.literal(true), records_with_values: z.number().int() }) }
+const DerivedValueSource = AttributeValueSource.exclude(['stored','system'])
+export const CrmDerivedAttributeDefine = { in: AttributeSpec.omit({
+  default_value: true, is_multi: true, is_unique: true,
+}).extend({ object_type: Slug, value_source: DerivedValueSource,
+  derivation_config: z.record(z.unknown()) }), out: AttributeDetail }
+export const CrmDerivedAttributeUpdate = { in: z.object({ object_type: Slug, attribute: Slug,
+  name: z.string().min(1).max(120).optional(), description: z.string().max(500).optional(),
+  is_required: z.boolean().optional(), is_indexed: z.boolean().optional(),
+  sensitivity: Sensitivity.optional(), derivation_config: z.record(z.unknown()).optional() }),
+  out: AttributeDetail }
+export const CrmDerivedRefreshStatus = { in: z.object({
+  object_type: Slug.optional(), attribute: Slug.optional(),
+}), out: z.object({ attributes: z.array(AttributeDerivationDetail) }) }
 export const CrmRelationTypeDefine = { in: z.object({ slug: Slug,
   from_object_type: Slug.nullable().describe('null = any object type'),
   to_object_type: Slug.nullable().describe('null = any object type'),

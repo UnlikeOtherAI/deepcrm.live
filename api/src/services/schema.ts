@@ -5,6 +5,7 @@ import {
   archiveObjectType,
   archiveRelationType,
   defineAttribute,
+  defineDerivedAttribute,
   defineObjectType,
   defineObjectTypeWithAttributes,
   defineRelationType,
@@ -14,6 +15,7 @@ import {
   retryMatchingRules,
   setMatchingRules,
   updateAttribute,
+  updateDerivedAttribute,
   updateObjectType,
   updateRelationType,
   type LoadedObjectType,
@@ -38,7 +40,7 @@ export async function getSchema(
   objectType?: string,
 ): Promise<LoadedSchema | LoadedObjectType> {
   await requireSchemaView(deps, ctx)
-  const schema = await loadSchema(deps.db, ctx.tenant)
+  const schema = await loadSchema(deps.db, ctx.tenant, { useCache: false })
   if (objectType === undefined) return schema
   const selected = schema.objectTypesBySlug.get(objectType)
   if (selected === undefined) {
@@ -133,6 +135,15 @@ export const defineSchemaAttribute = (
   deps, ctx, (tx, author) => defineAttribute(tx, ctx.tenant, author, input), approval,
 )
 
+export const defineSchemaDerivedAttribute = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  input: Parameters<typeof defineDerivedAttribute>[3],
+  approval?: ApprovalConsumption,
+) => runSchemaDefine(
+  deps, ctx, (tx, author) => defineDerivedAttribute(tx, ctx.tenant, author, input), approval,
+)
+
 export const defineSchemaRelation = (
   deps: AppDeps,
   ctx: ActorContext,
@@ -177,6 +188,45 @@ export const updateSchemaAttribute = (
   ctx,
   (tx, author) => updateAttribute(tx, ctx.tenant, author, objectSlug, slug, input),
 )
+
+export const updateSchemaDerivedAttribute = (
+  deps: AppDeps,
+  ctx: ActorContext,
+  objectSlug: string,
+  slug: string,
+  input: Parameters<typeof updateDerivedAttribute>[5],
+) => runSchemaDefine(
+  deps,
+  ctx,
+  (tx, author) => updateDerivedAttribute(tx, ctx.tenant, author, objectSlug, slug, input),
+)
+
+export async function derivedRefreshStatus(
+  deps: AppDeps,
+  ctx: ActorContext,
+  input: { objectType?: string; attribute?: string },
+) {
+  await requireSchemaView(deps, ctx)
+  if (input.attribute !== undefined && input.objectType === undefined) {
+    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Derived status arguments are invalid', {
+      issues: [{ path: '/object_type', message: 'Required when attribute is supplied' }],
+    })
+  }
+  const schema = await loadSchema(deps.db, ctx.tenant, { useCache: false })
+  const objectTypes = input.objectType === undefined
+    ? schema.objectTypes
+    : [schema.objectTypesBySlug.get(input.objectType)].filter((value): value is LoadedObjectType => value !== undefined)
+  if (input.objectType !== undefined && objectTypes.length === 0) {
+    throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type')
+  }
+  const attributes = objectTypes.flatMap((objectType) => objectType.attributes)
+    .filter((attribute) => attribute.derivation !== undefined && attribute.derivation !== null)
+    .filter((attribute) => input.attribute === undefined || attribute.slug === input.attribute)
+  if (input.attribute !== undefined && attributes.length === 0) {
+    throw new ServiceError(ErrorCode.UNKNOWN_ATTRIBUTE, 'Attribute is not active in this tenant')
+  }
+  return { schema, attributes }
+}
 
 export const archiveSchemaAttribute = (
   deps: AppDeps,

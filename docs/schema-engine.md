@@ -1000,7 +1000,21 @@ or commerce templates without creating template-named storage:
   one `attribute_derivations` row with deterministic config, dependency edges,
   refresh state and materialisation policy. `system` is read-only and virtual
   unless its owning service explicitly materialises it. Direct writes to any
-  non-`stored` source fail with `READ_ONLY_ATTRIBUTE`.
+  non-`stored` source fail with `ATTRIBUTE_READ_ONLY`.
+- `crm_derived_attribute_define` and `crm_derived_attribute_update` create and
+  revise those rows. Formula definitions use a bounded deterministic AST;
+  rollups aggregate active related records through the declared relation;
+  relation sync copies one declared source attribute; score definitions sum
+  deterministic weighted predicates with optional fixed-clock decay. Definition
+  changes set `refresh_state = pending` and enqueue bounded
+  `derived.refresh` jobs for existing records before the terminal schema audit.
+- Record writes, link/unlink operations, merge/restore/erasure paths that call
+  the shared mutation effects, and pipeline stage changes enqueue
+  `derived.refresh` work with ids/counts only. The worker resolves same-record
+  and related-record dependencies, validates the computed value against the
+  declared attribute type, materialises permitted values into `records.data`,
+  marks the derivation `ready` or `failed`, and reindexes changed records.
+  Ordinary record create/update never accepts derived keys in its data patch.
 - `attribute_groups` are display/schema metadata only. They order and label
   attributes inside an object type. Archiving or reordering a group never changes
   record data, sensitivity, visibility or policy.

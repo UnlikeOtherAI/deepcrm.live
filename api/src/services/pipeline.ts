@@ -35,6 +35,7 @@ import {
   selectedAttribute,
   selectedObjectType,
 } from './record-query-authorization.js'
+import { enqueueDerivedRefresh } from './record-mutation-effects.js'
 import { runSchemaDefine } from './schema.js'
 
 export type PipelineSummaryInput = {
@@ -55,7 +56,7 @@ type StageSetReservation =
   | { kind: 'none' }
   | { kind: 'replay'; result: StageSetResult }
   | { kind: 'reserved'; id: string }
-type StageSetTx = Parameters<typeof engineSetRecordStage>[0] & Pick<AppDeps['db'], 'idempotencyReplay'>
+type StageSetTx = Parameters<typeof engineSetRecordStage>[0] & Pick<AppDeps['db'], 'idempotencyReplay' | 'queueJob'>
 
 function invalid(path: string, message: string): never {
   throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Pipeline arguments are invalid', {
@@ -312,6 +313,14 @@ export async function setPipelineStage(deps: AppDeps, ctx: ActorContext, input: 
         reason: parsed.reason,
         beforeTerminalAudit: async (pending) => {
           await storeStageSetReplay(tx, ctx, reservation, presentStageSet(pending))
+          if (pending.changed) {
+            await enqueueDerivedRefresh(
+              tx,
+              ctx,
+              [pending.recordId],
+              `derived:${ctx.tenant.teamId}:stage:${pending.intervalId ?? pending.recordId}`,
+            )
+          }
         },
       })
       return presentStageSet(engineResult)

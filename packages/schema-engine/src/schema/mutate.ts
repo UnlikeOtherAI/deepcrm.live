@@ -22,14 +22,14 @@ function schemaConflict(detail: string): ServiceError {
 function unknownObjectType(slug: string): ServiceError {
   return new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Object type is not active in this tenant', { slug })
 }
-function unknownAttribute(slug: string): ServiceError {
+export function unknownAttribute(slug: string): ServiceError {
   return new ServiceError(ErrorCode.UNKNOWN_ATTRIBUTE, 'Attribute is not active in this tenant', { slug })
 }
 function isUniqueConstraint(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002'
 }
 
-function audit(
+export function audit(
   tx: Tx,
   tenant: TenantRef,
   actor: AuditActor,
@@ -62,7 +62,7 @@ export async function bumpSchemaVersion(tx: Tx, tenant: TenantRef): Promise<void
   })
   if (result.count !== 1) throw schemaConflict('tenant_not_found')
 }
-async function object(tx: Tx, tenant: TenantRef, slug: string) {
+export async function object(tx: Tx, tenant: TenantRef, slug: string) {
   const value = await tx.objectType.findFirst({ where: { ...tenantWhere(tenant), slug, archivedAt: null } })
   if (value === null) throw unknownObjectType(slug)
   return value
@@ -106,7 +106,7 @@ function nestedJsonValue(value: unknown): Prisma.InputJsonValue | null {
   throw schemaConflict('invalid_json_value')
 }
 
-function jsonValue(value: unknown): StoredJsonValue {
+export function jsonValue(value: unknown): StoredJsonValue {
   if (value === null) return Prisma.JsonNull
   const result = nestedJsonValue(value)
   if (result === null) throw schemaConflict('invalid_json_value')
@@ -208,7 +208,7 @@ export async function ensureBackingRelation(
   }
 }
 
-async function defineAttributeInternal(
+export async function defineAttributeInternal(
   tx: Tx, tenant: TenantRef, actor: AuditActor, input: AttributeInput, finalize: boolean,
 ) {
   const objectType = await object(tx, tenant, input.objectType)

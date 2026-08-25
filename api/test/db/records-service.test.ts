@@ -288,14 +288,14 @@ describe('record service policy, transaction, and idempotency seam', () => {
     expect(replayed).toEqual(created)
     expect(created).toMatchObject({ created: true, changed: true, record: { version: 1 } })
     expect(await state(target)).toEqual({
-      records: 1, changes: 3, jobs: 1, replays: 1, audits: 1, uniqueKeys: 1,
+      records: 1, changes: 3, jobs: 2, replays: 1, audits: 1, uniqueKeys: 1,
     })
     await expect(createRecord(deps, ctx, {
       ...input,
       data: { name: 'Grace', email: 'grace@example.com' },
     })).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' })
     expect(await state(target)).toEqual({
-      records: 1, changes: 3, jobs: 1, replays: 1, audits: 1, uniqueKeys: 1,
+      records: 1, changes: 3, jobs: 2, replays: 1, audits: 1, uniqueKeys: 1,
     })
   })
 
@@ -376,7 +376,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
     }
     await expect(first).resolves.toMatchObject({ created: true, changed: true })
     expect(await state(target)).toEqual({
-      records: 1, changes: 2, jobs: 1, replays: 1, audits: 1, uniqueKeys: 0,
+      records: 1, changes: 2, jobs: 2, replays: 1, audits: 1, uniqueKeys: 0,
     })
   })
 

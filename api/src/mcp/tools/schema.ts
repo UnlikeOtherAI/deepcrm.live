@@ -5,6 +5,9 @@ import {
   CrmAttributeArchive,
   CrmAttributeDefine,
   CrmAttributeUpdate,
+  CrmDerivedAttributeDefine,
+  CrmDerivedAttributeUpdate,
+  CrmDerivedRefreshStatus,
   CrmMatchingRuleSet,
   CrmObjectTypeArchive,
   CrmObjectTypeDefine,
@@ -25,14 +28,17 @@ import {
   archiveSchemaObject,
   archiveSchemaRelation,
   defineSchemaAttribute,
+  defineSchemaDerivedAttribute,
   defineSchemaObjectWithAttributes,
   defineSchemaRelation,
+  derivedRefreshStatus,
   getSchema,
   previewSchemaAttributeArchive,
   previewSchemaObjectArchive,
   previewSchemaRelationArchive,
   replaceSchemaMatchingRules,
   updateSchemaAttribute,
+  updateSchemaDerivedAttribute,
   updateSchemaObject,
 } from '../../services/schema.js'
 import { presentAttribute, presentObjectType, presentRelation, presentSchema } from '../schema-presenters.js'
@@ -243,6 +249,68 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
         recomputeKeys: args.recompute_keys,
       })
       return jsonResult(presentAttribute(await latestSchema(deps, ctx), args.object_type, args.attribute))
+    },
+  })
+
+  defineTool(server, {
+    name: 'crm_derived_attribute_define',
+    description: 'Define a read-only derived attribute using a bounded formula, rollup, relation sync, or score definition. Values are materialized; direct record writes fail.',
+    input: CrmDerivedAttributeDefine.in.shape,
+    handler: withApproval(deps, ctx, 'crm_derived_attribute_define', CrmDerivedAttributeDefine.in.shape, {
+      resourceType: 'schema',
+      message: (args) => `Approve defining derived attribute '${args.slug}' on '${args.object_type}'? Requires an admin.`,
+    }, async (args, _mrtr, approval) => {
+      await defineSchemaDerivedAttribute(deps, ctx, {
+        objectType: args.object_type,
+        slug: args.slug,
+        name: args.name,
+        description: args.description,
+        type: args.type,
+        config: args.config,
+        isRequired: args.is_required,
+        isIndexed: args.is_indexed,
+        sensitivity: args.sensitivity,
+        valueSource: args.value_source,
+        derivationConfig: args.derivation_config,
+      }, approval)
+      return jsonResult(presentAttribute(await latestSchema(deps, ctx), args.object_type, args.slug))
+    }),
+  })
+
+  defineTool(server, {
+    name: 'crm_derived_attribute_update',
+    description: 'Update a derived attribute definition or metadata. Definition changes mark refresh pending and may change materialized values after worker refresh.',
+    input: CrmDerivedAttributeUpdate.in.shape,
+    handler: async (args) => {
+      await updateSchemaDerivedAttribute(deps, ctx, args.object_type, args.attribute, {
+        name: args.name,
+        description: args.description,
+        isRequired: args.is_required,
+        isIndexed: args.is_indexed,
+        sensitivity: args.sensitivity,
+        derivationConfig: args.derivation_config,
+      })
+      return jsonResult(presentAttribute(await latestSchema(deps, ctx), args.object_type, args.attribute))
+    },
+  })
+
+  defineTool(server, {
+    name: 'crm_derived_refresh_status',
+    description: 'Read compact refresh state for derived attributes. Use after writes or definition changes to see pending, refreshing, ready, or failed materialization.',
+    input: CrmDerivedRefreshStatus.in.shape,
+    handler: async (args) => {
+      const result = await derivedRefreshStatus(deps, ctx, {
+        objectType: args.object_type,
+        attribute: args.attribute,
+      })
+      return jsonResult({
+        attributes: result.attributes.map((attributeValue) => {
+          const parsed = presentAttribute(result.schema, (
+            result.schema.objectTypesById.get(attributeValue.objectTypeId ?? '')?.slug ?? args.object_type ?? ''
+          ), attributeValue.slug)
+          return parsed.derivation
+        }).filter((value): value is NonNullable<typeof value> => value !== null && value !== undefined),
+      })
     },
   })
 

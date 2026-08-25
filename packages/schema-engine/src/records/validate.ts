@@ -61,7 +61,9 @@ function invalidAttribute(
 }
 
 function virtual(attribute: LoadedAttribute): boolean {
-  return reservedVirtualSlugs.has(attribute.slug) || attribute.type === 'timestamp_system'
+  return reservedVirtualSlugs.has(attribute.slug)
+    || attribute.type === 'timestamp_system'
+    || attribute.valueSource !== 'stored'
 }
 
 function issue(issues: ValidationIssue[], path: string, message: string): void {
@@ -254,7 +256,7 @@ function currentRecordData(
       reservedVirtualSlugs.has(slug) ||
       attribute === undefined ||
       attribute.type === 'record_reference' ||
-      virtual(attribute)
+      attribute.type === 'timestamp_system'
     ) invalid(issues, slug)
   }
   return data

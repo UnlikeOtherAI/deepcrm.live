@@ -19,8 +19,10 @@ import {
   archiveSchemaObject,
   archiveSchemaRelation,
   defineSchemaAttribute,
+  defineSchemaDerivedAttribute,
   defineSchemaObject,
   defineSchemaRelation,
+  derivedRefreshStatus,
   getSchema,
   replaceSchemaMatchingRules,
   runSchemaDefine,
@@ -247,6 +249,56 @@ describe('schema service transaction and policy seam', () => {
       resourceType: 'object_type',
       outcome: 'success',
       requestId: ctx.requestId,
+    })
+  })
+
+  it('defines derived attributes and reports refresh status metadata', async () => {
+    const target = await tenant()
+    const ctx = context(target)
+    await addSchemaRule(target, 'allow')
+    await addSchemaRule(target, 'allow', false, 'view')
+    await defineSchemaObject(deps, ctx, {
+      slug: 'deal', singularName: 'Deal', pluralName: 'Deals', description: 'Deals',
+    })
+    await defineSchemaAttribute(deps, ctx, {
+      objectType: 'deal',
+      slug: 'amount',
+      name: 'Amount',
+      description: 'Deal amount',
+      type: 'number',
+      config: { type: 'number', min: 0 },
+      is_multi: false,
+      is_required: false,
+      is_unique: false,
+      is_indexed: true,
+      sensitivity: 'internal',
+    })
+    const derived = await defineSchemaDerivedAttribute(deps, ctx, {
+      objectType: 'deal',
+      slug: 'score',
+      name: 'Score',
+      description: 'Deterministic score',
+      type: 'number',
+      config: { type: 'number', min: 0 },
+      isRequired: false,
+      isIndexed: true,
+      sensitivity: 'internal',
+      valueSource: 'formula',
+      derivationConfig: {
+        expression: {
+          kind: 'binary',
+          op: 'add',
+          left: { kind: 'attribute', attribute: 'amount' },
+          right: { kind: 'literal', value: 10 },
+        },
+      },
+    })
+    expect(derived).toMatchObject({ slug: 'score', valueSource: 'formula' })
+    const status = await derivedRefreshStatus(deps, ctx, { objectType: 'deal', attribute: 'score' })
+    expect(status.attributes).toHaveLength(1)
+    expect(status.attributes[0]?.derivation).toMatchObject({
+      valueSource: 'formula',
+      refreshState: 'pending',
     })
   })
 

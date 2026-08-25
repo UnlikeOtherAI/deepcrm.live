@@ -4,6 +4,28 @@ import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 type MutationEffectsTx = QueueEnqueueTx & Pick<Db, 'webhook'>
 
+export async function enqueueDerivedRefresh(
+  tx: QueueEnqueueTx,
+  ctx: ActorContext,
+  touchedRecordIds: readonly string[],
+  idempotencyKey: string,
+): Promise<void> {
+  const sourceRecordIds = [...new Set(touchedRecordIds)].sort()
+  if (sourceRecordIds.length === 0) return
+  await enqueue(tx, {
+    organizationId: ctx.tenant.organizationId,
+    teamId: ctx.tenant.teamId,
+    type: 'derived.refresh',
+    payload: {
+      organizationId: ctx.tenant.organizationId,
+      teamId: ctx.tenant.teamId,
+      sourceRecordIds,
+    },
+    idempotencyKey,
+    priority: 90,
+  })
+}
+
 export async function enqueueRecordMutationEffects(
   tx: MutationEffectsTx,
   ctx: ActorContext,
@@ -24,6 +46,7 @@ export async function enqueueRecordMutationEffects(
       priority: 100,
     })
   }
+  await enqueueDerivedRefresh(tx, ctx, touchedRecordIds, `derived:${ctx.tenant.teamId}:${lastSeq}`)
   const activeWebhooks = await tx.webhook.count({
     where: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId, active: true },
   })

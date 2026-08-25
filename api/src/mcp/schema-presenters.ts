@@ -16,23 +16,57 @@ function iso(value: Date | null): string | null {
   return value === null ? null : value.toISOString()
 }
 
-function attribute(attribute: LoadedAttribute) {
+function jsonObject(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : {}
+}
+
+function derivation(schema: LoadedSchema, attributeValue: LoadedAttribute) {
+  const value = attributeValue.derivation
+  if (value === undefined || value === null) return null
+  return {
+    attribute: attributeValue.slug,
+    type: attributeValue.type,
+    sensitivity: attributeValue.sensitivity,
+    value_source: value.valueSource,
+    materialized: value.materialized,
+    config: jsonObject(value.config),
+    refresh_state: value.refreshState,
+    refresh_error_code: value.refreshErrorCode,
+    last_refreshed_at: iso(value.lastRefreshedAt),
+    dependencies: value.dependencies.map((dependency) => ({
+      source_kind: dependency.sourceKind,
+      source_path: dependency.sourcePath,
+      source_attribute: dependency.sourceAttributeId === null
+        ? null
+        : schema.attributesById.get(dependency.sourceAttributeId)?.slug ?? null,
+      relation_type: dependency.relationTypeId === null
+        ? null
+        : schema.relationTypesById.get(dependency.relationTypeId)?.slug ?? null,
+    })),
+  }
+}
+
+function attribute(schema: LoadedSchema, attributeValue: LoadedAttribute) {
   return AttributeDetail.parse({
-    id: attribute.id,
-    slug: attribute.slug,
-    name: attribute.name,
-    description: attribute.description,
-    type: attribute.type,
-    config: attribute.config,
-    is_multi: attribute.isMulti,
-    is_required: attribute.isRequired,
-    is_unique: attribute.isUnique,
-    is_indexed: attribute.isIndexed,
-    sensitivity: attribute.sensitivity,
-    default_value: attribute.defaultValue ?? undefined,
-    is_system: attribute.isSystem,
-    position: attribute.position,
-    archived_at: iso(attribute.archivedAt),
+    id: attributeValue.id,
+    slug: attributeValue.slug,
+    name: attributeValue.name,
+    description: attributeValue.description,
+    type: attributeValue.type,
+    value_source: attributeValue.valueSource,
+    derivation: derivation(schema, attributeValue),
+    config: attributeValue.config,
+    is_multi: attributeValue.isMulti,
+    is_required: attributeValue.isRequired,
+    is_unique: attributeValue.isUnique,
+    is_indexed: attributeValue.isIndexed,
+    sensitivity: attributeValue.sensitivity,
+    default_value: attributeValue.defaultValue ?? undefined,
+    is_system: attributeValue.isSystem,
+    position: attributeValue.position,
+    archived_at: iso(attributeValue.archivedAt),
   })
 }
 
@@ -143,7 +177,7 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
     icon: objectType.icon,
     kind: objectType.kind,
     primary_attribute: primaryAttribute(objectType),
-    attributes: objectType.attributes.map(attribute),
+    attributes: objectType.attributes.map((attributeValue) => attribute(schema, attributeValue)),
     relation_types: relationSummaries(schema, objectType),
     pipelines: pipelineSummaries(schema, objectType),
     archived_at: iso(objectType.archivedAt),
@@ -186,7 +220,7 @@ export function presentAttribute(schema: LoadedSchema, objectType: string, slug:
   if (object === undefined) throw new Error('Object type was not found after schema mutation')
   const selected = object.attributes.find((attributeValue) => attributeValue.slug === slug)
   if (selected === undefined) throw new Error('Attribute was not found after schema mutation')
-  return attribute(selected)
+  return attribute(schema, selected)
 }
 
 export function presentRelation(schema: LoadedSchema, slug: string) {
