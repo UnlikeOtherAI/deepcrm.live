@@ -1,11 +1,11 @@
 # Phase 8 regression loop
 
-- Commit SHA: 0c0ff1ef7104b878793d67b4d6e577d534d97977
-- Disposable database: deepcrm_t67_loop_20260826083923 (dropped by script cleanup)
-- API port: 64760
+- Commit SHA: e2996508de483676064695683c05d50684b930ce
+- Disposable database: deepcrm_t67_loop_20260826084120 (dropped by script cleanup)
+- API port: 64926
 - MCP transport: streamable HTTP at /mcp
 - Tools exercised: 75/75
-- Resources read: crm://help/filtering, crm://help/limits, crm://lists, crm://lists/loop_dynamic_c95935b6_68c0_4d03_81c6_5d81319d5a02, crm://lists/loop_static_c95935b6_68c0_4d03_81c6_5d81319d5a02, crm://schema, crm://schema/line_item, crm://templates, crm://views, crm://views/loop_view_c95935b6_68c0_4d03_81c6_5d81319d5a02
+- Resources read: crm://help/filtering, crm://help/limits, crm://lists, crm://lists/loop_dynamic_262b5b24_df7f_4c92_870c_0f6aff0c8e63, crm://lists/loop_static_262b5b24_df7f_4c92_870c_0f6aff0c8e63, crm://schema, crm://schema/line_item, crm://templates, crm://views, crm://views/loop_view_262b5b24_df7f_4c92_870c_0f6aff0c8e63
 - Resource templates discovered: crm://lists/{slug}, crm://schema/{object_type}, crm://views/{slug}
 - Prompts discovered: crm/clean-duplicates, crm/prepare-account-review, crm/qualify-lead
 - Worker jobs: [
@@ -18,37 +18,16 @@
   },
   {
     "_count": {
-      "_all": 28
+      "_all": 1
     },
-    "type": "derived.refresh",
+    "type": "records.export",
     "status": "completed"
   },
   {
     "_count": {
-      "_all": 13
+      "_all": 12
     },
     "type": "list.refresh",
-    "status": "completed"
-  },
-  {
-    "_count": {
-      "_all": 1
-    },
-    "type": "match-key-backfill",
-    "status": "completed"
-  },
-  {
-    "_count": {
-      "_all": 78
-    },
-    "type": "record.reindex",
-    "status": "completed"
-  },
-  {
-    "_count": {
-      "_all": 1
-    },
-    "type": "records.bulk_assert",
     "status": "completed"
   },
   {
@@ -62,7 +41,28 @@
     "_count": {
       "_all": 1
     },
-    "type": "records.export",
+    "type": "records.bulk_assert",
+    "status": "completed"
+  },
+  {
+    "_count": {
+      "_all": 1
+    },
+    "type": "match-key-backfill",
+    "status": "completed"
+  },
+  {
+    "_count": {
+      "_all": 28
+    },
+    "type": "derived.refresh",
+    "status": "completed"
+  },
+  {
+    "_count": {
+      "_all": 74
+    },
+    "type": "record.reindex",
     "status": "completed"
   }
 ]
@@ -1744,37 +1744,16 @@
       },
       {
         "_count": {
-          "_all": 28
+          "_all": 1
         },
-        "type": "derived.refresh",
+        "type": "records.export",
         "status": "completed"
       },
       {
         "_count": {
-          "_all": 13
+          "_all": 12
         },
         "type": "list.refresh",
-        "status": "completed"
-      },
-      {
-        "_count": {
-          "_all": 1
-        },
-        "type": "match-key-backfill",
-        "status": "completed"
-      },
-      {
-        "_count": {
-          "_all": 78
-        },
-        "type": "record.reindex",
-        "status": "completed"
-      },
-      {
-        "_count": {
-          "_all": 1
-        },
-        "type": "records.bulk_assert",
         "status": "completed"
       },
       {
@@ -1788,7 +1767,28 @@
         "_count": {
           "_all": 1
         },
-        "type": "records.export",
+        "type": "records.bulk_assert",
+        "status": "completed"
+      },
+      {
+        "_count": {
+          "_all": 1
+        },
+        "type": "match-key-backfill",
+        "status": "completed"
+      },
+      {
+        "_count": {
+          "_all": 28
+        },
+        "type": "derived.refresh",
+        "status": "completed"
+      },
+      {
+        "_count": {
+          "_all": 74
+        },
+        "type": "record.reindex",
         "status": "completed"
       }
     ]
