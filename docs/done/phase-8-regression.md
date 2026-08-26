@@ -1,12 +1,21 @@
 # Phase 8 regression loop
 
-- Commit SHA: a8d4c3c1445f8dbed5dc237259b50104b835b507
-- Disposable database: deepcrm_t67_loop_20260825031502 (dropped by script cleanup)
-- API port: 63578
+- Commit SHA: 311e8ef264061f95807aad26e4a03794e5bb2b92
+- Disposable database: deepcrm_t67_loop_20260826082022 (dropped by script cleanup)
+- API port: 59739
+- MCP transport: streamable HTTP at /mcp
 - Tools exercised: 75/75
-- Resources read: crm://help/filtering, crm://help/limits, crm://schema, crm://templates, crm://views
+- Resources read: crm://help/filtering, crm://help/limits, crm://lists, crm://lists/loop_dynamic_af3a1bca_72f7_47f2_a5ba_b148ba5aae47, crm://lists/loop_static_af3a1bca_72f7_47f2_a5ba_b148ba5aae47, crm://schema, crm://schema/line_item, crm://templates, crm://views, crm://views/loop_view_af3a1bca_72f7_47f2_a5ba_b148ba5aae47
+- Resource templates discovered: crm://lists/{slug}, crm://schema/{object_type}, crm://views/{slug}
 - Prompts discovered: crm/clean-duplicates, crm/prepare-account-review, crm/qualify-lead
 - Worker jobs: [
+  {
+    "_count": {
+      "_all": 1
+    },
+    "type": "change.deliver",
+    "status": "completed"
+  },
   {
     "_count": {
       "_all": 28
@@ -16,7 +25,7 @@
   },
   {
     "_count": {
-      "_all": 16
+      "_all": 13
     },
     "type": "list.refresh",
     "status": "completed"
@@ -30,7 +39,7 @@
   },
   {
     "_count": {
-      "_all": 73
+      "_all": 77
     },
     "type": "record.reindex",
     "status": "completed"
@@ -109,7 +118,6 @@
       "is_unique": "boolean",
       "is_indexed": "boolean",
       "sensitivity": "string",
-      "default_value": "undefined",
       "id": "string",
       "value_source": "string",
       "derivation": "null",
@@ -168,7 +176,6 @@
       "is_unique": "boolean",
       "is_indexed": "boolean",
       "sensitivity": "string",
-      "default_value": "undefined",
       "id": "string",
       "value_source": "string",
       "derivation": "null",
@@ -229,7 +236,16 @@
       },
       "stale": {
         "count": "number",
-        "items": [],
+        "items": [
+          {
+            "record": {
+              "id": "string",
+              "object_type": "string",
+              "display_name": "string"
+            },
+            "detail": "string"
+          }
+        ],
         "query_filter": {
           "quality": {
             "category": "string",
@@ -272,7 +288,6 @@
       "is_unique": "boolean",
       "is_indexed": "boolean",
       "sensitivity": "string",
-      "default_value": "undefined",
       "id": "string",
       "value_source": "string",
       "derivation": {
@@ -315,7 +330,6 @@
       "is_unique": "boolean",
       "is_indexed": "boolean",
       "sensitivity": "string",
-      "default_value": "undefined",
       "id": "string",
       "value_source": "string",
       "derivation": {
@@ -1089,6 +1103,10 @@
         "version": "number",
         "data": {
           "line_item_count": "string",
+          "line_item_total": {
+            "amount": "string",
+            "currency": "string"
+          },
           "name": "string",
           "quote_number": "string",
           "status": "string",
@@ -1290,7 +1308,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1300,7 +1317,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1310,7 +1326,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1320,7 +1335,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1330,7 +1344,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1341,7 +1354,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1351,7 +1363,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1361,7 +1372,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1371,7 +1381,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1381,7 +1390,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1391,7 +1399,6 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ],
@@ -1402,11 +1409,11 @@
               "string"
             ],
             "method": "string",
-            "threshold": "undefined",
             "action": "string"
           }
         ]
       },
+      "lists": [],
       "views": []
     }
   },
@@ -1455,7 +1462,6 @@
           "reason": "string",
           "sub_reason": "null",
           "expires_at": "null",
-          "note": "null",
           "created_at": "string"
         }
       ],
@@ -1696,6 +1702,11 @@
     }
   },
   {
+    "command": "curl POST /mcp invalid body",
+    "status": "ok",
+    "http": 401
+  },
+  {
     "command": "tools/list",
     "status": "ok",
     "count": 75
@@ -1703,7 +1714,12 @@
   {
     "command": "resources/list+read",
     "status": "ok",
-    "count": 5
+    "count": 6
+  },
+  {
+    "command": "resources/templates/list+read",
+    "status": "ok",
+    "count": 3
   },
   {
     "command": "prompts/list",
@@ -1721,6 +1737,13 @@
     "shape": [
       {
         "_count": {
+          "_all": 1
+        },
+        "type": "change.deliver",
+        "status": "completed"
+      },
+      {
+        "_count": {
           "_all": 28
         },
         "type": "derived.refresh",
@@ -1728,7 +1751,7 @@
       },
       {
         "_count": {
-          "_all": 16
+          "_all": 13
         },
         "type": "list.refresh",
         "status": "completed"
@@ -1742,7 +1765,7 @@
       },
       {
         "_count": {
-          "_all": 73
+          "_all": 77
         },
         "type": "record.reindex",
         "status": "completed"

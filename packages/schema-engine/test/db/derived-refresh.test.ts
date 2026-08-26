@@ -270,4 +270,21 @@ describe('derived attribute refresh', () => {
     expect(company.data).not.toHaveProperty('secret_total')
     expect(JSON.stringify(company.data)).not.toContain('900')
   })
+
+  it('serializes concurrent same-tenant refreshes without leaving derivations queued', async () => {
+    const target = await fixture()
+    const [first, second] = await Promise.all([
+      refreshDerivedFromSources(db, target.tenant, target.ctx, [target.dealId], new Date('2026-08-24T12:00:01.000Z')),
+      refreshDerivedFromSources(db, target.tenant, target.ctx, [target.companyId], new Date('2026-08-24T12:00:02.000Z')),
+    ])
+
+    expect(first.records + second.records).toBeGreaterThan(0)
+    expect(await db.attributeDerivation.count({
+      where: {
+        organizationId: target.tenant.organizationId,
+        teamId: target.tenant.teamId,
+        refreshState: 'ready',
+      },
+    })).toBe(2)
+  })
 })

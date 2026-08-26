@@ -31,6 +31,7 @@ type LinkedRecord = {
 type SourceRecord = { id: string; objectTypeId: string; data: unknown; version: number }
 type Related = { id: string; data: Data; createdAt: Date }
 type DerivedRefreshTx = RecordTx & Pick<Db, 'attributeDerivation'>
+const DERIVED_REFRESH_LOCK_NAMESPACE = 9
 
 function objectFields(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
@@ -419,6 +420,10 @@ async function recordsForRefresh(
   return records.sort((left, right) => left.id.localeCompare(right.id))
 }
 
+async function lockDerivedRefresh(tx: DerivedRefreshTx, teamId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${DERIVED_REFRESH_LOCK_NAMESPACE}::integer, hashtext(${teamId}))`
+}
+
 export async function refreshDerivedFromSources(
   db: Db,
   tenant: TenantRef,
@@ -431,6 +436,7 @@ export async function refreshDerivedFromSources(
   const schema = await loadSchema(db, tenant)
   const recordIds = await impactedRecords(db, tenant, schema, uniqueSources)
   return db.$transaction(async (tx) => {
+    await lockDerivedRefresh(tx, tenant.teamId)
     const records = await recordsForRefresh(tx, tenant, ctx, schema, recordIds)
     const changedRecords = new Set<string>()
     let attributes = 0
