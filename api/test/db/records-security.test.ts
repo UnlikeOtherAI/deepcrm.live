@@ -204,10 +204,10 @@ describe('record service security boundaries', () => {
     })).resolves.toMatchObject({ changed: true, record: { display_name: 'visible' } })
   })
 
-  it('allows explicit collaborator actor_reference semantics to grant record edit', async () => {
+  it('requires policy instead of actor_reference data to grant record edit', async () => {
     const target = await tenant()
     const owner = context(target, 'uoa_role_owner')
-    const agent = agentContext(target, 'agent:test:collab')
+    const agent = agentContext(target, 'collab')
     const person = await db.objectType.findFirstOrThrow({
       where: { organizationId: target.organizationId, teamId: target.teamId, slug: 'person' },
       select: { id: true },
@@ -222,9 +222,30 @@ describe('record service security boundaries', () => {
     await db.team.update({ where: { id: target.teamId }, data: { schemaVersion: { increment: 1 } } })
     const created = await createRecord(deps, owner, {
       objectType: 'person',
-      data: { name: 'Delegated', collaborator: { type: 'agent', id: agent.actor.id } },
+      data: { name: 'Delegated', collaborator: { type: 'agent', id: `agent:test:${agent.actor.id}` } },
     })
 
+    await expect(updateRecord(deps, agent, {
+      recordId: created.record.id,
+      data: { name: 'Agent Edited' },
+    })).rejects.toMatchObject({ code: 'POLICY_DENIED' })
+    await db.policyRule.create({
+      data: {
+        organizationId: target.organizationId,
+        teamId: target.teamId,
+        scope: 'team',
+        scopeId: target.teamId,
+        resourceType: 'record',
+        action: 'edit',
+        effect: 'allow',
+        priority: 100,
+        createdById: 'records_security_fixture',
+        bindings: { create: [
+          { actorType: 'role', actorId: 'member' },
+          { actorType: 'agent', actorId: `agent:test:${agent.actor.id}` },
+        ] },
+      },
+    })
     await expect(updateRecord(deps, agent, {
       recordId: created.record.id,
       data: { name: 'Agent Edited' },
