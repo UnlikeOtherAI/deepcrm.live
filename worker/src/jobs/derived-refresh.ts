@@ -10,6 +10,21 @@ const DerivedRefreshPayload = z.object({
   organizationId: z.string().uuid(),
   teamId: z.string().uuid(),
   sourceRecordIds: z.array(z.string().uuid()).min(1).max(500),
+  actorContext: z.object({
+    app: z.string().min(1),
+    actChain: z.array(z.object({ sub: z.string(), product: z.string() })),
+    actor: z.object({ type: z.enum(['human', 'agent', 'system']), id: z.string().min(1) }),
+    onBehalfOf: z.object({
+      uoaUserId: z.string().min(1),
+      role: z.enum(['owner', 'admin', 'member']).nullable(),
+    }),
+    provenance: z.object({
+      runId: z.string(),
+      toolCallId: z.string(),
+      requestId: z.string(),
+    }).nullable(),
+    requestId: z.string().min(1),
+  }),
 }).strict()
 
 export const derivedRefreshHandler: JobHandler = async (input) => {
@@ -17,7 +32,17 @@ export const derivedRefreshHandler: JobHandler = async (input) => {
   if (payload.organizationId !== input.job.organizationId || payload.teamId !== input.job.teamId) {
     throw new Error('derived.refresh tenant payload mismatch')
   }
-  const result = await refreshDerivedFromSources(input.db, payload, payload.sourceRecordIds, input.clock())
+  const now = input.clock()
+  const result = await refreshDerivedFromSources(input.db, payload, {
+    tenant: { organizationId: payload.organizationId, teamId: payload.teamId },
+    app: payload.actorContext.app,
+    actChain: payload.actorContext.actChain,
+    actor: payload.actorContext.actor,
+    onBehalfOf: payload.actorContext.onBehalfOf,
+    provenance: payload.actorContext.provenance,
+    requestId: payload.actorContext.requestId,
+    now,
+  }, payload.sourceRecordIds, now)
   for (const recordId of result.changedRecords) {
     await enqueue(input.db, {
       organizationId: payload.organizationId,

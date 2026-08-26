@@ -131,19 +131,32 @@ describe('derived attribute refresh', () => {
       data: { total_open_pipeline: 123 },
     }, noLinks))).rejects.toMatchObject({ code: ErrorCode.ATTRIBUTE_READ_ONLY })
 
-    const first = await refreshDerivedFromSources(db, target.tenant, [target.companyId, target.dealId], target.ctx.now)
+    const first = await refreshDerivedFromSources(db, target.tenant, target.ctx, [target.companyId, target.dealId], target.ctx.now)
     expect(first.changedRecords).toEqual([target.companyId, target.dealId].sort())
     let company = await db.record.findUniqueOrThrow({ where: { id: target.companyId } })
     let deal = await db.record.findUniqueOrThrow({ where: { id: target.dealId } })
     expect(company.data).toMatchObject({ total_open_pipeline: '100' })
     expect(deal.data).toMatchObject({ double_amount: '200' })
+    await expect(db.recordChange.findFirstOrThrow({
+      where: {
+        organizationId: target.tenant.organizationId,
+        teamId: target.tenant.teamId,
+        recordId: target.companyId,
+        attributeSlug: 'total_open_pipeline',
+        reason: 'derived.refresh',
+      },
+    })).resolves.toMatchObject({ kind: 'set' })
+    await expect(db.auditLog.findFirstOrThrow({
+      where: { organizationId: target.tenant.organizationId, teamId: target.tenant.teamId },
+      orderBy: { createdAt: 'desc' },
+    })).resolves.toMatchObject({ action: 'derived.refresh', resourceType: 'derived_attribute' })
 
     await db.$transaction((tx) => updateRecord(tx, target.ctx, target.schema, {
       recordId: target.dealId,
       data: { amount: 250 },
       expectedVersion: deal.version,
     }, noLinks))
-    const second = await refreshDerivedFromSources(db, target.tenant, [target.dealId], target.ctx.now)
+    const second = await refreshDerivedFromSources(db, target.tenant, target.ctx, [target.dealId], target.ctx.now)
     expect(second.changedRecords).toEqual([target.companyId, target.dealId].sort())
     company = await db.record.findUniqueOrThrow({ where: { id: target.companyId } })
     deal = await db.record.findUniqueOrThrow({ where: { id: target.dealId } })
@@ -197,11 +210,64 @@ describe('derived attribute refresh', () => {
       fromRecordId: target.companyId,
       toRecordId: secondDeal.record.id,
     }))
-    await refreshDerivedFromSources(db, target.tenant, [target.dealId, secondDeal.record.id], target.ctx.now)
+    await refreshDerivedFromSources(db, target.tenant, target.ctx, [target.dealId, secondDeal.record.id], target.ctx.now)
     const company = await db.record.findUniqueOrThrow({ where: { id: target.companyId } })
     expect(company.data).not.toHaveProperty('currency_total')
     expect(await db.attributeDerivation.findFirstOrThrow({
       where: { organizationId: target.tenant.organizationId, teamId: target.tenant.teamId, attribute: { slug: 'currency_total' } },
     })).toMatchObject({ refreshState: 'ready' })
+  })
+
+  it('does not materialize related values hidden by attribute policy', async () => {
+    const target = await fixture()
+    await db.$transaction(async (tx) => {
+      await defineAttribute(tx, target.tenant, actor(), {
+        objectType: 'deal', slug: 'secret_amount', name: 'Secret amount',
+        description: 'Restricted value that must not feed rollups without policy.',
+        type: 'number', config: { type: 'number', min: 0 },
+        is_multi: false, is_required: false, is_unique: false, is_indexed: false, sensitivity: 'restricted',
+      })
+      await defineDerivedAttribute(tx, target.tenant, actor(), {
+        objectType: 'company', slug: 'secret_total', name: 'Secret total',
+        description: 'Policy-safe rollup over a restricted source.',
+        type: 'number', config: { type: 'number', min: 0 },
+        isRequired: false, isIndexed: false, sensitivity: 'internal',
+        valueSource: 'rollup',
+        derivationConfig: {
+          relation_type: 'company_deals',
+          direction: 'outgoing',
+          operation: 'sum',
+          source_attribute: 'secret_amount',
+        },
+      })
+    })
+    const schema = await loadSchema(db, target.tenant)
+    const deal = await db.record.findUniqueOrThrow({ where: { id: target.dealId } })
+    await db.$transaction((tx) => updateRecord(tx, target.ctx, schema, {
+      recordId: target.dealId,
+      data: { secret_amount: 900 },
+      expectedVersion: deal.version,
+    }, noLinks))
+    await db.policyRule.create({
+      data: {
+        organizationId: target.tenant.organizationId,
+        teamId: target.tenant.teamId,
+        scope: 'team',
+        scopeId: target.tenant.teamId,
+        resourceType: 'attribute',
+        action: 'view',
+        effect: 'deny',
+        priority: 100,
+        conditions: { sensitivity: 'restricted' },
+        createdById: 'derived-policy-test',
+        bindings: { create: [{ actorType: 'role', actorId: 'owner' }] },
+      },
+    })
+
+    await refreshDerivedFromSources(db, target.tenant, target.ctx, [target.dealId], target.ctx.now)
+
+    const company = await db.record.findUniqueOrThrow({ where: { id: target.companyId } })
+    expect(company.data).not.toHaveProperty('secret_total')
+    expect(JSON.stringify(company.data)).not.toContain('900')
   })
 })

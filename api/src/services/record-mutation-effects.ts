@@ -16,11 +16,12 @@ export async function enqueueDerivedRefresh(
     organizationId: ctx.tenant.organizationId,
     teamId: ctx.tenant.teamId,
     type: 'derived.refresh',
-    payload: {
-      organizationId: ctx.tenant.organizationId,
-      teamId: ctx.tenant.teamId,
-      sourceRecordIds,
-    },
+      payload: {
+        organizationId: ctx.tenant.organizationId,
+        teamId: ctx.tenant.teamId,
+        sourceRecordIds,
+        actorContext: actorContextPayload(ctx),
+      },
     idempotencyKey,
     priority: 90,
   })

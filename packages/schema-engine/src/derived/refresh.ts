@@ -1,12 +1,19 @@
 import Decimal from 'decimal.js'
 
-import { Prisma, tenantWhere, type Db, type TenantRef } from '@deepcrm/db'
-import { ErrorCode, Filter as FilterSchema, ServiceError, type Filter } from '@deepcrm/schemas'
+import {
+  Prisma, tenantWhere, writeAudit, type Db, type TenantRef,
+} from '@deepcrm/db'
+import {
+  ErrorCode, Filter as FilterSchema, ServiceError, type ActorContext, type Filter,
+} from '@deepcrm/schemas'
 
 import { getAttributeType } from '../attribute-types/index.js'
 import { canonicalJson, canonicalJsonValue, type JsonValue } from '../records/json.js'
 import { computeDisplayName } from '../records/display-name.js'
+import { diffChanges, writeChanges } from '../records/changes.js'
+import { attributeReadAccess, rowAccess } from '../records/visibility.js'
 import { loadSchema, type LoadedAttribute, type LoadedObjectType, type LoadedSchema } from '../schema/load.js'
+import type { RecordTx } from '../schema/tx.js'
 import { parseDerivedConfig, type FormulaExpression } from './contracts.js'
 
 export type DerivedRefreshResult = {
@@ -21,7 +28,9 @@ type LinkedRecord = {
   id: string; data: unknown; createdAt: Date; deletedAt: Date | null
   mergedIntoId: string | null; erasedAt: Date | null
 }
+type SourceRecord = { id: string; objectTypeId: string; data: unknown; version: number }
 type Related = { id: string; data: Data; createdAt: Date }
+type DerivedRefreshTx = RecordTx & Pick<Db, 'attributeDerivation'>
 
 function objectFields(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
@@ -195,35 +204,68 @@ function parsedFilter(value: unknown): Filter | undefined {
   return FilterSchema.parse(value)
 }
 
+function filterAttributeSlugs(filter: Filter | undefined): string[] {
+  if (filter === undefined) return []
+  if ('and' in filter) return [...new Set(filter.and.flatMap(filterAttributeSlugs))].sort()
+  if ('or' in filter) return [...new Set(filter.or.flatMap(filterAttributeSlugs))].sort()
+  if ('not' in filter) return filterAttributeSlugs(filter.not)
+  if ('attribute' in filter) return [filter.attribute]
+  return []
+}
+
+function attributes(
+  objectType: LoadedObjectType,
+  slugs: readonly string[],
+): LoadedAttribute[] {
+  return [...new Set(slugs)].sort().map((slug) => {
+    const attribute = objectType.attributes.find((candidate) => (
+      candidate.slug === slug && candidate.archivedAt === null
+    ))
+    if (attribute === undefined) throw new ServiceError(ErrorCode.UNKNOWN_ATTRIBUTE, 'Unknown derived source attribute')
+    return attribute
+  })
+}
+
+function relatedObjectTypeId(
+  relation: { fromObjectTypeId: string | null; toObjectTypeId: string | null },
+  direction: 'outgoing' | 'incoming',
+): string {
+  const objectTypeId = direction === 'outgoing' ? relation.toObjectTypeId : relation.fromObjectTypeId
+  if (objectTypeId === null) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Relation endpoint metadata is inconsistent')
+  return objectTypeId
+}
+
 async function relatedRecords(
-  db: Db,
+  db: DerivedRefreshTx,
   tenant: TenantRef,
+  ctx: ActorContext,
+  schema: LoadedSchema,
   recordId: string,
   relationTypeId: string,
   direction: 'outgoing' | 'incoming',
+  readableAttributes: readonly LoadedAttribute[],
 ): Promise<Related[]> {
-  const links = await db.recordLink.findMany({
-    where: {
-      ...tenantWhere(tenant),
-      relationTypeId,
-      activeUntil: null,
-      ...(direction === 'outgoing' ? { fromRecordId: recordId } : { toRecordId: recordId }),
-    },
-    select: {
-      toRecord: {
-        select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
-      },
-      fromRecord: {
-        select: { id: true, data: true, createdAt: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
-      },
-    },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-  })
-  return links.flatMap((link) => {
-    const record: LinkedRecord = direction === 'outgoing' ? link.toRecord : link.fromRecord
-    if (record.deletedAt !== null || record.mergedIntoId !== null || record.erasedAt !== null) return []
-    return [{ id: record.id, data: data(record.data), createdAt: record.createdAt }]
-  })
+  const relation = schema.relationTypesById.get(relationTypeId)
+  if (relation === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Relation metadata is inconsistent')
+  const objectType = schema.objectTypesById.get(relatedObjectTypeId(relation, direction))
+  if (objectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Object metadata is inconsistent')
+  const rows = await db.$queryRaw<LinkedRecord[]>`
+    SELECT r.id, r.data, r.created_at AS "createdAt", r.deleted_at AS "deletedAt",
+      r.merged_into_id AS "mergedIntoId", r.erased_at AS "erasedAt"
+    FROM record_links l
+    JOIN records r ON r.id = ${direction === 'outgoing' ? Prisma.sql`l.to_record_id` : Prisma.sql`l.from_record_id`}
+    WHERE l.organization_id = ${tenant.organizationId}::uuid
+      AND l.team_id = ${tenant.teamId}::uuid
+      AND l.relation_type_id = ${relationTypeId}::uuid
+      AND l.active_until IS NULL
+      AND ${direction === 'outgoing'
+    ? Prisma.sql`l.from_record_id = ${recordId}::uuid`
+    : Prisma.sql`l.to_record_id = ${recordId}::uuid`}
+      AND ${rowAccess(tenant, ctx, objectType)}
+      ${attributeReadAccess(tenant, ctx, objectType, readableAttributes)}
+    ORDER BY l.created_at ASC, l.id ASC
+  `
+  return rows.map((record) => ({ id: record.id, data: data(record.data), createdAt: record.createdAt }))
 }
 
 function aggregate(values: readonly JsonValue[], operation: string, target: LoadedAttribute): unknown {
@@ -248,8 +290,10 @@ function aggregate(values: readonly JsonValue[], operation: string, target: Load
 }
 
 async function computeDerived(
-  db: Db,
+  db: DerivedRefreshTx,
   tenant: TenantRef,
+  ctx: ActorContext,
+  schema: LoadedSchema,
   attribute: DerivedAttribute,
   source: Data,
   recordId: string,
@@ -282,13 +326,34 @@ async function computeDerived(
   const dependency = attribute.derivation.dependencies.find((item) => item.relationTypeId !== null)
   if (dependency?.relationTypeId === undefined || dependency.relationTypeId === null) throw new Error('missing_relation_dependency')
   const direction = definition.config.direction
-  const related = await relatedRecords(db, tenant, recordId, dependency.relationTypeId, direction)
   if (definition.value_source === 'relation_sync') {
+    const relation = schema.relationTypesById.get(dependency.relationTypeId)
+    if (relation === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Relation metadata is inconsistent')
+    const relatedObjectType = schema.objectTypesById.get(relatedObjectTypeId(relation, direction))
+    if (relatedObjectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Object metadata is inconsistent')
+    const readable = attributes(relatedObjectType, [definition.config.source_attribute])
+    const related = await relatedRecords(
+      db, tenant, ctx, schema, recordId, dependency.relationTypeId, direction, readable,
+    )
     if (related.length > 1 && definition.config.on_multiple === 'error') throw new Error('relation_sync_multiple')
     const selected = related[0]
     return validate(attribute, selected?.data[definition.config.source_attribute] ?? null)
   }
   const filter = parsedFilter(definition.config.filter)
+  const relation = schema.relationTypesById.get(dependency.relationTypeId)
+  if (relation === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Relation metadata is inconsistent')
+  const relatedObjectType = schema.objectTypesById.get(relatedObjectTypeId(relation, direction))
+  if (relatedObjectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Object metadata is inconsistent')
+  const readable = attributes(
+    relatedObjectType,
+    [
+      ...filterAttributeSlugs(filter),
+      ...(definition.config.source_attribute === undefined ? [] : [definition.config.source_attribute]),
+    ],
+  )
+  const related = await relatedRecords(
+    db, tenant, ctx, schema, recordId, dependency.relationTypeId, direction, readable,
+  )
   const filtered = filter === undefined ? related : related.filter((record) => matchesFilter(record, filter))
   if (definition.config.operation === 'count') return validate(attribute, filtered.length)
   const sourceAttribute = definition.config.source_attribute
@@ -333,9 +398,31 @@ async function impactedRecords(
   return [...result].sort()
 }
 
+async function recordsForRefresh(
+  db: DerivedRefreshTx,
+  tenant: TenantRef,
+  ctx: ActorContext,
+  schema: LoadedSchema,
+  recordIds: readonly string[],
+): Promise<SourceRecord[]> {
+  const records: SourceRecord[] = []
+  for (const objectType of schema.objectTypes) {
+    const rows = await db.$queryRaw<SourceRecord[]>`
+      SELECT r.id, r.object_type_id AS "objectTypeId", r.data, r.version
+      FROM records r
+      WHERE r.id IN (${Prisma.join(recordIds.map((id) => Prisma.sql`${id}::uuid`))})
+        AND ${rowAccess(tenant, ctx, objectType)}
+      ORDER BY r.id ASC
+    `
+    records.push(...rows)
+  }
+  return records.sort((left, right) => left.id.localeCompare(right.id))
+}
+
 export async function refreshDerivedFromSources(
   db: Db,
   tenant: TenantRef,
+  ctx: ActorContext,
   sourceRecordIds: readonly string[],
   now: Date,
 ): Promise<DerivedRefreshResult> {
@@ -343,49 +430,72 @@ export async function refreshDerivedFromSources(
   if (uniqueSources.length === 0) return { records: 0, attributes: 0, changedRecords: [] }
   const schema = await loadSchema(db, tenant)
   const recordIds = await impactedRecords(db, tenant, schema, uniqueSources)
-  const records = await db.record.findMany({
-    where: { ...tenantWhere(tenant), id: { in: recordIds }, deletedAt: null, mergedIntoId: null, erasedAt: null },
-    select: { id: true, objectTypeId: true, data: true },
-    orderBy: { id: 'asc' },
-  })
-  const changedRecords = new Set<string>()
-  let attributes = 0
-  for (const record of records) {
-    const objectType = schema.objectTypesById.get(record.objectTypeId)
-    if (objectType === undefined) continue
-    const current = data(record.data)
-    const next: Data = { ...current }
-    for (const attribute of derivedAttributes(objectType)) {
-      await db.attributeDerivation.update({
-        where: { attributeId: attribute.id },
-        data: { refreshState: 'refreshing', refreshErrorCode: null },
-      })
-      try {
-        const value = await computeDerived(db, tenant, attribute, next, record.id, now)
-        if (value === null) delete next[attribute.slug]
-        else next[attribute.slug] = value
-        await db.attributeDerivation.update({
+  return db.$transaction(async (tx) => {
+    const records = await recordsForRefresh(tx, tenant, ctx, schema, recordIds)
+    const changedRecords = new Set<string>()
+    let attributes = 0
+    for (const record of records) {
+      const objectType = schema.objectTypesById.get(record.objectTypeId)
+      if (objectType === undefined) continue
+      const current = data(record.data)
+      const next: Data = { ...current }
+      for (const attribute of derivedAttributes(objectType)) {
+        await tx.attributeDerivation.update({
           where: { attributeId: attribute.id },
-          data: { refreshState: 'ready', refreshErrorCode: null, lastRefreshedAt: now },
+          data: { refreshState: 'refreshing', refreshErrorCode: null },
         })
-        attributes += 1
-      } catch (error: unknown) {
-        await db.attributeDerivation.update({
-          where: { attributeId: attribute.id },
-          data: { refreshState: 'failed', refreshErrorCode: error instanceof Error ? error.message : 'refresh_failed' },
-        })
+        try {
+          const value = await computeDerived(tx, tenant, ctx, schema, attribute, next, record.id, now)
+          if (value === null) delete next[attribute.slug]
+          else next[attribute.slug] = value
+          await tx.attributeDerivation.update({
+            where: { attributeId: attribute.id },
+            data: { refreshState: 'ready', refreshErrorCode: null, lastRefreshedAt: now },
+          })
+          attributes += 1
+        } catch (error: unknown) {
+          await tx.attributeDerivation.update({
+            where: { attributeId: attribute.id },
+            data: { refreshState: 'failed', refreshErrorCode: error instanceof Error ? error.message : 'refresh_failed' },
+          })
+        }
       }
+      if (canonicalJson(current) === canonicalJson(next)) continue
+      const resultingVersion = record.version + 1
+      const changes = diffChanges(current, next, record.id, resultingVersion)
+        .map((change) => ({ ...change, reason: 'derived.refresh' }))
+      await tx.record.updateMany({
+        where: { ...tenantWhere(tenant), id: record.id },
+        data: {
+          data: inputObject(next),
+          displayName: computeDisplayName(schema, objectType, next),
+          version: { increment: 1 },
+        },
+      })
+      await writeChanges(tx, ctx, changes)
+      changedRecords.add(record.id)
     }
-    if (canonicalJson(current) === canonicalJson(next)) continue
-    await db.record.updateMany({
-      where: { ...tenantWhere(tenant), id: record.id },
-      data: {
-        data: inputObject(next),
-        displayName: computeDisplayName(schema, objectType, next),
-        version: { increment: 1 },
+    const result = { records: records.length, attributes, changedRecords: [...changedRecords].sort() }
+    await writeAudit(tx, {
+      organizationId: tenant.organizationId,
+      teamId: tenant.teamId,
+      actorType: ctx.actor.type,
+      actorId: ctx.actor.id,
+      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      action: 'derived.refresh',
+      resourceType: 'derived_attribute',
+      resourceId: null,
+      outcome: 'success',
+      reason: null,
+      metadata: {
+        records: result.records,
+        attributes: result.attributes,
+        changedRecords: result.changedRecords.length,
       },
+      requestId: ctx.requestId,
+      ipAddress: null,
+      userAgent: null,
     })
-    changedRecords.add(record.id)
-  }
-  return { records: records.length, attributes, changedRecords: [...changedRecords].sort() }
+    return result
+  })
 }

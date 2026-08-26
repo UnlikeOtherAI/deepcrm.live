@@ -44,11 +44,24 @@ function context(tenant: { organizationId: string; teamId: string }): ActorConte
 }
 
 async function input(tenant: { organizationId: string; teamId: string }, recordId: string): Promise<JobHandlerInput> {
+  const ctx = context(tenant)
   const queued = await enqueue(db, {
     organizationId: tenant.organizationId,
     teamId: tenant.teamId,
     type: DERIVED_REFRESH_JOB,
-    payload: { organizationId: tenant.organizationId, teamId: tenant.teamId, sourceRecordIds: [recordId] },
+    payload: {
+      organizationId: tenant.organizationId,
+      teamId: tenant.teamId,
+      sourceRecordIds: [recordId],
+      actorContext: {
+        app: ctx.app,
+        actChain: ctx.actChain,
+        actor: ctx.actor,
+        onBehalfOf: ctx.onBehalfOf,
+        provenance: ctx.provenance,
+        requestId: ctx.requestId,
+      },
+    },
     idempotencyKey: `derived-worker:${recordId}`,
   })
   const workerId = crypto.randomUUID()

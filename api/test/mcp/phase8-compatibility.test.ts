@@ -212,7 +212,7 @@ describe('Phase 8 compatibility fixture', () => {
     const stableLine = rec(await call('crm_record_get', { id: lineItem.id }))
     expect(stableLine.data.unit_price).toEqual({ amount: '100', currency: 'GBP' })
 
-    await refreshDerivedFromSources(db, { organizationId, teamId }, [lineItem.id], ctx().now)
+    await refreshDerivedFromSources(db, { organizationId, teamId }, ctx(), [lineItem.id], ctx().now)
     const refreshedQuote = rec(await call('crm_record_get', { id: quote.id }))
     expect(refreshedQuote.data.line_item_count).toBe('1')
     const segment = structured(await call('crm_list_create', {
