@@ -1,6 +1,7 @@
 import {
   authenticate,
   parseAppRegistry,
+  type AuthenticationFailure,
   type AppRegistry,
 } from '@deepcrm/mcp-inbound'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -19,6 +20,10 @@ import {
 const PROVISION_WINDOW_MS = 60_000
 const PROVISION_LIMIT_PER_APP = 30
 const MAX_TRACKED_APPS = 1_000
+type AuthAuditReason = AuthenticationFailure
+  | 'invalid_invocation'
+  | 'token_version_regression'
+  | 'request_replay'
 
 type ProvisionWindow = {
   count: number
@@ -68,6 +73,34 @@ function unauthorized(reply: FastifyReply, env: Env): FastifyReply {
     .send({ error: 'unauthorized' })
 }
 
+function userAgent(request: FastifyRequest): string | null {
+  const value = request.headers['user-agent']
+  return typeof value === 'string' ? value.slice(0, 512) : null
+}
+
+async function auditAuthFailure(
+  deps: AppDeps,
+  request: FastifyRequest,
+  reason: AuthAuditReason,
+): Promise<void> {
+  await deps.db.$transaction((tx) => deps.writeAudit(tx, {
+    organizationId: null,
+    teamId: null,
+    actorType: 'system',
+    actorId: 'mcp-auth',
+    onBehalfOf: null,
+    action: 'auth.failed',
+    resourceType: 'mcp',
+    resourceId: null,
+    outcome: 'denied',
+    reason,
+    metadata: { stage: 'mcp_http' },
+    requestId: request.id,
+    ipAddress: request.ip,
+    userAgent: userAgent(request),
+  }))
+}
+
 async function isFirstContact(deps: AppDeps, externalTeamId: string): Promise<boolean> {
   const existing = await deps.db.team.findUnique({
     where: { externalTeamId },
@@ -89,6 +122,7 @@ async function handleMcp(
   try {
     invocation = expectedToolInvocation(request.body)
   } catch {
+    await auditAuthFailure(deps, request, 'invalid_invocation')
     unauthorized(reply, env)
     return
   }
@@ -109,6 +143,7 @@ async function handleMcp(
       : { tool: invocation.tool, argsSha256: invocation.argsSha256 },
   })
   if (!principalResult.ok) {
+    await auditAuthFailure(deps, request, principalResult.reason)
     unauthorized(reply, env)
     return
   }
@@ -134,11 +169,13 @@ async function handleMcp(
       invocation?.destructive === true
       && !await consumeSeenRequestId(deps.db, ctx, invocation.tool, invocation.argsSha256)
     ) {
+      await auditAuthFailure(deps, request, 'request_replay')
       unauthorized(reply, env)
       return
     }
   } catch (error) {
     if (error instanceof TokenVersionRegressionError) {
+      await auditAuthFailure(deps, request, 'token_version_regression')
       unauthorized(reply, env)
       return
     }

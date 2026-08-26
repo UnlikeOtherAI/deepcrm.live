@@ -1080,7 +1080,7 @@ model ApprovalRequest {
 /// INTENTIONALLY no FK on organization_id: audit rows survive tenant deletion.
 model AuditLog {
   id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
+  organizationId String?      @map("organization_id") @db.Uuid
   teamId         String?      @map("team_id") @db.Uuid
   actorType      ActorType    @map("actor_type")
   actorId        String       @map("actor_id")

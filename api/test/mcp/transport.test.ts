@@ -147,18 +147,22 @@ describe('streamable HTTP MCP transport', () => {
   })
 
   it('rejects unauthenticated requests with RFC 9728 discovery metadata', async () => {
+    const databaseUrl = process.env.DATABASE_URL
+    if (databaseUrl === undefined) throw new Error('DATABASE_URL is required')
     const env = parseEnv({
-      DATABASE_URL: 'postgresql://unused',
+      DATABASE_URL: databaseUrl,
       NODE_ENV: 'test',
       REQUIRE_AUTH: 'true',
       DEEPCRM_API_PUBLIC_URL: 'https://api.deepcrm.live',
       DEEPCRM_SECRET_KEYRING_B64: keyring,
     })
     const deps = createAppDeps(env)
+    await deps.db.auditLog.deleteMany({ where: { organizationId: null, action: 'auth.failed' } })
     const app = buildApp(deps, env)
     const response = await app.inject({
       method: 'POST',
       url: '/mcp',
+      headers: { 'user-agent': 'transport-auth-test' },
       payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
     })
 
@@ -166,6 +170,18 @@ describe('streamable HTTP MCP transport', () => {
     expect(response.headers['www-authenticate']).toBe(
       'Bearer resource_metadata="https://api.deepcrm.live/.well-known/oauth-protected-resource"',
     )
+    await expect(deps.db.auditLog.findFirstOrThrow({
+      where: { organizationId: null, action: 'auth.failed' },
+      orderBy: { createdAt: 'desc' },
+    })).resolves.toMatchObject({
+      teamId: null,
+      actorType: 'system',
+      actorId: 'mcp-auth',
+      outcome: 'denied',
+      reason: 'missing_bearer',
+      metadata: { stage: 'mcp_http' },
+      userAgent: 'transport-auth-test',
+    })
     await app.close()
     await deps.db.$disconnect()
   })

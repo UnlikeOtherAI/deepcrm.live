@@ -94,6 +94,7 @@ beforeAll(async () => {
   for (const [resource, action] of [
     ['list', 'create'], ['list', 'edit'], ['list', 'view'],
     ['view', 'create'], ['view', 'edit'], ['view', 'view'],
+    ['schema', 'view'],
     ['record', 'view'], ['record', 'edit'], ['attribute', 'view'], ['attribute', 'edit'],
   ] as const) await allowAgent(resource, action)
   const schema = await loadSchema(db, { organizationId, teamId })
