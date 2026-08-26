@@ -12,6 +12,7 @@ import type { AppDeps } from '../../src/deps.js'
 import { testFileAccess } from '../file-access-fixture.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
+import type { ApprovalConsumption } from '../../src/services/approvals.js'
 import { deleteWebhook, listWebhooks, setWebhook } from '../../src/services/webhooks.js'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -54,7 +55,7 @@ function context(tenant: Tenant): ActorContext {
   }
 }
 
-async function fixture(): Promise<Tenant> {
+async function fixture(requiresApproval = false): Promise<Tenant> {
   const tenant = await seedTenant(db)
   organizationIds.push(tenant.organizationId)
   await db.policyRule.create({
@@ -67,7 +68,7 @@ async function fixture(): Promise<Tenant> {
       action: 'admin',
       effect: 'allow',
       priority: 100,
-      requiresApproval: false,
+      requiresApproval,
       createdById: 'webhook-test',
       bindings: { create: { actorType: 'human', actorId: 'webhook_owner' } },
     },
@@ -122,6 +123,34 @@ describe('webhook service', () => {
     await expect(setWebhook(deps, ctx, {
       url: 'http://1.1.1.1/events', events: ['record.updated'], active: true, rotateSecret: false,
     })).rejects.toThrow('HTTPS')
+    expect(await db.webhook.count({ where: tenant })).toBe(0)
+  })
+
+  it('requires and consumes owner approval before deleting an approval-gated webhook', async () => {
+    const tenant = await fixture(true)
+    const ctx = context(tenant)
+    const createApproval: ApprovalConsumption = {
+      args: {},
+      consume: async (tx) => { await tx.$queryRaw`SELECT 1` },
+    }
+    const created = await setWebhook(deps, ctx, {
+      url: 'https://1.1.1.1/approval-delete', events: ['record.updated'], active: true, rotateSecret: false,
+    }, createApproval)
+
+    await expect(deleteWebhook(deps, ctx, created.webhook.id)).rejects.toMatchObject({
+      code: 'APPROVAL_REQUIRED',
+    })
+
+    let deleteConsumed = false
+    const deleteApproval: ApprovalConsumption = {
+      args: {},
+      consume: async (tx) => {
+        deleteConsumed = true
+        await tx.$queryRaw`SELECT 1`
+      },
+    }
+    await expect(deleteWebhook(deps, ctx, created.webhook.id, deleteApproval)).resolves.toEqual({ deleted: true })
+    expect(deleteConsumed).toBe(true)
     expect(await db.webhook.count({ where: tenant })).toBe(0)
   })
 })

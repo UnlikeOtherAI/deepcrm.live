@@ -155,9 +155,13 @@ export function registerIoTools(
     name: 'crm_webhook_delete',
     description: 'Delete one owner-approved webhook by id inside the entitled tenant.',
     input: CrmWebhookDelete.in.shape,
-    handler: async (args) => {
-      const result = await deleteWebhook(deps, ctx, args.id)
+    handler: withApproval(deps, ctx, 'crm_webhook_delete', CrmWebhookDelete.in.shape, {
+      resourceType: 'webhook',
+      resourceId: (args) => args.id,
+      message: () => 'Approve webhook deletion? Requires an owner.',
+    }, async (args, _mrtr, approval) => {
+      const result = await deleteWebhook(deps, ctx, args.id, approval)
       return ok(result, JSON.stringify(result))
-    },
+    }),
   })
 }

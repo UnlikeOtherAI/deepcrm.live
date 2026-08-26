@@ -1,11 +1,11 @@
 # Phase 8 regression loop
 
-- Commit SHA: 311e8ef264061f95807aad26e4a03794e5bb2b92
-- Disposable database: deepcrm_t67_loop_20260826082022 (dropped by script cleanup)
-- API port: 59739
+- Commit SHA: 21abb894ba0ab296d0b060456f00bbf29699916c
+- Disposable database: deepcrm_t67_loop_20260826082807 (dropped by script cleanup)
+- API port: 61776
 - MCP transport: streamable HTTP at /mcp
 - Tools exercised: 75/75
-- Resources read: crm://help/filtering, crm://help/limits, crm://lists, crm://lists/loop_dynamic_af3a1bca_72f7_47f2_a5ba_b148ba5aae47, crm://lists/loop_static_af3a1bca_72f7_47f2_a5ba_b148ba5aae47, crm://schema, crm://schema/line_item, crm://templates, crm://views, crm://views/loop_view_af3a1bca_72f7_47f2_a5ba_b148ba5aae47
+- Resources read: crm://help/filtering, crm://help/limits, crm://lists, crm://lists/loop_dynamic_611ab11e_eed5_4c96_8a67_7fc5196ce1e4, crm://lists/loop_static_611ab11e_eed5_4c96_8a67_7fc5196ce1e4, crm://schema, crm://schema/line_item, crm://templates, crm://views, crm://views/loop_view_611ab11e_eed5_4c96_8a67_7fc5196ce1e4
 - Resource templates discovered: crm://lists/{slug}, crm://schema/{object_type}, crm://views/{slug}
 - Prompts discovered: crm/clean-duplicates, crm/prepare-account-review, crm/qualify-lead
 - Worker jobs: [
@@ -39,7 +39,7 @@
   },
   {
     "_count": {
-      "_all": 77
+      "_all": 78
     },
     "type": "record.reindex",
     "status": "completed"
@@ -656,7 +656,7 @@
         "evaluation_version": "number",
         "refresh_state": "string",
         "refresh_error_code": "null",
-        "last_evaluated_at": "null"
+        "last_evaluated_at": "string"
       }
     }
   },
@@ -1765,7 +1765,7 @@
       },
       {
         "_count": {
-          "_all": 77
+          "_all": 78
         },
         "type": "record.reindex",
         "status": "completed"

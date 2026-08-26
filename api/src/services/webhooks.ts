@@ -203,9 +203,11 @@ export async function deleteWebhook(
   deps: AppDeps,
   ctx: ActorContext,
   id: string,
+  approval?: ApprovalConsumption,
 ): Promise<{ deleted: true }> {
-  await authorize(deps, ctx, 'crm.webhook.delete')
+  await authorize(deps, ctx, 'crm.webhook.delete', approval)
   return deps.db.$transaction(async (tx) => {
+    await approval?.consume(tx)
     const deleted = await tx.webhook.deleteMany({ where: { ...tenantWhere(ctx.tenant), id } })
     if (deleted.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Webhook not found')
     await deps.writeAudit(tx, auditInput(ctx, 'crm.webhook.delete', 'success', id, {}))

@@ -31,6 +31,7 @@ const ToolResult = z.object({
 }).passthrough()
 
 type Fixture = { tenant: TenantRef; survivorId: string; loserId: string }
+type ApprovalChallengeResult = { args: Record<string, unknown>; requestState: string }
 
 function context(tenant: TenantRef, role: 'member' | 'admin' | 'owner', user: string) {
   const base = linkContext(tenant, user)
@@ -91,6 +92,28 @@ async function challenge(target: Fixture) {
     reason: 'same person',
   }
   const result = ToolResult.parse(await member.callTool({ name: 'crm_merge_records', arguments: args }))
+  expect(result).toMatchObject({
+    resultType: 'input_required',
+    inputRequests: { approval: { method: 'elicitation/create' } },
+  })
+  expect(result.requestState).toEqual(expect.any(String))
+  return { args, requestState: result.requestState ?? '' }
+}
+
+async function webhookDeleteChallenge(tenant: TenantRef): Promise<ApprovalChallengeResult> {
+  const webhook = await db.webhook.create({
+    data: {
+      ...tenant,
+      subscribingUoaUserId: 'webhook_delete_requester',
+      url: `https://1.1.1.1/delete-${crypto.randomUUID()}`,
+      events: ['record.updated'],
+      secretCiphertext: 'sealed',
+      active: true,
+    },
+  })
+  const owner = await clientFor(context(tenant, 'owner', 'webhook_delete_requester'))
+  const args = { id: webhook.id }
+  const result = ToolResult.parse(await owner.callTool({ name: 'crm_webhook_delete', arguments: args }))
   expect(result).toMatchObject({
     resultType: 'input_required',
     inputRequests: { approval: { method: 'elicitation/create' } },
@@ -165,6 +188,38 @@ describe('approval MRTR', () => {
     })).resolves.toMatchObject({ status: 'consumed', requiredRole: 'admin' })
 
     const replay = ToolResult.parse(await admin.request(request, ToolResult))
+    expect(replay).toMatchObject({
+      isError: true,
+      structuredContent: { code: ErrorCode.APPROVAL_REQUIRED },
+    })
+  })
+
+  it('lets a different owner consume a webhook delete approval exactly once', async () => {
+    const seeded = await seedTenant(db)
+    const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
+    organizationIds.push(tenant.organizationId)
+    await db.$transaction((tx) => seedDefaultPolicies(tx, tenant))
+    const initial = await webhookDeleteChallenge(tenant)
+    const owner = await clientFor(context(tenant, 'owner', 'webhook_delete_approver'))
+    const request = {
+      method: 'tools/call' as const,
+      params: {
+        name: 'crm_webhook_delete',
+        arguments: initial.args,
+        inputResponses: { approval: { action: 'accept' as const, content: { approved: true } } },
+        requestState: initial.requestState,
+      },
+    }
+
+    const deleted = ToolResult.parse(await owner.request(request, ToolResult))
+    expect(deleted.isError).not.toBe(true)
+    expect(deleted.structuredContent).toEqual({ deleted: true })
+    await expect(db.approvalRequest.findFirstOrThrow({
+      where: { ...tenant, action: 'crm_webhook_delete' },
+    })).resolves.toMatchObject({ status: 'consumed', requiredRole: 'owner' })
+    expect(await db.webhook.count({ where: tenant })).toBe(0)
+
+    const replay = ToolResult.parse(await owner.request(request, ToolResult))
     expect(replay).toMatchObject({
       isError: true,
       structuredContent: { code: ErrorCode.APPROVAL_REQUIRED },
