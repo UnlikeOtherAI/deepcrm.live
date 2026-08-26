@@ -69,6 +69,7 @@ const EnvSchema = z.object({
   DEEPCRM_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10485760),
   DEEPCRM_MAX_EXPORT_ROWS: z.coerce.number().int().positive().default(100000),
   DEEPCRM_EXPORT_DIR: z.string().min(1).default('./.exports'),
+  DEEPCRM_FILE_ACCESS_PUBLIC_URL: z.string().url().optional(),
   DEEPCRM_ORG_ALLOWLIST: optionalString,
   DEEPCRM_AUDIT_RETENTION_YEARS: z.coerce.number().int().positive().default(7),
   DEEPCRM_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
@@ -79,11 +80,18 @@ const EnvSchema = z.object({
 
 type ParsedEnv = z.infer<typeof EnvSchema>
 
-export type Env = Omit<ParsedEnv, 'REQUIRE_AUTH'> & { REQUIRE_AUTH: boolean }
+export type Env = Omit<ParsedEnv, 'REQUIRE_AUTH' | 'DEEPCRM_FILE_ACCESS_PUBLIC_URL'> & {
+  REQUIRE_AUTH: boolean
+  DEEPCRM_FILE_ACCESS_PUBLIC_URL: string
+}
 
 // REQUIRE_AUTH defaults per auth-and-tenancy §1: false outside production,
 // true when NODE_ENV=production.
 export function parseEnv(source: NodeJS.ProcessEnv): Env {
   const parsed = EnvSchema.parse(source)
-  return { ...parsed, REQUIRE_AUTH: parsed.REQUIRE_AUTH ?? parsed.NODE_ENV === 'production' }
+  return {
+    ...parsed,
+    DEEPCRM_FILE_ACCESS_PUBLIC_URL: parsed.DEEPCRM_FILE_ACCESS_PUBLIC_URL ?? parsed.DEEPCRM_API_PUBLIC_URL,
+    REQUIRE_AUTH: parsed.REQUIRE_AUTH ?? parsed.NODE_ENV === 'production',
+  }
 }

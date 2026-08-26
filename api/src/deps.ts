@@ -9,6 +9,7 @@ import {
 } from '@deepcrm/schema-engine'
 import { parseSecretBox, type SecretBox } from '@deepcrm/schemas'
 import type { Env } from './env.js'
+import { createFileAccessService, type FileAccessService } from './services/file-access.js'
 import { createHistoryCursorCodec, type HistoryCursorCodec } from './services/history-cursor.js'
 import { createQueryCursorCodec, type QueryCursorCodec } from './services/query-cursor.js'
 
@@ -25,6 +26,7 @@ export type AppDeps = {
   queryCursor: QueryCursorCodec
   secretBox: SecretBox
   embedder: Embedder
+  fileAccess: FileAccessService
   writeAudit: typeof writeAudit
 }
 
@@ -59,6 +61,7 @@ export function createAppDeps(env: Env): AppDeps {
           token: env.LEDGER_PROXY_TOKEN,
           model: env.DEEPCRM_EMBEDDING_MODEL,
         }),
+    fileAccess: createFileAccessService(env.DEEPCRM_FILE_ACCESS_PUBLIC_URL, secretBox),
     writeAudit,
   }
 }

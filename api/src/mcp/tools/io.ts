@@ -90,7 +90,7 @@ export function registerIoTools(
   })
   defineTool(server, {
     name: 'crm_file_list',
-    description: 'List authorized file links and short-lived storage access URLs. URLs expire quickly; provider keys remain metadata and are not bearer credentials.',
+    description: 'List authorized file links and signed short-lived DeepCRM file access URLs. Provider keys stay metadata and are never embedded in the URL.',
     input: CrmFileList.in.shape,
     handler: async (args) => ok(await listFiles(deps, ctx, {
       targetType: args.target_type, recordId: args.record_id, eventId: args.event_id,

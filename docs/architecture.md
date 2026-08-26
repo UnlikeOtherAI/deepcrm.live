@@ -135,6 +135,7 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 | `DEEPCRM_MAX_BODY_BYTES` | `10485760` | HTTP body cap (10 MB) |
 | `DEEPCRM_MAX_EXPORT_ROWS` | `100000` | export row cap |
 | `DEEPCRM_EXPORT_DIR` | `./.exports` | export spool directory |
+| `DEEPCRM_FILE_ACCESS_PUBLIC_URL` | `DEEPCRM_API_PUBLIC_URL` | public base URL for signed file access links returned by `crm_file_list` |
 | `DEEPCRM_ORG_ALLOWLIST` | — | optional comma-separated UOA org ids allowed to provision |
 | `DEEPCRM_BOOTSTRAP_UOA_USER_ID` | — | required only by the T16 matching bootstrap runner; stable UOA subject attributed as `on_behalf_of` for its migration-scoped system ActorContext and audit |
 | `DEEPCRM_AUDIT_RETENTION_YEARS` | `7` | crypto-shred horizon for audit personal fields |

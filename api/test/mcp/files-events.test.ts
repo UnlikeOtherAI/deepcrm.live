@@ -28,6 +28,7 @@ const ToolResult = z.object({
 
 let client: Awaited<ReturnType<typeof startTestServer>>['client']
 let closeServer: () => Promise<void>
+let serverUrl: URL
 let organizationId: string
 let teamId: string
 let recordId: string
@@ -57,6 +58,7 @@ beforeAll(async () => {
   const started = await startTestServer()
   client = started.client
   closeServer = started.close
+  serverUrl = started.url
   const team = await db.team.findUniqueOrThrow({
     where: { externalTeamId: 'team_dev' }, select: { id: true, organizationId: true },
   })
@@ -144,6 +146,20 @@ describe('file and event MCP tools', () => {
     })))
     expect(files.files).toHaveLength(1)
     expect(files.files[0]?.access.expires_at).toMatch(/Z$/u)
+    expect(files.files[0]?.access.url).toMatch(/^http:\/\/127\.0\.0\.1\/files\/access\/.+\?token=/u)
+    expect(files.files[0]?.access.url).not.toContain(providerKey)
+    const accessUrl = new URL(files.files[0]?.access.url ?? '')
+    accessUrl.host = serverUrl.host
+    const accessResponse = await fetch(accessUrl)
+    expect(accessResponse.status).toBe(200)
+    await expect(accessResponse.json()).resolves.toMatchObject({
+      file_id: file.file.id,
+      provider: 's3',
+      provider_key: providerKey,
+    })
+    accessUrl.searchParams.set('token', 'tampered')
+    const tamperedResponse = await fetch(accessUrl)
+    expect(tamperedResponse.status).toBe(403)
 
     const event = CrmEventIngest.out.parse(structured(await client.callTool({
       name: 'crm_event_ingest',

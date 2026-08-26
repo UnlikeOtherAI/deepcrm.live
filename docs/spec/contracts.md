@@ -758,7 +758,8 @@ export const CrmFileList = { in: z.object({
   event_id: Uuid.optional().describe('visible event target id filter'),
   limit: Limit.describe('maximum file links to return; defaults to 50') }),
   out: z.object({ files: z.array(z.object({ file: FileObjectDetail, link: FileLinkDetail,
-    access: z.object({ url: z.string().url(), expires_at: IsoDateTime }) })) }) }
+    access: z.object({ url: z.string().url().describe('signed short-lived DeepCRM access URL; provider key is not embedded'),
+      expires_at: IsoDateTime }) })) }) }
 export const CrmEventTypeDefine = { in: z.object({
   slug: Slug.describe('stable event type slug such as product_feature_used'),
   name: z.string().min(1).max(120).describe('agent-facing event type name'),

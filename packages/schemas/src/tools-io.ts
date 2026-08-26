@@ -145,7 +145,7 @@ export const CrmFileList = {
       file: FileObjectDetail,
       link: FileLinkDetail,
       access: z.object({
-        url: z.string().url(),
+        url: z.string().url().describe('signed short-lived DeepCRM access URL; provider key is not embedded'),
         expires_at: IsoDateTime,
       }),
     })),

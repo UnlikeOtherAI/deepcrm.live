@@ -12,6 +12,7 @@ import {
   queryEvents,
   registerFile,
 } from '../../src/services/files-events.js'
+import { createFileAccessService } from '../../src/services/file-access.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { seedDefaultPolicies } from '../../src/services/policy.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
@@ -29,6 +30,7 @@ const deps: AppDeps = {
   maxBulkRows: 10_000, maxExportRows: 100_000, orgAllowlist: null,
   linkWriter: createProjectionLinkWriter(), historyCursor: createHistoryCursorCodec(secretBox),
   queryCursor: createQueryCursorCodec(secretBox), secretBox, embedder: new FakeEmbedder('api-test'),
+  fileAccess: createFileAccessService('https://files.example.test', secretBox),
   writeAudit,
 }
 
@@ -114,6 +116,8 @@ describe('file and behavioural event services', () => {
     const listed = await listFiles(deps, target.ctx, {})
     expect(listed.files.map((item) => item.link.purpose)).toEqual(['contract'])
     expect(listed.files[0]?.access.expires_at).toBe('2026-08-24T12:05:00.000Z')
+    expect(listed.files[0]?.access.url).toMatch(/^https:\/\/files\.example\.test\/files\/access\/.+\?token=/u)
+    expect(listed.files[0]?.access.url).not.toContain(file.file.provider_key)
   })
 
   it('defines typed events, keeps external ids idempotent, and queries only visible subjects', async () => {

@@ -157,14 +157,6 @@ function presentLink(row: {
   })
 }
 
-function accessFor(fileId: string, now: Date) {
-  const expires = new Date(now.getTime() + 5 * 60 * 1_000)
-  return {
-    url: `https://storage.deepcrm.invalid/files/${fileId}?expires_at=${encodeURIComponent(expires.toISOString())}`,
-    expires_at: expires.toISOString(),
-  }
-}
-
 function parseSize(value: string): bigint {
   const size = BigInt(value)
   if (size > 5_000_000_000n) failure(ErrorCode.LIMIT_EXCEEDED, 'File size exceeds metadata limit')
@@ -300,7 +292,11 @@ export async function listFiles(deps: AppDeps, ctx: ActorContext, input: ListFil
   const visible = []
   for (const row of rows) {
     if (!await isVisibleTarget(deps, ctx, row)) continue
-    visible.push({ file: presentFile(row.file), link: presentLink(row), access: accessFor(row.fileId, deps.clock()) })
+    visible.push({
+      file: presentFile(row.file),
+      link: presentLink(row),
+      access: deps.fileAccess.mint({ tenant: ctx.tenant, file: row.file, now: deps.clock() }),
+    })
   }
   return { files: visible }
 }
