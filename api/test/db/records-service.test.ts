@@ -8,6 +8,7 @@ import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schema
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { testFileAccess } from '../file-access-fixture.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 import {
@@ -44,6 +45,7 @@ const deps: AppDeps = {
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
   secretBox: parseSecretBox(keyring),
+  fileAccess: testFileAccess,
   writeAudit,
 }
 

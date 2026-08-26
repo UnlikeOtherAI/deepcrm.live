@@ -1,7 +1,7 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { ErrorCode, ServiceError, Slug, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
-import { getView, listViews } from '../services/lists.js'
+import { getList, getView, listLists, listViews } from '../services/lists.js'
 import { getSchema, listSchemaTemplates } from '../services/schema.js'
 import { presentObjectType, presentSchema } from './schema-presenters.js'
 
@@ -132,8 +132,8 @@ export function registerResources(server: McpServer, ctx: ActorContext, deps: Ap
     description: 'Current object types, relation types, and matching rules for this workspace.',
     mimeType: 'application/json',
   }, async (uri) => {
-    const [schema, views] = await Promise.all([getSchema(deps, ctx), listViews(deps, ctx)])
-    return jsonResource(uri, presentSchema(schema, views))
+    const [schema, lists, views] = await Promise.all([getSchema(deps, ctx), listLists(deps, ctx), listViews(deps, ctx)])
+    return jsonResource(uri, presentSchema(schema, lists, views))
   })
 
   server.registerResource('schema-object', new ResourceTemplate('crm://schema/{object_type}', {
@@ -158,6 +158,26 @@ export function registerResources(server: McpServer, ctx: ActorContext, deps: Ap
     description: 'Policy-filtered saved view index with slug, name, and object type.',
     mimeType: 'application/json',
   }, async (uri) => jsonResource(uri, { views: await listViews(deps, ctx) }))
+
+  server.registerResource('lists', 'crm://lists', {
+    title: 'Lists and dynamic segments',
+    description: 'Policy-filtered list index with kind, object scope, refresh state, and evaluation version.',
+    mimeType: 'application/json',
+  }, async (uri) => jsonResource(uri, { lists: await listLists(deps, ctx) }))
+
+  server.registerResource('list', new ResourceTemplate('crm://lists/{slug}', {
+    list: undefined,
+  }), {
+    title: 'List definition',
+    description: 'Full policy-filtered static or dynamic list definition addressed by slug.',
+    mimeType: 'application/json',
+  }, async (uri, variables) => {
+    const slug = Slug.safeParse(variables['slug'])
+    if (!slug.success) {
+      throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'List resource is invalid')
+    }
+    return jsonResource(uri, await getList(deps, ctx, slug.data))
+  })
 
   server.registerResource('view', new ResourceTemplate('crm://views/{slug}', {
     list: undefined,

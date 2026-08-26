@@ -4,6 +4,7 @@ import { ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@dee
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { testFileAccess } from '../file-access-fixture.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { queryRecords } from '../../src/services/record-query.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
@@ -29,6 +30,7 @@ const deps: AppDeps = {
   queryCursor: createQueryCursorCodec(parseSecretBox(encodedKeyring)),
   secretBox: parseSecretBox(encodedKeyring),
   embedder: new FakeEmbedder('api-test'),
+  fileAccess: testFileAccess,
   writeAudit,
 }
 

@@ -163,6 +163,10 @@ export const MatchingRule = z.object({
 export const ViewSummary = z.object({
   slug: Slug, name: z.string(), object_type: Slug,
 })
+export const ListSummary = z.object({
+  slug: Slug, name: z.string(), kind: ListKind, object_type: Slug.nullable(),
+  refresh_state: ListRefreshState, evaluation_version: z.number().int(),
+})
 export const SchemaSnapshot = z.object({
   schema_version: z.number().int(),
   object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true,
@@ -170,6 +174,7 @@ export const SchemaSnapshot = z.object({
     .extend({ attribute_count: z.number().int() })),
   relation_types: z.array(RelationTypeDetail),
   matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'),
+  lists: z.array(ListSummary),
   views: z.array(ViewSummary),
 })
 ```

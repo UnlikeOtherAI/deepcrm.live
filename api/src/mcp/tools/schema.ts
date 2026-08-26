@@ -25,7 +25,7 @@ import {
   type ActorContext,
 } from '@deepcrm/schemas'
 import type { AppDeps } from '../../deps.js'
-import { listViews } from '../../services/lists.js'
+import { listLists, listViews } from '../../services/lists.js'
 import {
   applySchemaTemplate,
   archiveSchemaAttributeGroup,
@@ -148,7 +148,8 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
     handler: async (args) => {
       const schema = await latestSchema(deps, ctx)
       if (args.object_type === undefined) {
-        return jsonResult(presentSchema(schema, await listViews(deps, ctx)))
+        const [lists, views] = await Promise.all([listLists(deps, ctx), listViews(deps, ctx)])
+        return jsonResult(presentSchema(schema, lists, views))
       }
       const objectType = schema.objectTypesBySlug.get(args.object_type)
       if (objectType === undefined) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type')

@@ -11,7 +11,8 @@ import { createRetentionHandler, RETENTION_JOB } from '../../src/jobs/retention.
 const databaseUrl = process.env.DATABASE_URL
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for retention tests')
 const db = createDb(databaseUrl)
-const now = new Date('2026-08-24T20:00:00.000Z')
+const dayMs = 24 * 60 * 60 * 1_000
+const now = new Date('2099-08-24T20:00:00.000Z')
 let exportDir: string
 let organizationId: string
 let teamId: string
@@ -66,7 +67,7 @@ describe('daily retention', () => {
       teamId,
       objectTypeId: objectType.id,
       displayName: 'Expired record',
-      deletedAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+      deletedAt: new Date(now.getTime() - 31 * dayMs),
       createdByType: 'system',
       createdById: 'retention-test',
     } })
@@ -75,8 +76,8 @@ describe('daily retention', () => {
       teamId,
       objectTypeId: objectType.id,
       displayName: '(erased)',
-      deletedAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
-      erasedAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+      deletedAt: new Date(now.getTime() - 31 * dayMs),
+      erasedAt: new Date(now.getTime() - 31 * dayMs),
       createdByType: 'system',
       createdById: 'retention-test',
     } })
@@ -95,6 +96,7 @@ describe('daily retention', () => {
     await writeFile(oldFile, 'old')
     await writeFile(freshFile, 'fresh')
     await utimes(oldFile, new Date(now.getTime() - 61 * 60 * 1_000), new Date(now.getTime() - 61 * 60 * 1_000))
+    await utimes(freshFile, now, now)
 
     const job = await db.queueJob.create({ data: {
       type: RETENTION_JOB,
@@ -106,7 +108,7 @@ describe('daily retention', () => {
       type: 'retention.completed.fixture',
       payload: {},
       status: 'completed',
-      updatedAt: new Date(now.getTime() - 8 * 24 * 60 * 60 * 1_000),
+      updatedAt: new Date(now.getTime() - 8 * dayMs),
     } })
     const expiredApproval = await db.approvalRequest.create({ data: {
       organizationId,
@@ -122,7 +124,7 @@ describe('daily retention', () => {
       reason: 'test',
       requiredRole: 'owner',
       continuationTokenHash: `retention-${crypto.randomUUID()}`,
-      expiresAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1_000),
+      expiresAt: new Date(now.getTime() - 31 * dayMs),
     } })
     const controller = new AbortController()
     const worker = startWorker(
@@ -147,10 +149,10 @@ describe('daily retention', () => {
     expect(await db.approvalRequest.findFirst({
       where: { id: expiredApproval.id, organizationId, teamId },
     })).toBeNull()
-    const next = await db.queueJob.findUnique({
-      where: { idempotencyKey: 'retention:2026-08-25' },
-    })
+    const nextVisibleAt = new Date(now.getTime() + dayMs)
+    const nextKey = `retention:${nextVisibleAt.toISOString().slice(0, 10)}`
+    const next = await db.queueJob.findUnique({ where: { idempotencyKey: nextKey } })
     expect(next).toMatchObject({ type: RETENTION_JOB, status: 'queued' })
-    expect(next?.visibleAt.toISOString()).toBe('2026-08-25T20:00:00.000Z')
+    expect(next?.visibleAt.toISOString()).toBe(nextVisibleAt.toISOString())
   })
 })

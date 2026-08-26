@@ -13,6 +13,7 @@ import {
 import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../../src/deps.js'
+import { testFileAccess } from '../file-access-fixture.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
 
@@ -40,6 +41,7 @@ export function linkDeps(db: Db): AppDeps {
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     secretBox: parseSecretBox(keyring),
     embedder: new FakeEmbedder('api-test'),
+    fileAccess: testFileAccess,
     writeAudit,
   }
 }

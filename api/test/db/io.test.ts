@@ -11,6 +11,7 @@ import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { testFileAccess } from '../file-access-fixture.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { changesSince } from '../../src/services/io.js'
 import { seedDefaultPolicies } from '../../src/services/policy.js'
@@ -36,6 +37,7 @@ const deps: AppDeps = {
   queryCursor: createQueryCursorCodec(secretBox),
   secretBox,
   embedder: new FakeEmbedder('api-test'),
+  fileAccess: testFileAccess,
   writeAudit,
 }
 

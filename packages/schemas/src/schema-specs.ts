@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AttributeType } from './attribute-config.js'
 import { IsoDateTime, Slug, Uuid } from './primitives.js'
 import { MatchingRule } from './matching.js'
-import { AttributeDerivationDetail, AttributeGroupDetail, PipelineDetail, RelationEdgeLimit } from './semantic-foundation.js'
+import { AttributeDerivationDetail, AttributeGroupDetail, ListKind, ListRefreshState, PipelineDetail, RelationEdgeLimit } from './semantic-foundation.js'
 export const Sensitivity = z.enum(['public','internal','confidential','restricted'])
   .describe('data sensitivity used for policy and redaction')
 export const Cardinality = z.enum(['one_to_one','one_to_many','many_to_one','many_to_many'])
@@ -41,4 +41,12 @@ export const ViewSummary = z.object({
   name: z.string(),
   object_type: Slug,
 })
-export const SchemaSnapshot = z.object({ schema_version: z.number().int(), object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true, plural_name: true, description: true, kind: true, primary_attribute: true }).extend({ attribute_count: z.number().int() })), relation_types: z.array(RelationTypeDetail), matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'), views: z.array(ViewSummary) })
+export const ListSummary = z.object({
+  slug: Slug,
+  name: z.string(),
+  kind: ListKind,
+  object_type: Slug.nullable(),
+  refresh_state: ListRefreshState,
+  evaluation_version: z.number().int(),
+})
+export const SchemaSnapshot = z.object({ schema_version: z.number().int(), object_types: z.array(ObjectTypeDetail.pick({ id: true, slug: true, singular_name: true, plural_name: true, description: true, kind: true, primary_attribute: true }).extend({ attribute_count: z.number().int() })), relation_types: z.array(RelationTypeDetail), matching_rules: z.record(Slug, z.array(MatchingRule)).describe('by object type slug'), lists: z.array(ListSummary), views: z.array(ViewSummary) })

@@ -193,7 +193,7 @@ describe('merge execution', () => {
       'ada@engine.test', 'augusta@engine.test',
     ])
     const snapshot = await db.recordChange.findUniqueOrThrow({
-      where: { id: result.mergeChangeId }, select: { snapshot: true },
+      where: { id: result.mergeChangeId }, select: { occurredAt: true, snapshot: true },
     })
     expect(snapshot.snapshot).toMatchObject({
       survivorBefore: { name: { full: 'Ada' }, emails: ['ada@engine.test'] },
@@ -218,7 +218,7 @@ describe('merge execution', () => {
     expect(redirectedLinks.length).toBeGreaterThan(0)
     const at = await recordAt(
       db, fixture.tenant, fixture.loser.id,
-      new Date(fixture.ctx.now.getTime() + 86_400_000),
+      new Date(snapshot.occurredAt.getTime() + 1),
     )
     expect(at.data).toMatchObject({ emails: ['ada@engine.test', 'augusta@engine.test'] })
   })

@@ -199,6 +199,24 @@ export async function getList(deps: AppDeps, ctx: ActorContext, slug: string): P
   return presentList(deps, ctx, schema, list)
 }
 
+export async function listLists(deps: AppDeps, ctx: ActorContext) {
+  const schema = await loadSchema(deps.db, ctx.tenant, { useCache: false })
+  const requests = schema.lists.map((list) => listRequest(ctx, list, 'view'))
+  const evaluator = await loadPolicyEvaluator(deps.db, ctx, requests)
+  return schema.lists.filter((list) => permitted(evaluator.evaluate(listRequest(ctx, list, 'view')))).map((list) => {
+    const objectType = list.objectTypeId === null ? null : schema.objectTypesById.get(list.objectTypeId)
+    if (list.objectTypeId !== null && objectType === undefined) failure(ErrorCode.SCHEMA_CONFLICT, 'List object type is not active')
+    return {
+      slug: list.slug,
+      name: list.name,
+      kind: list.kind,
+      object_type: objectType?.slug ?? null,
+      refresh_state: list.refreshState,
+      evaluation_version: list.evaluationVersion,
+    }
+  })
+}
+
 export async function createList(
   deps: AppDeps, ctx: ActorContext, input: CreateListInput,
 ): Promise<ListDetail> {

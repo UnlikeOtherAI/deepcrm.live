@@ -214,6 +214,14 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
 
 export function presentSchema(
   schema: LoadedSchema,
+  lists: readonly {
+    slug: string
+    name: string
+    kind: 'static' | 'dynamic'
+    object_type: string | null
+    refresh_state: 'ready' | 'refreshing' | 'failed'
+    evaluation_version: number
+  }[],
   views: readonly { slug: string; name: string; object_type: string }[],
 ) {
   const matchingRules = Object.fromEntries(schema.objectTypes.map((objectType) => [
@@ -239,6 +247,7 @@ export function presentSchema(
     })),
     relation_types: schema.relationTypes.map((relationType) => relation(schema, relationType)),
     matching_rules: matchingRules,
+    lists,
     views,
   })
 }

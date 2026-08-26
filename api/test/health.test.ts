@@ -4,6 +4,7 @@ import { parseSecretBox } from '@deepcrm/schemas'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { createAppDeps, type AppDeps } from '../src/deps.js'
+import { testFileAccess } from './file-access-fixture.js'
 import { parseEnv, type Env } from '../src/env.js'
 import { createHistoryCursorCodec } from '../src/services/history-cursor.js'
 import { createQueryCursorCodec } from '../src/services/query-cursor.js'
@@ -33,6 +34,7 @@ function makeDeps(ok: boolean): AppDeps {
     queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
     secretBox: parseSecretBox(keyring),
     embedder: new FakeEmbedder('api-test'),
+    fileAccess: testFileAccess,
     writeAudit,
   }
 }

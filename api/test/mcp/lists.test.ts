@@ -46,6 +46,12 @@ function structured(result: unknown): unknown {
   return parsed.structuredContent
 }
 
+function textContent(contents: Array<{ uri: string; text: string } | { uri: string; blob: string }>): string {
+  const first = contents[0]
+  if (first === undefined || !('text' in first)) throw new Error('Expected a text resource')
+  return first.text
+}
+
 async function allowAgent(resourceType: PolicyResourceType, action: PolicyAction): Promise<void> {
   await db.policyRule.create({ data: {
     organizationId, teamId, scope: 'team', scopeId: teamId, resourceType, action,
@@ -153,6 +159,33 @@ describe('list and view MCP tools', () => {
       },
     })))
     expect(created).toMatchObject({ slug: listSlug, entry_count: 0 })
+    const resources = await client.listResources()
+    expect(resources.resources.map((resource) => resource.uri)).toContain('crm://lists')
+    const templates = await client.listResourceTemplates()
+    expect(templates.resourceTemplates.map((template) => template.uriTemplate)).toContain('crm://lists/{slug}')
+    const lists = z.object({ lists: z.array(z.object({
+      slug: z.string(),
+      name: z.string(),
+      kind: z.enum(['static', 'dynamic']),
+      object_type: z.string().nullable(),
+      refresh_state: z.enum(['ready', 'refreshing', 'failed']),
+      evaluation_version: z.number().int(),
+    })) }).parse(JSON.parse(textContent((await client.readResource({ uri: 'crm://lists' })).contents)))
+    expect(lists.lists).toContainEqual({
+      slug: listSlug,
+      name: 'MCP targets',
+      kind: 'static',
+      object_type: 'person',
+      refresh_state: 'ready',
+      evaluation_version: 0,
+    })
+    const listDetail = CrmListCreate.out.parse(JSON.parse(textContent((await client.readResource({
+      uri: `crm://lists/${listSlug}`,
+    })).contents)))
+    expect(listDetail).toMatchObject({ slug: listSlug, object_type: 'person', kind: 'static' })
+    const schema = z.object({ lists: z.array(z.object({ slug: z.string(), kind: z.enum(['static', 'dynamic']) })) })
+      .parse(JSON.parse(textContent((await client.readResource({ uri: 'crm://schema' })).contents)))
+    expect(schema.lists).toContainEqual({ slug: listSlug, kind: 'static' })
     const addedResult = structured(await client.callTool({
       name: 'crm_list_add', arguments: {
         list: listSlug, entries: [{ record_id: recordId, data: { priority: 'high' } }],

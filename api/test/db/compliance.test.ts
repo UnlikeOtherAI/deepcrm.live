@@ -4,6 +4,7 @@ import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schema
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { testFileAccess } from '../file-access-fixture.js'
 import type { ApprovalConsumption } from '../../src/services/approvals.js'
 import {
   addSuppression,
@@ -45,6 +46,7 @@ const deps: AppDeps = {
   historyCursor: createHistoryCursorCodec(parseSecretBox(keyring)),
   queryCursor: createQueryCursorCodec(parseSecretBox(keyring)),
   secretBox: parseSecretBox(keyring),
+  fileAccess: testFileAccess,
   writeAudit,
 }
 

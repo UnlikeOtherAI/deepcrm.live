@@ -65,15 +65,17 @@ Spec-shaped (2026-07-28 MRTR pattern). When a call needs a decision, the result 
 
 | URI | Content |
 |---|---|
-| `crm://schema` | `{ schema_version, object_types: [ObjectTypeSummary], relation_types: [...], matching_rules: [...], views: [ViewSummary] }` |
+| `crm://schema` | `{ schema_version, object_types: [ObjectTypeSummary], relation_types: [...], matching_rules: [...], lists: [ListSummary], views: [ViewSummary] }` |
 | `crm://schema/{object_type}` | full `ObjectTypeDetail` (attributes with type, config, flags, sensitivity, description) |
 | `crm://templates` | available template slugs with descriptions (the live registry — `crm_template_apply` validates against it) |
+| `crm://lists` | index of static lists and dynamic segments (slug, name, kind, object scope, refresh state, evaluation version) |
+| `crm://lists/{slug}` | a list or dynamic segment definition, including object scope, filter freshness and entry count |
 | `crm://views` | index of saved views (slug, name, object type) |
 | `crm://views/{slug}` | a saved view's definition |
 | `crm://help/filtering` | the filter grammar: op-by-type table + three worked examples (in-band copy of `schema-engine.md` §5) |
 | `crm://help/limits` | numeric caps: bulk rows, filter nodes, page sizes, export rows |
 
-Template URIs (`crm://schema/{object_type}`, `crm://views/{slug}`) are registered via `resources/templates/list` with RFC 6570 `uriTemplate`s.
+Template URIs (`crm://schema/{object_type}`, `crm://lists/{slug}`, `crm://views/{slug}`) are registered via `resources/templates/list` with RFC 6570 `uriTemplate`s.
 
 `crm://help/limits` also documents modelling choice points for Phase 8
 compatibility work: static lists versus dynamic lists, product catalogue rows
