@@ -258,6 +258,19 @@ function json(value: unknown): JsonValue {
   return parsed
 }
 
+function rejectOutOfOrderStage(current: { startedAt: Date }, at: Date): void {
+  if (at.getTime() < current.startedAt.getTime()) {
+    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Pipeline transition is before the active stage interval', {
+      issues: [{
+        path: '/occurred_at',
+        message: 'Transition time must be greater than or equal to the active stage start time',
+      }],
+      active_started_at: current.startedAt.toISOString(),
+      occurred_at: at.toISOString(),
+    })
+  }
+}
+
 export async function setRecordStage(
   tx: RecordTx,
   ctx: ActorContext,
@@ -283,6 +296,7 @@ export async function setRecordStage(
   const current = await tx.recordStageHistory.findFirst({
     where: { ...tenantWhere(ctx.tenant), recordId: record.id, pipelineId: pipeline.id, endedAt: null },
   })
+  if (current !== null) rejectOutOfOrderStage(current, at)
   if (current?.stageId === stage.id) {
     const unchanged = {
       recordId: record.id, pipeline: pipeline.slug, stage: stage.slug, changed: false, intervalId: current.id,
