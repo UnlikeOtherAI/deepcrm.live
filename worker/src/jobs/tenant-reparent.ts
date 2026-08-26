@@ -19,10 +19,16 @@ const Payload = z.object({
 const TENANT_TABLES = [
   'object_types',
   'attributes',
+  'attribute_groups',
   'relation_types',
+  'pipelines',
+  'pipeline_stages',
+  'attribute_derivations',
+  'attribute_derivation_dependencies',
   'matching_rule_generations',
   'matching_rules',
   'records',
+  'record_stage_history',
   'record_links',
   'record_unique_keys',
   'record_match_keys',
@@ -37,6 +43,11 @@ const TENANT_TABLES = [
   'audit_logs',
   'queue_jobs',
   'webhooks',
+  'file_objects',
+  'file_links',
+  'event_types',
+  'events',
+  'migration_reports',
   'idempotency_replays',
 ] as const
 
@@ -105,6 +116,7 @@ export const tenantReparentHandler: JobHandler = async (jobInput) => {
       || targetOrg.id !== payload.targetOrganizationId
     ) throw new Error('tenant.reparent authoritative pairing changed')
     if (team.organizationId !== payload.targetOrganizationId) {
+      await tx.$executeRaw`SELECT set_config('deepcrm.tenant_reparent', 'on', true)`
       for (const table of TENANT_TABLES) await rewriteTable(tx, table, payload)
       await tx.team.update({
         where: { id: payload.teamId },
