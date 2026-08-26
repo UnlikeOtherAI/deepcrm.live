@@ -21,7 +21,6 @@ export const CrmSuppressionAdd = {
     reason: suppressionReason,
     sub_reason: Slug.optional().describe('queryable refinement such as opt_out, complaint, or not_interested'),
     expires_at: IsoDateTime.optional().describe('expiry for time-boxed entries; refused for objection and erasure'),
-    note: z.string().max(500).optional().describe('short operator note; never returned by check'),
   }),
   out: z.object({ added: z.literal(true) }),
 }
@@ -61,7 +60,6 @@ export const CrmSuppressionList = {
       reason: SuppressionReason,
       sub_reason: Slug.nullable(),
       expires_at: IsoDateTime.nullable(),
-      note: z.string().nullable(),
       created_at: IsoDateTime,
     })),
     next_cursor: z.string().nullable(),

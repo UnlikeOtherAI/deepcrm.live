@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
 import { buildMcpServer } from '../../src/mcp/server.js'
+import { requireApproval } from '../../src/services/approvals.js'
 import { seedDefaultPolicies } from '../../src/services/policy.js'
 import { createRecord } from '../../src/services/records.js'
 import { linkContext, linkDeps } from './link-fixture.js'
@@ -31,7 +32,7 @@ const ToolResult = z.object({
 
 type Fixture = { tenant: TenantRef; survivorId: string; loserId: string }
 
-function context(tenant: TenantRef, role: 'member' | 'admin', user: string) {
+function context(tenant: TenantRef, role: 'member' | 'admin' | 'owner', user: string) {
   const base = linkContext(tenant, user)
   return { ...base, onBehalfOf: { uoaUserId: user, role } }
 }
@@ -106,6 +107,40 @@ afterAll(async () => {
 })
 
 describe('approval MRTR', () => {
+  it('requires owner approval for erasure and suppression removal challenges', async () => {
+    const seeded = await seedTenant(db)
+    const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
+    organizationIds.push(tenant.organizationId)
+    const requester = context(tenant, 'member', 'approval_owner_requester')
+
+    await requireApproval(deps, requester, {
+      tool: 'crm_record_erase',
+      resourceType: 'record',
+      resourceId: crypto.randomUUID(),
+      args: { id: crypto.randomUUID(), reason: 'gdpr_request', suppress: true },
+    })
+    await requireApproval(deps, requester, {
+      tool: 'crm_suppression_remove',
+      resourceType: 'suppression',
+      args: {
+        kind: 'email',
+        value: 'remove@example.com',
+        channel: 'all',
+        reason: 'operator confirmed',
+      },
+    })
+
+    const rows = await db.approvalRequest.findMany({
+      where: { ...tenant },
+      orderBy: { createdAt: 'asc' },
+      select: { action: true, requiredRole: true },
+    })
+    expect(rows).toEqual([
+      { action: 'crm_record_erase', requiredRole: 'owner' },
+      { action: 'crm_suppression_remove', requiredRole: 'owner' },
+    ])
+  })
+
   it('lets a different admin consume a member merge approval exactly once', async () => {
     const target = await fixture()
     const initial = await challenge(target)

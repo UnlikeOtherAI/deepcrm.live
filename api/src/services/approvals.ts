@@ -75,7 +75,12 @@ function newToken(): string {
   return `apr_${randomBytes(32).toString('base64url')}`
 }
 function requiredRole(input: ApprovalRequestInput): 'admin' | 'owner' {
-  return input.resourceType === 'webhook' ? 'owner' : 'admin'
+  if (
+    input.resourceType === 'webhook'
+    || input.tool === 'crm_record_erase'
+    || input.tool === 'crm_suppression_remove'
+  ) return 'owner'
+  return 'admin'
 }
 function message(input: ApprovalRequestInput, role: 'admin' | 'owner'): string {
   return input.message ?? `Approve ${input.tool}? Requires ${role === 'admin' ? 'an admin' : 'an owner'}.`

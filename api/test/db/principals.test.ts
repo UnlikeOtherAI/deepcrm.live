@@ -91,7 +91,10 @@ describe('principal liveness and replay evidence', () => {
       .resolves.toBe(true)
     await expect(consumeSeenRequestId(db, ctx(tenant), 'crm_record_delete', 'a'.repeat(64)))
       .resolves.toBe(false)
-    await expect(consumeSeenRequestId(db, { ...ctx(tenant), provenance: null }, 'crm_record_delete', 'a'.repeat(64)))
+    const directContext = { ...ctx(tenant), app: 'direct', provenance: null, requestId: 'direct_http_req_1' }
+    await expect(consumeSeenRequestId(db, directContext, 'crm_record_delete', 'a'.repeat(64)))
       .resolves.toBe(true)
+    await expect(consumeSeenRequestId(db, directContext, 'crm_record_delete', 'a'.repeat(64)))
+      .resolves.toBe(false)
   })
 })

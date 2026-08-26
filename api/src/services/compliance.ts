@@ -244,7 +244,7 @@ export async function addSuppression(
         reason: input.reason,
         subReason: input.sub_reason,
         expiresAt: expiry,
-        note: input.note,
+        note: null,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
         onBehalfOf: ctx.onBehalfOf.uoaUserId,
@@ -253,7 +253,7 @@ export async function addSuppression(
         reason: input.reason,
         subReason: input.sub_reason,
         expiresAt: expiry,
-        note: input.note,
+        note: null,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
         onBehalfOf: ctx.onBehalfOf.uoaUserId,
@@ -333,7 +333,6 @@ export async function listSuppressions(
     reason: SuppressionReason
     sub_reason: string | null
     expires_at: string | null
-    note: string | null
     created_at: string
   }>
   next_cursor: string | null
@@ -368,7 +367,6 @@ export async function listSuppressions(
       reason: row.reason,
       sub_reason: row.subReason,
       expires_at: row.expiresAt?.toISOString() ?? null,
-      note: row.note,
       created_at: row.createdAt.toISOString(),
     })),
     next_cursor: rows.length > input.limit && last !== undefined ? encodeCursor(last) : null,

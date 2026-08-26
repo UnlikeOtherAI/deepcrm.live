@@ -94,7 +94,6 @@ describe('suppression compliance service', () => {
       channel: 'email',
       reason: 'objection',
       sub_reason: 'opt_out',
-      note: 'asked to stop email',
     })
 
     await expect(checkSuppression(deps, ctx, {
@@ -122,6 +121,7 @@ describe('suppression compliance service', () => {
     expect(listed.entries).toHaveLength(2)
     expect(listed.entries.every((entry) => entry.key_hash.length === 64)).toBe(true)
     expect(JSON.stringify(listed)).not.toContain('user@example.com')
+    expect(JSON.stringify(listed)).not.toContain('Jane User')
   })
 
   it('rejects invalid expiry and phone input, handles expiry, and normalizes company numbers', async () => {

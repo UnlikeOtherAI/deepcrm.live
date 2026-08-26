@@ -79,6 +79,13 @@ describe('policy truth table', () => {
     })
     await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
       resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await addRule(target, {
+      action: 'delete',
+      bindings: [{ actorType: 'agent', actorId: 'agent:direct:*' }],
+    })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
     })).resolves.toEqual({ allowed: true, requiresApproval: false })
   })
 

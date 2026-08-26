@@ -50,6 +50,16 @@ const defaultDenied = new Set<PolicyAction>([
   'admin',
 ])
 
+function directClientRequiresGrant(request: PolicyRequest): boolean {
+  return (request.resourceType === 'schema' && request.action === 'define')
+    || (request.resourceType === 'merge' && request.action === 'merge')
+    || (request.resourceType === 'record' && (
+      request.action === 'delete' || request.action === 'erase'
+    ))
+    || (request.resourceType === 'export' && request.action === 'export')
+    || (request.resourceType === 'webhook' && request.action === 'admin')
+}
+
 function invalidDefault(detail: string): ServiceError {
   return new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Invalid policy default', { detail })
 }
@@ -179,6 +189,16 @@ function evaluatePolicy(
     (binding) => humanIds.has(`${binding.actorType}:${binding.actorId}`),
   ))
   const human = decide(humanRules)
+  if (ctx.app === 'direct' && directClientRequiresGrant(request)) {
+    const direct = decide(scoped.filter((rule) => rule.bindings.some((binding) => (
+      binding.actorType === 'agent' && binding.actorId === 'agent:direct:*'
+    ))))
+    if (isHardDenied(human) || isHardDenied(direct)) {
+      return { allowed: false, requiresApproval: false }
+    }
+    if (!human.allowed || !direct.allowed) return { allowed: false, requiresApproval: false }
+    return { allowed: true, requiresApproval: human.requiresApproval || direct.requiresApproval }
+  }
   if (ctx.actor.type !== 'agent') {
     if (humanRules.length > 0) return human
     return { allowed: !defaultDenied.has(request.action), requiresApproval: false }

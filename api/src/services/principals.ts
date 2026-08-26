@@ -141,8 +141,7 @@ export async function consumeSeenRequestId(
   tool: string,
   argsSha256: string,
 ): Promise<boolean> {
-  const provenance = ctx.provenance
-  if (provenance === null) return true
+  const requestId = ctx.provenance?.requestId ?? ctx.requestId
   const now = ctx.now
   await db.$executeRaw`DELETE FROM seen_request_ids WHERE expires_at <= ${now}`
   const expiresAt = new Date(now.getTime() + REQUEST_REPLAY_TTL_MS)
@@ -151,7 +150,7 @@ export async function consumeSeenRequestId(
       organization_id, team_id, app, request_id, tool, args_sha256, seen_at, expires_at
     ) VALUES (
       ${ctx.tenant.organizationId}::uuid, ${ctx.tenant.teamId}::uuid, ${ctx.app},
-      ${provenance.requestId}, ${tool}, ${argsSha256}, ${now}, ${expiresAt}
+      ${requestId}, ${tool}, ${argsSha256}, ${now}, ${expiresAt}
     )
     ON CONFLICT (team_id, request_id) DO NOTHING
     RETURNING request_id

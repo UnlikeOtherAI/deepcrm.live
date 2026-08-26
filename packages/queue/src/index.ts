@@ -47,7 +47,7 @@ function storedJob(input: EnqueueInput) {
     organizationId: input.organizationId,
     teamId: input.teamId,
     idempotencyKey: input.idempotencyKey,
-    visibleAt: input.visibleAt,
+    visibleAt: input.visibleAt ?? new Date(0),
     priority: input.priority,
     maxAttempts: input.maxAttempts,
   }
