@@ -9,8 +9,12 @@ export type DynamicListRefreshResult = {
   evaluationVersion: number
   members: number
 }
+export type DynamicListRefreshOptions = {
+  maxMembers?: number
+}
 
 type AuditWriter = typeof writeAudit
+const DEFAULT_MAX_DYNAMIC_LIST_MEMBERS = 10_000
 
 function definitionFilter(definition: unknown) {
   if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
@@ -25,6 +29,7 @@ async function visibleMemberIds(
   ctx: ActorContext,
   objectTypeSlug: string,
   filter: ReturnType<typeof definitionFilter>,
+  maxMembers: number,
 ): Promise<string[]> {
   const schema = await loadSchema(db, tenant, { useCache: false })
   const objectType = schema.objectTypesBySlug.get(objectTypeSlug)
@@ -38,6 +43,9 @@ async function visibleMemberIds(
       limit: 200,
       ...(after === undefined ? {} : { after }),
     })
+    if (ids.length + page.records.length > maxMembers) {
+      throw new ServiceError(ErrorCode.LIMIT_EXCEEDED, 'Dynamic list membership exceeds the refresh limit')
+    }
     ids.push(...page.records.map((record) => record.id))
     after = page.next ?? undefined
   } while (after !== undefined)
@@ -109,6 +117,7 @@ export async function refreshDynamicListMembership(
   evaluationVersion: number,
   now: Date,
   audit: AuditWriter,
+  options: DynamicListRefreshOptions = {},
 ): Promise<DynamicListRefreshResult> {
   const schema = await loadSchema(db, tenant, { useCache: false })
   const loaded = schema.listsById.get(listId)
@@ -123,7 +132,10 @@ export async function refreshDynamicListMembership(
     data: { refreshState: 'refreshing', refreshErrorCode: null },
   })
   try {
-    const memberIds = await visibleMemberIds(db, tenant, ctx, objectType.slug, definitionFilter(loaded.definition))
+    const maxMembers = options.maxMembers ?? DEFAULT_MAX_DYNAMIC_LIST_MEMBERS
+    const memberIds = await visibleMemberIds(
+      db, tenant, ctx, objectType.slug, definitionFilter(loaded.definition), maxMembers,
+    )
     await writeMembership(db, tenant, ctx, listId, evaluationVersion, memberIds, now, audit)
     return { listId, evaluationVersion, members: memberIds.length }
   } catch (error: unknown) {

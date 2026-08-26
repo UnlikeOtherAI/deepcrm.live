@@ -10,6 +10,7 @@ import { parseSecretBox, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
+import { createFileAccessService } from '../../src/services/file-access.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import {
   addListEntries,
@@ -37,6 +38,7 @@ const deps: AppDeps = {
   orgAllowlist: null, linkWriter: createProjectionLinkWriter(), secretBox,
   embedder: new FakeEmbedder('api-test'),
   historyCursor: createHistoryCursorCodec(secretBox), queryCursor: createQueryCursorCodec(secretBox),
+  fileAccess: createFileAccessService('https://files.example.test', secretBox),
   writeAudit,
 }
 
@@ -161,6 +163,14 @@ describe('list and view services', () => {
       data: { visibility: 'private', createdOnBehalfOf: 'different-user' },
     })
     await denyRecord(target, target.people[2]!)
+    await expect(refreshDynamicListMembership(db, target.tenant, target.ctx, created.id, 1, now, writeAudit, {
+      maxMembers: 1,
+    })).rejects.toMatchObject({ code: 'LIMIT_EXCEEDED' })
+    expect(await listStatus(deps, target.ctx, 'dynamic_people')).toMatchObject({
+      status: { refresh_state: 'failed', evaluation_version: 1 },
+    })
+    await expect(listEntries(deps, target.ctx, { list: 'dynamic_people' }))
+      .rejects.toMatchObject({ code: 'SCHEMA_CONFLICT' })
     await refreshDynamicListMembership(db, target.tenant, target.ctx, created.id, 1, now, writeAudit)
     expect(await listStatus(deps, target.ctx, 'dynamic_people')).toMatchObject({
       status: { refresh_state: 'ready', evaluation_version: 1 },
