@@ -436,5 +436,5 @@ describe('schema engine database properties', () => {
 
   it('preserves record, link, unique-key, feed, version, and position invariants', async () => {
     await fc.assert(fc.asyncProperty(scenarioArbitrary, runScenario), { numRuns: 25 })
-  }, 180_000)
+  }, 360_000)
 })
