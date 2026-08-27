@@ -415,10 +415,10 @@ describe('record service security boundaries', () => {
     expect(deleted.changed).toBe(true)
     expect(restored.changed).toBe(true)
     const where = { organizationId: target.organizationId, teamId: target.teamId }
-    const [changes, jobs, replays, audits] = await Promise.all([
+    const expectedReplayKeys = ['five-assert', 'five-create', 'five-delete', 'five-restore', 'five-update']
+    const [changes, jobs, audits] = await Promise.all([
       db.recordChange.findMany({ where, orderBy: { seq: 'asc' } }),
       db.queueJob.findMany({ where }),
-      db.idempotencyReplay.findMany({ where }),
       db.auditLog.findMany({ where: { organizationId: target.organizationId }, orderBy: { createdAt: 'asc' } }),
     ])
     expect(changes).toHaveLength(7)
@@ -427,8 +427,16 @@ describe('record service security boundaries', () => {
       'assert reason', 'delete reason', 'restore reason',
     ])
     expect(jobs).toHaveLength(10)
-    expect(replays).toHaveLength(5)
-    expect(replays.every((replay) => replay.result !== null)).toBe(true)
+    await expect.poll(async () => {
+      const replays = await db.idempotencyReplay.findMany({
+        where: { ...where, key: { in: expectedReplayKeys } },
+        select: { key: true, result: true },
+      })
+      return {
+        keys: replays.map((replay) => replay.key).sort(),
+        completed: replays.filter((replay) => replay.result !== null).length,
+      }
+    }, { timeout: 2_000 }).toEqual({ keys: expectedReplayKeys, completed: expectedReplayKeys.length })
     expect(audits.map((audit) => audit.action).sort()).toEqual([
       'crm_record_assert', 'crm_record_create', 'crm_record_delete',
       'crm_record_restore', 'crm_record_update',

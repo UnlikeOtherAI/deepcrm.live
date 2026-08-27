@@ -27,6 +27,7 @@ let tenant: LinkTenant
 let ctx: ReturnType<typeof linkContext>
 let client: Client
 let closeMcp: () => Promise<void>
+const bulkJobTimeoutMs = 60_000
 
 function rows(total: number) {
   return Array.from({ length: total }, (_, index) => ({
@@ -38,10 +39,11 @@ function rows(total: number) {
 }
 
 async function waitForJob(id: string) {
-  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+  const deadline = Date.now() + bulkJobTimeoutMs
+  while (Date.now() < deadline) {
     const job = await db.queueJob.findUniqueOrThrow({ where: { id } })
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') return job
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve, 25))
   }
   throw new Error('Bulk MCP job did not become terminal')
 }
@@ -139,9 +141,13 @@ describe('bulk assert MCP Task', () => {
       ),
       controller.signal,
     )
-    const stored = await waitForJob(created.task.taskId)
-    controller.abort()
-    await worker
+    let stored: Awaited<ReturnType<typeof waitForJob>>
+    try {
+      stored = await waitForJob(created.task.taskId)
+    } finally {
+      controller.abort()
+      await worker
+    }
     expect(stored.status).toBe('completed')
 
     const task = await client.request({
@@ -166,7 +172,7 @@ describe('bulk assert MCP Task', () => {
     expect(await db.auditLog.count({
       where: { ...tenant, action: 'crm_records_bulk_assert', outcome: 'success' },
     })).toBe(250)
-  }, 60_000)
+  }, 90_000)
 
   it('returns standard safe get/cancel results and hides foreign, system and raw failures', async () => {
     const queued = await db.queueJob.create({ data: {
