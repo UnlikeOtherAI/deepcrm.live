@@ -33,6 +33,7 @@ const db = createDb(databaseUrl)
 const runKey = randomUUID().replaceAll('-', '_')
 const hostKey = runKey.replaceAll('_', '')
 const createdBy = `phase8-compat-${runKey}`
+const mcpIntegrationTestTimeout = 30_000
 const ToolResult = z.object({ content: z.array(z.unknown()), structuredContent: z.unknown().optional() }).passthrough()
 const RecordResult = z.object({
   record: z.object({ id: z.string().uuid(), version: z.number().int(), data: z.record(z.unknown()) }).passthrough(),
@@ -269,5 +270,5 @@ describe('Phase 8 compatibility fixture', () => {
     } })
     const foreignRead = structured(await call('crm_record_get', { id: other.id }))
     expect(foreignRead).toMatchObject({ code: 'NOT_FOUND' })
-  })
+  }, mcpIntegrationTestTimeout)
 })

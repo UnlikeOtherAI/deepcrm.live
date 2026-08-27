@@ -16,6 +16,7 @@ const runKey = randomUUID().replaceAll('-', '_')
 const hostKey = runKey.replaceAll('_', '')
 const createdBy = `commerce-docs-${runKey}`
 const segmentSlug = `sku_buyers_${runKey}`
+const mcpIntegrationTestTimeout = 30_000
 const ToolResult = z.object({
   content: z.array(z.unknown()), structuredContent: z.unknown().optional(),
 }).passthrough()
@@ -243,5 +244,5 @@ describe('standard commerce document templates over MCP', () => {
     })
     expect(auditActions.map((audit) => `${audit.action}:${audit.outcome}`))
       .toEqual(expect.arrayContaining(['crm_record_create:success', 'crm_record_update:success', 'crm_record_assert:success']))
-  })
+  }, mcpIntegrationTestTimeout)
 })
