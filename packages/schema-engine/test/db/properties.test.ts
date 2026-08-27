@@ -51,6 +51,8 @@ const scenarioArbitrary: fc.Arbitrary<Scenario> = fc.record({
   extraKinds: fc.array(fc.constantFrom<ExtraKind>('text', 'number', 'boolean'), { minLength: 1, maxLength: 4 }),
   operations: fc.array(operationArbitrary, { minLength: 20, maxLength: 60 }),
 })
+const mergeInvariantPropertyConfig = { numRuns: 5, seed: 20260827 }
+const recordInvariantPropertyConfig = { numRuns: 25, seed: 20260828 }
 
 function actor(): { type: 'system'; id: string; onBehalfOf: null; requestId: string } {
   return { type: 'system', id: 'property-test', onBehalfOf: null, requestId: crypto.randomUUID() }
@@ -408,7 +410,7 @@ describe('schema engine database properties', () => {
           await dropTenant(db, tenant.organizationId)
         }
       },
-    ), { numRuns: 5 })
+    ), mergeInvariantPropertyConfig)
   }, 120_000)
 
   it('does not advance an empty replacement and records a projection reorder', async () => {
@@ -435,6 +437,6 @@ describe('schema engine database properties', () => {
   })
 
   it('preserves record, link, unique-key, feed, version, and position invariants', async () => {
-    await fc.assert(fc.asyncProperty(scenarioArbitrary, runScenario), { numRuns: 25 })
+    await fc.assert(fc.asyncProperty(scenarioArbitrary, runScenario), recordInvariantPropertyConfig)
   }, 360_000)
 })
