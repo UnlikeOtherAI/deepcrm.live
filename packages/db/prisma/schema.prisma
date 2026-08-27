@@ -1099,6 +1099,7 @@ model AuditLog {
   createdAt      DateTime     @default(now()) @map("created_at")
 
   @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, prevHash])
   @@index([organizationId, resourceType, resourceId])
   @@map("audit_logs")
 }

@@ -15,17 +15,57 @@ export type AuditTx = {
   auditLog: { create(args: Prisma.AuditLogCreateArgs): Promise<AuditLog> }
 }
 
+const auditQueues = new WeakMap<AuditTx, Promise<void>>()
+
+async function queueAuditWrite<T>(tx: AuditTx, operation: () => Promise<T>): Promise<T> {
+  const previous = auditQueues.get(tx) ?? Promise.resolve()
+  let release: () => void = () => {}
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const queued = previous.then(() => current)
+  auditQueues.set(tx, queued)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (auditQueues.get(tx) === queued) auditQueues.delete(tx)
+  }
+}
+
 export async function writeAudit(tx: AuditTx, entry: AuditEntryInput): Promise<AuditLog> {
+  return queueAuditWrite(tx, async () => writeAuditQueued(tx, entry))
+}
+
+async function writeAuditQueued(tx: AuditTx, entry: AuditEntryInput): Promise<AuditLog> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(5, hashtext(${entry.organizationId ?? 'auth:null'}))`
   const previous = entry.organizationId === null
-    ? await tx.$queryRaw<Array<{ entry_hash: string | null }>>`
-        SELECT entry_hash FROM audit_logs WHERE organization_id IS NULL
-        ORDER BY created_at DESC, id DESC LIMIT 1
+    ? await tx.$queryRaw<Array<{ entry_hash: string }>>`
+        SELECT current.entry_hash
+        FROM audit_logs current
+        WHERE current.organization_id IS NULL
+          AND current.entry_hash IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM audit_logs child
+            WHERE child.organization_id IS NULL
+              AND child.prev_hash = current.entry_hash
+          )
       `
-    : await tx.$queryRaw<Array<{ entry_hash: string | null }>>`
-        SELECT entry_hash FROM audit_logs WHERE organization_id = ${entry.organizationId}::uuid
-        ORDER BY created_at DESC, id DESC LIMIT 1
+    : await tx.$queryRaw<Array<{ entry_hash: string }>>`
+        SELECT current.entry_hash
+        FROM audit_logs current
+        WHERE current.organization_id = ${entry.organizationId}::uuid
+          AND current.entry_hash IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM audit_logs child
+            WHERE child.organization_id = ${entry.organizationId}::uuid
+              AND child.prev_hash = current.entry_hash
+          )
       `
+  if (previous.length > 1) throw new Error('audit chain has multiple heads')
   const prevHash = previous[0]?.entry_hash ?? null
   const createdAt = new Date().toISOString()
   const hashEntry = { ...entry, createdAt }
