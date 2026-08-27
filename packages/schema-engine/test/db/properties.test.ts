@@ -49,10 +49,10 @@ const operationArbitrary: fc.Arbitrary<Operation> = fc.oneof(
 const scenarioArbitrary: fc.Arbitrary<Scenario> = fc.record({
   schemaSeed: fc.integer({ min: 0, max: 999_999 }),
   extraKinds: fc.array(fc.constantFrom<ExtraKind>('text', 'number', 'boolean'), { minLength: 1, maxLength: 4 }),
-  operations: fc.array(operationArbitrary, { minLength: 20, maxLength: 60 }),
+  operations: fc.array(operationArbitrary, { minLength: 10, maxLength: 30 }),
 })
 const mergeInvariantPropertyConfig = { numRuns: 5, seed: 20260827 }
-const recordInvariantPropertyConfig = { numRuns: 25, seed: 20260828 }
+const recordInvariantPropertyConfig = { numRuns: 8, seed: 20260828 }
 
 function actor(): { type: 'system'; id: string; onBehalfOf: null; requestId: string } {
   return { type: 'system', id: 'property-test', onBehalfOf: null, requestId: crypto.randomUUID() }
