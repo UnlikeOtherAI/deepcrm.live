@@ -1,0 +1,83 @@
+name: Production Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install deploy dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-client rsync
+
+      - name: Configure SSH
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEEPCRM_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEEPCRM_DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_SSH_KEY"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/deepcrm_deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deepcrm_deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deepcrm_deploy_key ~/.ssh/known_hosts
+
+      - name: Sync source
+        env:
+          DEPLOY_HOST: ${{ secrets.DEEPCRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEEPCRM_DEPLOY_USER }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deepcrm_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" \
+            --exclude '.git/' \
+            --exclude '.worktrees/' \
+            --exclude '.env' \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude 'coverage/' \
+            --exclude '.turbo/' \
+            --exclude '.exports/' \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:/srv/deepcrm/"
+
+      - name: Redeploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEEPCRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEEPCRM_DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deepcrm_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'cd /srv/deepcrm && infrastructure/compose/redeploy.sh'
+
+      - name: Verify deployment
+        env:
+          DEPLOY_HOST: ${{ secrets.DEEPCRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEEPCRM_DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deepcrm_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'docker exec deepcrm-api curl -fsS http://localhost:5656/health'

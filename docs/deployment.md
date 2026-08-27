@@ -34,6 +34,21 @@ api.deepcrm.live {
 
 DNS: Cloudflare, DNS-only `A api.deepcrm.live → 178.105.82.46`. TLS automatic.
 
+## GitHub Actions deploy
+
+`.github/workflows/deploy.yml` deploys after the `CI` workflow succeeds on
+`main`. It checks out the exact tested commit, rsyncs the source to
+`/srv/deepcrm`, preserves the host-local `/srv/deepcrm/.env`, runs
+`infrastructure/compose/redeploy.sh`, and verifies
+`http://localhost:5656/health` from inside the `deepcrm-api` container.
+
+Required repository secrets:
+
+- `DEEPCRM_DEPLOY_HOST` — `178.105.82.46`.
+- `DEEPCRM_DEPLOY_USER` — `root`.
+- `DEEPCRM_DEPLOY_SSH_KEY` — private SSH key authorized for that user.
+- `DEEPCRM_DEPLOY_KNOWN_HOSTS` — host key line for `178.105.82.46`.
+
 ## Environment (`/srv/deepcrm/.env`, never synced)
 
 All variables in [architecture.md](architecture.md) §6, plus `DEEPCRM_TRUSTED_PROXY_HOPS=1`, `REQUIRE_AUTH=true`, `DEEPCRM_API_PUBLIC_URL=https://api.deepcrm.live`, `DEEPCRM_API_PORT=5656`, `DATABASE_URL=postgresql://deepcrm:…@deepcrm-postgres:5432/deepcrm`.
