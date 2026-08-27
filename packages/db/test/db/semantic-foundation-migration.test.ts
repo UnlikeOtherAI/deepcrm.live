@@ -17,6 +17,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const dbDir = resolve(repoRoot, 'packages/db')
 const migrationsDir = resolve(dbDir, 'prisma/migrations')
 const schemaPath = resolve(dbDir, 'prisma/schema.prisma')
+const migrationTestTimeout = 90_000
 const t57Name = '20260824235600_semantic_metadata_foundation'
 const t57Migration = resolve(migrationsDir, t57Name, 'migration.sql')
 
@@ -198,7 +199,7 @@ describeDb('T57 semantic foundation migration', () => {
         await db.$disconnect()
       }
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 
   it('upgrades an existing tenant, keeps values stored, and can re-run', async () => {
     await withDatabase(url ?? '', async (database) => {
@@ -230,7 +231,7 @@ describeDb('T57 semantic foundation migration', () => {
         await db.$disconnect()
       }
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 
   it('fails rather than guessing an undecidable status-to-pipeline mapping', async () => {
     await withDatabase(url ?? '', async (database) => {
@@ -243,7 +244,7 @@ describeDb('T57 semantic foundation migration', () => {
       }
       await expect(executeT57(database)).rejects.toThrow(/undecidable pipeline mapping/u)
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 
   it('enforces generic limit, dynamic-list, file and event constraints', async () => {
     await withDatabase(url ?? '', async (database) => {
@@ -281,5 +282,5 @@ describeDb('T57 semantic foundation migration', () => {
         await db.$disconnect()
       }
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 })

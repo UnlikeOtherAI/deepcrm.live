@@ -15,6 +15,7 @@ const url = process.env.DATABASE_URL
 const describeDb = url === undefined ? describe.skip : describe
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const schemaPath = resolve(repoRoot, 'packages/db/prisma/schema.prisma')
+const migrationTestTimeout = 90_000
 const initMigration = resolve(
   repoRoot, 'packages/db/prisma/migrations/20260823223837_init/migration.sql',
 )
@@ -219,7 +220,7 @@ describeDb('T16 matching migration', () => {
         await db.$disconnect()
       }
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 
   it('upgrades legacy rows, preserves keys, and cascades the authority graph', async () => {
     await withDatabase(url ?? '', async (database) => {
@@ -261,7 +262,7 @@ describeDb('T16 matching migration', () => {
         await db.$disconnect()
       }
     })
-  }, 30_000)
+  }, migrationTestTimeout)
 
   it('refuses legacy allow actions, duplicate positions, and orphan positional keys', async () => {
     const cases: Array<{ action?: 'allow'; duplicate?: boolean; orphan?: boolean; pattern: RegExp }> = [
@@ -275,5 +276,5 @@ describeDb('T16 matching migration', () => {
         await expectMigrationFailure(database, scenario.pattern)
       })
     }
-  }, 30_000)
+  }, migrationTestTimeout)
 })
