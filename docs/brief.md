@@ -5,6 +5,8 @@
 By **UnlikeOtherAI Ltd**, sibling of [nessie](../../nessie) (the agentic work platform) and [deepsignal.live](../../deepsignal.live) (decision intelligence). Same family, same backend pattern, same identity authority.
 
 > Status: **brief only** (2026-08-23). No code exists yet. Sections marked *Decision* are recommendations for the owner to confirm; §9 collects the open questions.
+>
+> Related: nessie's [agent-tables plan](../../nessie/docs/plans/2026-08-31-agent-tables.md) (2026-08-31) adapts this brief's §5 storage engine — JSONB current state, unique-key table, change log, the write-path invariant list — for agent-owned generic tables inside Nessie. It reuses the *design*, not this service (per §1, DeepCRM is deliberately not a general database), and records where and why it diverges (tenancy, type system, no edges, AgQL query shape).
 
 ---
 
