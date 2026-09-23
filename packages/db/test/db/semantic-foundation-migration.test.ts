@@ -63,7 +63,7 @@ async function runPrisma(database: string, args: readonly string[]): Promise<voi
   try {
     await execFile('pnpm', command, {
       cwd: repoRoot,
-      env: { ...process.env, DATABASE_URL: database },
+      env: { ...process.env, DATABASE_URL: database, DIRECT_DATABASE_URL: database },
       maxBuffer: 4 * 1024 * 1024,
     })
   } catch (error) {

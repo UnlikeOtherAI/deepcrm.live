@@ -42,6 +42,8 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 
 - `pnpm dev` → API with `tsx watch` (polling — the volume has no fsevents) + embedded worker.
 - `pnpm lint`, `pnpm typecheck`, `pnpm build` (lint-gated), `pnpm test` (Turbo; export `DATABASE_URL` or DB suites skip).
+  Prisma Migrate and `prisma db execute` read `DIRECT_DATABASE_URL` (same URL locally; production's `DATABASE_URL`
+  goes through PgBouncer, see [docs/deployment.md](docs/deployment.md)).
 - After deploying the T16 matching-generation migration and before enabling the
   API, set the real operator UOA subject in `DEEPCRM_BOOTSTRAP_UOA_USER_ID` and
   run `pnpm --filter @deepcrm/worker exec tsx src/matching-bootstrap.ts`;

@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql://deepcrm:deepcrm@localhost:5432/deepcrm
+      DIRECT_DATABASE_URL: postgresql://deepcrm:deepcrm@localhost:5432/deepcrm
     services:
       postgres:
         image: pgvector/pgvector:pg16

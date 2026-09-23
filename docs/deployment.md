@@ -51,7 +51,14 @@ Required repository secrets:
 
 ## Environment (`/srv/deepcrm/.env`, never synced)
 
-All variables in [architecture.md](architecture.md) §6, plus `DEEPCRM_TRUSTED_PROXY_HOPS=1`, `REQUIRE_AUTH=true`, `DEEPCRM_API_PUBLIC_URL=https://api.deepcrm.live`, `DEEPCRM_API_PORT=5656`, `DATABASE_URL=postgresql://deepcrm:…@deepcrm-postgres:5432/deepcrm`.
+All variables in [architecture.md](architecture.md) §6, plus `DEEPCRM_TRUSTED_PROXY_HOPS=1`, `REQUIRE_AUTH=true`, `DEEPCRM_API_PUBLIC_URL=https://api.deepcrm.live`, `DEEPCRM_API_PORT=5656`.
+
+The API and worker use the `deepcrm` database on the shared `postgres` container, not `deepcrm-postgres`.
+Runtime traffic goes through the shared PgBouncer in transaction pooling mode:
+`DATABASE_URL=postgresql://deepcrm:…@pgbouncer:6432/deepcrm?pgbouncer=true`. Prisma Migrate holds a session-level
+advisory lock, which transaction pooling cannot keep, so `redeploy.sh` migrates through
+`DIRECT_DATABASE_URL=postgresql://deepcrm:…@postgres:5432/deepcrm`. Both are required: without
+`DIRECT_DATABASE_URL` the migrate step fails schema validation and the deploy stops before containers are replaced.
 
 The T16 bootstrap runner additionally requires
 `DEEPCRM_BOOTSTRAP_UOA_USER_ID`, set to the stable UOA subject of the deployment
