@@ -16,6 +16,7 @@ Runner: **vitest 3** in every package (deepsignal pattern). `pnpm test` = `turbo
 ```bash
 docker run -d --name deepcrm-pg -p 5657:5432 -e POSTGRES_PASSWORD=deepcrm -e POSTGRES_USER=deepcrm -e POSTGRES_DB=deepcrm pgvector/pgvector:pg16
 export DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/deepcrm
+export DIRECT_DATABASE_URL="$DATABASE_URL"
 pnpm --filter @deepcrm/db prisma migrate deploy
 pnpm test
 ```
@@ -38,7 +39,7 @@ Run it against a unique disposable database:
 ```bash
 DB=deepcrm_t66_compat_$(date +%Y%m%d%H%M%S)
 docker exec deepcrm-pg createdb -U deepcrm "$DB"
-DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB pnpm --filter @deepcrm/db exec prisma migrate deploy
+DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB DIRECT_DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB pnpm --filter @deepcrm/db exec prisma migrate deploy
 DATABASE_URL=postgresql://deepcrm:deepcrm@localhost:5657/$DB pnpm --filter @deepcrm/api exec vitest run test/mcp/phase8-compatibility.test.ts
 docker exec deepcrm-pg dropdb -U deepcrm "$DB"
 ```

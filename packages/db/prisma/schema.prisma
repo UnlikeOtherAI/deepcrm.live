@@ -3,9 +3,14 @@ generator client {
   previewFeatures = ["postgresqlExtensions"]
 }
 
+// DATABASE_URL is the runtime URL; in production it goes through PgBouncer
+// (transaction pooling, `pgbouncer=true`). Prisma Migrate holds a session-level
+// advisory lock that transaction pooling cannot keep, so the Prisma CLI (migrate,
+// db execute) connects through DIRECT_DATABASE_URL, straight to Postgres.
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_DATABASE_URL")
   extensions = [vector, pg_trgm]
 }
 

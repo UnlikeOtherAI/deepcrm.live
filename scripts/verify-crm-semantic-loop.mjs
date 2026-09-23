@@ -147,7 +147,7 @@ async function main() {
   run('docker', ['exec', 'deepcrm-pg', 'createdb', '-U', 'deepcrm', dbName])
   try {
     run('pnpm', ['--filter', '@deepcrm/db', 'exec', 'prisma', 'migrate', 'deploy'], {
-      env: { ...process.env, DATABASE_URL: databaseUrl },
+      env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_DATABASE_URL: databaseUrl },
     })
     const common = {
       NODE_ENV: 'development',

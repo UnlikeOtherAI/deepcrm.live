@@ -121,7 +121,8 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 |---|---|---|
 | `DEEPCRM_API_PORT` | `5656` | listen port |
 | `DEEPCRM_API_PUBLIC_URL` | `http://localhost:5656` | resource id in OAuth metadata, webhook `source` |
-| `DATABASE_URL` | — | Postgres |
+| `DATABASE_URL` | — | Postgres for the API and worker at runtime; in production the shared PgBouncer (transaction pooling, `pgbouncer=true`) |
+| `DIRECT_DATABASE_URL` | — | Postgres without a pooler, for Prisma Migrate and `prisma db execute` (session-level advisory lock); equal to `DATABASE_URL` wherever no pooler is used |
 | `DEEPCRM_PROCESS_MODE` | `all` | `api` / `worker` / `all` |
 | `REQUIRE_AUTH` | `true` (prod) / `false` (dev) | off ⇒ dev principal |
 | `DEEPCRM_APPS` | — | per-app registry JSON: key hashes + context JWKS/issuer + sourceDomain/product ([uoa-integration.md](spec/uoa-integration.md)) |
