@@ -1258,11 +1258,13 @@ same relation. The CTE always requires:
 4. `record.view` policy over the row's `[record, object_type, team]` scope chain.
 
 Policy evaluation in SQL is byte-for-byte equivalent to `checkPolicy`: human and
-role bindings form the human channel; an agent call also requires its namespaced
-`agent:<app>:<agentId>` channel; a deny in either channel is absolute; otherwise
-the highest-priority matching allow decides. A direct human with no matching
-`view` rule uses the documented allow fallback. An agent has no standing
-fallback: both its human/role channel and its agent channel must allow.
+role bindings form the human channel; an agent call also requires its agent
+channel, the rules bound to `agent:<app>:<agentId>` or the app wildcard
+`agent:<app>:*`; a deny in either channel is absolute; otherwise the
+highest-priority matching allow decides. A human channel with no matching `view`
+rule uses the documented allow fallback, for an agent's request as for a human's.
+The agent channel has no fallback: an agent must hold an allow on its own
+binding or its app's wildcard.
 Any decision with `requiresApproval` is not readable, including a winning allow
 that carries approval. At object/team or filter/sort preauthorisation this returns
 `APPROVAL_REQUIRED` before data SQL and writes the one denied audit; at a

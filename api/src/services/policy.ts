@@ -170,6 +170,15 @@ type PolicyRuleWithBindings = Prisma.PolicyRuleGetPayload<{
   include: { bindings: true }
 }>
 
+/**
+ * The agent-side binding ids an agent actor is decided from: its exact
+ * `agent:<app>:<agentId>` binding and its app's `agent:<app>:*` wildcard. The
+ * SQL evaluator (`schema-engine` records/visibility.ts) matches the same pair.
+ */
+function agentBindingIds(ctx: ActorContext): Set<string> {
+  return new Set([`agent:${ctx.app}:${ctx.actor.id}`, `agent:${ctx.app}:*`])
+}
+
 function evaluatePolicy(
   ctx: ActorContext,
   rules: readonly PolicyRuleWithBindings[],
@@ -199,19 +208,21 @@ function evaluatePolicy(
     if (!human.allowed || !direct.allowed) return { allowed: false, requiresApproval: false }
     return { allowed: true, requiresApproval: human.requiresApproval || direct.requiresApproval }
   }
-  if (ctx.actor.type !== 'agent') {
-    if (humanRules.length > 0) return human
-    return { allowed: !defaultDenied.has(request.action), requiresApproval: false }
-  }
+  // The human side of every request — an agent's included — falls back to the
+  // no-rule default exactly as a human's does.
+  const humanSide = humanRules.length > 0
+    ? human
+    : { allowed: !defaultDenied.has(request.action), requiresApproval: false }
+  if (ctx.actor.type !== 'agent') return humanSide
+  const agentIds = agentBindingIds(ctx)
   const agent = decide(scoped.filter((rule) => rule.bindings.some((binding) => (
-    binding.actorType === 'agent'
-    && binding.actorId === `agent:${ctx.app}:${ctx.actor.id}`
+    binding.actorType === 'agent' && agentIds.has(binding.actorId)
   ))))
-  if (isHardDenied(human) || isHardDenied(agent)) {
+  if (isHardDenied(humanSide) || isHardDenied(agent)) {
     return { allowed: false, requiresApproval: false }
   }
-  if (!human.allowed || !agent.allowed) return { allowed: false, requiresApproval: true }
-  return { allowed: true, requiresApproval: human.requiresApproval || agent.requiresApproval }
+  if (!humanSide.allowed || !agent.allowed) return { allowed: false, requiresApproval: true }
+  return { allowed: true, requiresApproval: humanSide.requiresApproval || agent.requiresApproval }
 }
 
 function requestKey(request: PolicyRequest): string {

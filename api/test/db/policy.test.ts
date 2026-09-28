@@ -227,6 +227,94 @@ describe('policy truth table', () => {
   })
 })
 
+async function seededTenant(): Promise<Tenant> {
+  const target = await tenant()
+  await db.$transaction((tx) => seedDefaultPolicies(tx, target))
+  return target
+}
+
+describe('app-level agent binding', () => {
+  it('lets a nessie agent do what its human may under the seeded wildcard', async () => {
+    const target = await seededTenant()
+    const agent = context(target, { app: 'nessie', agentId: 'agent_unbound' })
+    for (const action of ['view', 'create', 'edit', 'link'] as const) {
+      await expect(checkPolicy(db, agent, {
+        resourceType: 'record', action, scopes: teamScope(target),
+      })).resolves.toEqual({ allowed: true, requiresApproval: false })
+    }
+    await expect(checkPolicy(db, agent, {
+      resourceType: 'schema', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+    await expect(checkPolicy(db, agent, {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: true })
+    await expect(checkPolicy(db, agent, {
+      resourceType: 'attribute', action: 'view', scopes: teamScope(target), sensitivity: 'restricted',
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, context(target, { app: 'nessie', agentId: 'agent_unbound', role: 'owner' }), {
+      resourceType: 'record', action: 'erase', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: true })
+  })
+
+  it('gives an agent its human\'s no-rule fallback, never one of its own', async () => {
+    const target = await seededTenant()
+    const roleless = context(target, { app: 'nessie', agentId: 'agent_1', role: null })
+    await expect(checkPolicy(db, roleless, {
+      resourceType: 'record', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+    await expect(checkPolicy(db, roleless, {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, context(target, { app: 'nessie', agentId: 'agent_1' }), {
+      resourceType: 'attribute', action: 'edit', scopes: teamScope(target), sensitivity: 'public',
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+
+    const unseeded = await tenant()
+    await expect(checkPolicy(db, context(unseeded, { app: 'nessie', agentId: 'agent_1' }), {
+      resourceType: 'record', action: 'view', scopes: teamScope(unseeded),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+  })
+
+  it('lets an exact per-agent deny beat the app wildcard', async () => {
+    const target = await seededTenant()
+    await addRule(target, { effect: 'deny', bindings: [{ actorType: 'agent', actorId: 'agent:nessie:agent_denied' }] })
+    await addRule(target, {
+      action: 'edit', effect: 'deny', requiresApproval: true,
+      bindings: [{ actorType: 'agent', actorId: 'agent:nessie:agent_denied' }],
+    })
+    const denied = context(target, { app: 'nessie', agentId: 'agent_denied', role: 'owner' })
+    await expect(checkPolicy(db, denied, {
+      resourceType: 'record', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, denied, {
+      resourceType: 'record', action: 'edit', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: true })
+    await expect(checkPolicy(db, context(target, { app: 'nessie', agentId: 'agent_other', role: 'owner' }), {
+      resourceType: 'record', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+  })
+
+  it('refuses an app with no wildcard and leaves the direct-client grant alone', async () => {
+    const target = await seededTenant()
+    await expect(checkPolicy(db, context(target, { app: 'deepsignal', agentId: 'agent_1', role: 'owner' }), {
+      resourceType: 'record', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'view', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+    await addRule(target, { action: 'delete', bindings: [{ actorType: 'agent', actorId: 'agent:direct:*' }] })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'owner' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: true, requiresApproval: false })
+    await expect(checkPolicy(db, context(target, { app: 'direct', role: 'member' }), {
+      resourceType: 'record', action: 'delete', scopes: teamScope(target),
+    })).resolves.toEqual({ allowed: false, requiresApproval: false })
+  })
+})
+
 function normalizedPolicySource() {
   return policyDefaults.rules.map((rule) => ({
     resourceType: rule.resource_type, action: rule.action, effect: rule.effect,

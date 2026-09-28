@@ -52,7 +52,7 @@ type ActorContext = {
 }
 ```
 
-`actor` is the agent when `agentId` is present (the agent did the write, for the human). Policy is evaluated for **both**: the agent binding (`agent:<ctx.app>:<agentId>`) and the human's role — a deny on either denies.
+`actor` is the agent when `agentId` is present (the agent did the write, for the human). Policy is evaluated for **both**: the agent side (`agent:<ctx.app>:<agentId>` or the app wildcard `agent:<ctx.app>:*`) and the human side (the human's role and own bindings, with a human's no-rule fallback) — a deny on either denies (§4).
 
 **Actor references are validated against membership evidence (R25):** `owner`, `assignee`, visibility grants and any `actor_reference` value naming a human must be the caller's own `sub` or a `uoaUserId` present in `principal_last_seen` for this team — cryptographically verified evidence of membership, without a UOA directory read (which the doctrine forbids). Agent actor ids must carry a known app namespace. Departure cannot be observed (no UOA signal); the `crm_data_quality` report gains a `stale_actors` bucket — owners/assignees/grants not seen in `DEEPCRM_ACTOR_STALE_DAYS` (default 60) — so a routing list quietly full of departed people surfaces instead of rotting.
 
@@ -76,7 +76,8 @@ PolicyAction       view | create | edit | delete | restore | link | merge | expo
 PolicyEffect       allow | deny
 actorType          human | agent | role
   role   = owner | admin | member — from the delegation `role` claim (Principal.role)
-  agent  = namespaced `agent:<app>:<agentId>` so two products' agent ids can never collide on a grant (review S4.5)
+  agent  = namespaced `agent:<app>:<agentId>` so two products' agent ids can never collide on a grant (review S4.5),
+           or the app wildcard `agent:<app>:*` — every agent of that one app
 ```
 
 Rules of evaluation:
@@ -84,13 +85,14 @@ Rules of evaluation:
 - **Deny is absolute in v1**: any matching deny denies, regardless of priority; priority orders competing allows only (review M12/S4.2).
 - `conditions` is a closed set — `{ sensitivity }` only; condition evaluation never reads record data (review S4.3).
 - **Policies are immutable post-seed in v1** — no tool mutates `policy_rules`/`policy_bindings`; edits are operator migrations. A policy-admin tool surface is an open question (brief §9).
-- An agent is evaluated against **both** its `agent:` bindings and the human's `role:` bindings; a deny from either denies. Agents hold no standing rights without an agent binding.
+- An agent is evaluated against **both** sides. The human side is the human's `human:`/`role:` bindings with the same no-rule fallback a human gets (step 4). The agent side is the rules bound to its exact `agent:<app>:<agentId>` **or** its app's wildcard `agent:<app>:*`, with no fallback. A hard deny from either side denies; a deny-with-approval from either side makes the call approval-gated; otherwise approval requirements OR across both sides. A per-agent deny therefore beats the wildcard. Agents hold no standing rights of their own: an app with no agent binding (DeepSignal today) is refused everything. The direct-client path keeps its own `agent:direct:*` grant for the destructive set and its intersection posture (no human fallback there).
+- The seeded defaults bind `agent:nessie:*` to an unconditioned `allow` for every pair the code requests, so a Nessie agent may do exactly what the human it acts for may do and Nessie's per-agent tool grant decides which tools it holds. The SQL row/attribute gate (`schema-engine` `records/visibility.ts` `policyPredicate`) evaluates `record.view` and `attribute.view` identically, and a test drives both evaluators over one fixture matrix.
 
 `checkPolicy(ctx, resourceType, action, scopeChain)`:
 1. Collect rules for the tenant where `(resourceType, action)` match and `scope/scopeId` is in the chain `[record?, object_type?, list?, team]`.
-2. Bindings matching the actor: `agent:<app>:<agentId>`, `human:<uoaUserId>`, `role:<ctx.onBehalfOf.role>`.
+2. Bindings matching the actor: `agent:<app>:<agentId>` and `agent:<app>:*` (agent side), `human:<uoaUserId>` and `role:<ctx.onBehalfOf.role>` (human side).
 3. Any matching `deny` ⇒ deny. Otherwise the highest-priority matching `allow` wins.
-4. No matching rule ⇒ deny for `define/merge/export/delete/restore/admin`, allow for `view/create/edit/link` (the seeded defaults in `docs/spec/policy-defaults.json` make this explicit per team).
+4. No matching human-side rule ⇒ deny for `define/merge/export/delete/restore/erase/admin`, allow for `view/create/edit/link` (the seeded defaults in `docs/spec/policy-defaults.json` make this explicit per team). This fallback applies to the human side of an agent's request too; the agent side never falls back.
 
 Defaults seeded per team on first resolve, from `docs/spec/policy-defaults.json` (normative; rows are immutable post-seed in v1 — see above):
 
@@ -104,6 +106,8 @@ Defaults seeded per team on first resolve, from `docs/spec/policy-defaults.json`
 | webhook.admin | deny | allow (approval — registration replays data outward; review S6.2) |
 | attribute.view where sensitivity=restricted | deny | allow |
 | attribute.edit where sensitivity=confidential | deny | allow |
+
+and, on the agent side, `agent:nessie:*` holds an unconditioned `allow` for every requested pair (record view/create/edit/link/delete/restore/erase, link view/link, list view/create/edit, view view/create/edit, schema view/define, attribute view/edit, merge, export, webhook admin, suppression view/create/admin, approval admin). New teams receive them from the seed; existing teams received them from migration `20260929120000_nessie_agent_policy_bindings`, which matches the seed exactly and bumps `policy_version` once.
 
 "deny (approval)" means the tool returns MRTR `input_required` (spec-shaped elicitation + `requestState`, see `mcp-surface.md` §0.4) instead of a hard denial, creating an `approval_requests` row. Approval mechanics (normative, reviews S3.1–S3.5, C8):
 

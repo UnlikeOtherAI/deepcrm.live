@@ -30,7 +30,10 @@ function policyPredicate(
 ): Prisma.Sql {
   const userId = ctx.onBehalfOf.uoaUserId
   const role = ctx.onBehalfOf.role
-  const agentId = `agent:${ctx.app}:${ctx.actor.id}`
+  // An agent is decided from its exact binding or its app's wildcard, as in
+  // api/src/services/policy.ts `evaluatePolicy`.
+  const agentExact = `agent:${ctx.app}:${ctx.actor.id}`
+  const agentWildcard = `agent:${ctx.app}:*`
   const scopes = (alias: RuleAlias): Prisma.Sql => {
     const rule = Prisma.raw(alias)
     return Prisma.sql`(${rule}.scope = 'record' AND ${rule}.scope_id = r.id::text)
@@ -46,7 +49,9 @@ function policyPredicate(
   }
   const binding = (alias: BindingAlias, agent: boolean): Prisma.Sql => {
     const table = Prisma.raw(alias)
-    if (agent) return Prisma.sql`${table}.actor_type = 'agent' AND ${table}.actor_id = ${agentId}`
+    if (agent) {
+      return Prisma.sql`${table}.actor_type = 'agent' AND ${table}.actor_id IN (${agentExact}, ${agentWildcard})`
+    }
     return role === null
       ? Prisma.sql`${table}.actor_type = 'human' AND ${table}.actor_id = ${userId}`
       : Prisma.sql`(${table}.actor_type = 'human' AND ${table}.actor_id = ${userId})
@@ -87,12 +92,10 @@ function policyPredicate(
             AND (${binding('tb', agent)}) AND tied.effect = 'allow' AND tied.requires_approval = true)
     ))
   )`
-  const human = channel(
-    binding('b', false),
-    binding('hb', false),
-    false,
-    ctx.actor.type !== 'agent',
-  )
+  // The human channel falls back to "allowed" when no rule binds the person,
+  // for an agent's request as for a human's: view is outside the default-denied
+  // actions. The agent channel has no fallback — an agent holds no standing rights.
+  const human = channel(binding('b', false), binding('hb', false), false, true)
   return ctx.actor.type === 'agent'
     ? Prisma.sql`${human} AND ${channel(binding('b', true), binding('hb', true), true, false)}`
     : human

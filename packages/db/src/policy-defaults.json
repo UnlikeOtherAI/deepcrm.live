@@ -1,5 +1,5 @@
 {
-  "description": "Rows inserted into policy_rules/policy_bindings for every new team (scope=team, scope_id=<teamId>), immutable post-seed in v1 (operator migrations only). Evaluation: any matching deny denies (deny is absolute); priority orders competing allows; no match falls through to deny for define/merge/export/delete/restore/admin and allow for view/create/edit/link. Agent bindings are namespaced agent:<app>:<agentId>.",
+  "description": "Rows inserted into policy_rules/policy_bindings for every new team (scope=team, scope_id=<teamId>), immutable post-seed in v1 (operator migrations only: a migration that adds rows here also inserts them for every existing seeded team). Evaluation: any matching deny denies (deny is absolute); priority orders competing allows; no match falls through to deny for define/merge/export/delete/restore/erase/admin and allow for view/create/edit/link. Agent bindings are namespaced agent:<app>:<agentId>, or agent:<app>:* for every agent of one app.",
   "rules": [
     {
       "resource_type": "record",
@@ -517,8 +517,320 @@
           "owner"
         ]
       ]
+    },
+    {
+      "resource_type": "record",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "link",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "delete",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "restore",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "record",
+      "action": "erase",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "link",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "link",
+      "action": "link",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "list",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "list",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "list",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "view",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "view",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "view",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "schema",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "schema",
+      "action": "define",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "attribute",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "merge",
+      "action": "merge",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "export",
+      "action": "export",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "webhook",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "view",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "create",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "suppression",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
+      "resource_type": "approval",
+      "action": "admin",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
     }
   ],
-  "agent_inheritance": "An agent acting for a human is evaluated against BOTH the human's role bindings and any agent:<app>:<agentId> bindings. A deny from either side denies. Agents have no standing rights of their own unless an agent binding grants them.",
+  "agent_inheritance": "An agent acting for a human is evaluated against BOTH sides. The human side is the human's own role and human bindings, with the same no-rule fallback a human gets. The agent side is the rules bound to agent:<app>:<agentId> or to the app wildcard agent:<app>:*. A deny from either side denies, so a per-agent deny beats the wildcard, and an approval requirement from either side applies. Agents hold no standing rights of their own: an app with no agent binding (DeepSignal today) is refused everything. The nessie app is seeded with an unconditioned agent:nessie:* allow for every pair the code requests, so a Nessie agent may do exactly what the person it acts for may do; which tools the agent holds at all is Nessie's grant.",
   "notes_compliance": "record.erase: owner-only and still approval-gated (a second person confirms; single-owner teams fall back to the same owner confirming through the elicitation — the audit trail is the control). suppression.create is member-open on purpose: recording an objection must never be blocked. suppression.admin (= remove) is owner + approval."
 }

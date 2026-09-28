@@ -60,7 +60,7 @@ The design held up structurally (headless MCP surface, metadata engine, tenancy,
 | S4.1 | `restore` added to `PolicyAction`, seeded mirroring `delete`; `unlink` normatively evaluates `link`. |
 | S4.3 | `conditions` closed set; condition evaluation never reads record data. |
 | S4.4 | Candidate evidence redacted: value and score withheld (`matched: true`) for attributes the caller may not view. Candidate rows first pass tenant, visibility and `record.view`; a block against an invisible record remains effective but returns generic `DUPLICATE_FOUND` with no id/candidate, so duplicate handling is not an existence oracle. |
-| S4.5 | Agent bindings namespaced `agent:<app>:<agentId>`. |
+| S4.5 | Agent bindings namespaced `agent:<app>:<agentId>`. *Extended 2026-09-29:* `agent:<app>:*` binds every agent of one app; `nessie` is seeded with it (auth-and-tenancy §4). |
 | S5.1 | `sensitivity > internal` forbidden on a primary attribute (validated at define/update/sensitivity change). |
 | S5.3 | `snapshot` never leaves the service; feed/history/webhook shapes exclude it. |
 | S5.4 | History, `record_at` and the feed apply the **current** sensitivity retroactively. |
