@@ -55,7 +55,7 @@ model Team {
   feedSeq        BigInt       @default(0) @map("feed_seq")
   // Origin write-guard (defence in depth for taint boundaries like DeepSignal's
   // per-user connector gate): a write whose declared `origin` is in this list
-  // is refused with ORIGIN_REJECTED. Owner-set via crm_origin_guard_set.
+  // is refused with ORIGIN_REJECTED. Owner-set via crm_write_guard_set.
   rejectedOrigins String[]    @default([]) @map("rejected_origins")
   // Write-guard extensions (R1/R16): refuse origin-less writes; refuse
   // non-team visibility from listed app keys (server-enforces a product's
