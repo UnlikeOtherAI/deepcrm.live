@@ -22,12 +22,13 @@ async function fixture() {
   await db.$transaction((tx) => applyTemplate(tx, tenant, {
     type: 'system', id: 'visibility-policy', onBehalfOf: null, requestId: crypto.randomUUID(),
   }, 'standard_crm'))
-  const company = (await loadSchema(db, tenant)).objectTypesBySlug.get('company')
-  if (company === undefined) throw new Error('company missing')
+  const company = await db.objectType.findFirstOrThrow({ where: { ...tenant, slug: 'company' } })
   await db.attribute.create({ data: {
     ...tenant, objectTypeId: company.id, slug: 'probe_restricted', name: 'Probe restricted',
     description: 'Restricted probe.', type: 'text', sensitivity: 'restricted',
   } })
+  // The schema cache is keyed by schema_version; a raw attribute insert must move it.
+  await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
   const objectType = (await loadSchema(db, tenant)).objectTypesBySlug.get('company')
   if (objectType === undefined) throw new Error('company missing')
   const restricted = objectType.attributes.find((attribute) => attribute.slug === 'probe_restricted')

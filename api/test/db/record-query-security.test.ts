@@ -259,14 +259,13 @@ describe('record query security', () => {
     })
   })
 
-  it('requires both human and agent policy channels for an agent query', async () => {
+  it('requires the agent channel and gives an agent query its human\'s fallback', async () => {
     const target = await fixture()
     const agentCtx: ActorContext = {
       ...context(target),
       actor: { type: 'agent', id: 'worker' },
       requestId: crypto.randomUUID(),
     }
-    await actorRule(target, 'agent', 'agent:test:worker')
     const denied = await caught(queryRecords(
       { ...deps, db: dbWithoutDataSql() }, agentCtx, { objectType: 'case' },
     ))
@@ -279,9 +278,15 @@ describe('record query security', () => {
       },
     })).toBe(1)
 
-    await actorRule(target, 'role', 'member')
+    await actorRule(target, 'agent', 'agent:test:worker')
     const allowed = await queryRecords(deps, agentCtx, { objectType: 'case' })
     expect(new Set(allowed.records.map((record) => record.id)))
       .toEqual(new Set([target.visibleId, target.deniedId, target.grantedId]))
+
+    await rule(target, 'record', 'deny', 'team', target.teamId)
+    const humanDenied = await caught(queryRecords(
+      { ...deps, db: dbWithoutDataSql() }, agentCtx, { objectType: 'case' },
+    ))
+    expect(humanDenied.code).toBe(ErrorCode.POLICY_DENIED)
   })
 })

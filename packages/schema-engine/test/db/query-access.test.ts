@@ -182,7 +182,7 @@ describe('query row access', () => {
     await expect(visibleIds(value.tenant, value.ctx, value.objectType)).resolves.toEqual([])
   })
 
-  it('requires both human and agent channels for agents', async () => {
+  it('requires the agent channel and gives an agent\'s human channel a human\'s fallback', async () => {
     const value = await fixture()
     const record = await addRecord(value.tenant, value.objectType.id, 'agent')
     const agentCtx: ActorContext = {
@@ -192,9 +192,9 @@ describe('query row access', () => {
     }
     await expect(visibleIds(value.tenant, agentCtx, value.objectType)).resolves.toEqual([])
     await bindRule({ tenant: value.tenant, scope: 'record', scopeId: record.id, actorType: 'agent', actorId: 'agent:test:worker', effect: 'allow' })
-    await expect(visibleIds(value.tenant, agentCtx, value.objectType)).resolves.toEqual([])
-    await bindRule({ tenant: value.tenant, scope: 'record', scopeId: record.id, actorType: 'human', actorId: 'owner', effect: 'allow' })
     await expect(visibleIds(value.tenant, agentCtx, value.objectType)).resolves.toEqual([record.id])
+    await bindRule({ tenant: value.tenant, scope: 'record', scopeId: record.id, actorType: 'human', actorId: 'owner', effect: 'deny' })
+    await expect(visibleIds(value.tenant, agentCtx, value.objectType)).resolves.toEqual([])
   })
 
   it('excludes a row with a record-scoped attribute-view deny from filter membership and count', async () => {

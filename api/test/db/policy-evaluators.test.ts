@@ -65,8 +65,7 @@ async function fixture(): Promise<Fixture> {
   await db.$transaction((tx) => applyTemplate(tx, tenant, {
     type: 'system', id: 'policy-evaluators', onBehalfOf: null, requestId: crypto.randomUUID(),
   }, 'standard_crm'))
-  const company = (await loadSchema(db, tenant)).objectTypesBySlug.get('company')
-  if (company === undefined) throw new Error('company missing')
+  const company = await db.objectType.findFirstOrThrow({ where: { ...tenant, slug: 'company' } })
   for (const sensitivity of SENSITIVITIES) {
     await db.attribute.create({ data: {
       ...tenant, objectTypeId: company.id, slug: `probe_${sensitivity}`, name: `Probe ${sensitivity}`,
@@ -86,6 +85,8 @@ async function fixture(): Promise<Fixture> {
       binding: { actorType: 'human', actorId: 'gated_user' },
     })
   }
+  // The schema cache is keyed by schema_version; the raw attribute inserts must move it.
+  await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
   const schema = await loadSchema(db, tenant)
   const objectType = schema.objectTypesBySlug.get('company')
   if (objectType === undefined) throw new Error('company missing')
