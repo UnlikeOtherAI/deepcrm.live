@@ -36,7 +36,7 @@ Verified via `GET /oauth/jwks.json`; `iss` = the UOA host; **`aud` = exactly `ht
 |---|---|
 | `sub` | The stable UOA user id — `ActorContext.onBehalfOf.uoaUserId`, visibility grants, suppression/audit attribution. Never `email` (advisory only). |
 | `org` | The user's org context on the source domain: `{ org_id, tenant_slug, org_role, teams[], team_roles{}, … }`. **Required** for DeepCRM calls; `org.org_id` → `Organization.externalOrgId`. |
-| `active` | `{ orgId, teamId }` — the selected workspace. **Required**; `active.teamId` → `Team.externalTeamId`; `active.orgId` must equal `org.org_id`. Identity-only tokens (no workspace) are rejected — every CRM call is tenant-scoped. |
+| `active` | `{ orgId, teamId }` — the selected workspace (UOA also signs `tenantSlug` here; further members are ignored, never a refusal). **Required**; `active.teamId` → `Team.externalTeamId`; `active.orgId` must equal `org.org_id`. Identity-only tokens (no workspace) are rejected — every CRM call is tenant-scoped. |
 | `source_domain`, `azp`, `product` | The **immediate** calling product. Must agree with the app key's registered `sourceDomain`/`product` in `DEEPCRM_APPS` — a delegation minted for one product presented under another product's app key is a 401. |
 | `act` | Upstream product provenance. **Wire shape (R27): the RFC 8693 `act` claim — a single object `{ sub, product }` with optional nested `act` for deeper chains.** DeepCRM flattens the nesting into `Principal.actChain` (index 0 = the nearest upstream hop) and records the original claim verbatim in audit metadata. A strict verifier accepts the object form only; arrays are rejected. |
 | `scope` | Must include `ai.invoke`. |

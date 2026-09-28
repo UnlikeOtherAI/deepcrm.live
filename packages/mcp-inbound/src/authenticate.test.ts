@@ -211,6 +211,19 @@ describe('authenticate', () => {
     await expect(call(humanWrongTool)).resolves.toEqual({ ok: false, reason: 'invalid_context' })
   })
 
+  it('accepts the active workspace exactly as UOA signs it, tenant slug included', async () => {
+    const delegation = await signDelegation({ claims: {
+      active: { orgId: 'org_uoa', teamId: 'team_uoa', tenantSlug: 'unlikeotherai' },
+      email: 'person@example.com',
+      tv: 19,
+    } })
+    const principal = authenticated(await callAuth(delegation, await signContext()))
+
+    expect(principal.uoaOrgId).toBe('org_uoa')
+    expect(principal.uoaTeamId).toBe('team_uoa')
+    expect(principal.tokenVersion).toBe(19)
+  })
+
   it('rejects context proof binding mismatches', async () => {
     const options = authOptions({
       expectedTool: { tool: 'crm_record_create', argsSha256: 'a'.repeat(64) },

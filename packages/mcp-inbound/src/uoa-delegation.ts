@@ -23,10 +23,14 @@ const OrgClaimSchema = z.object({
   team_roles: z.record(z.string(), z.string().min(1)),
 }).passthrough()
 
+// UOA's exchange-issued tokens carry `active: { orgId, teamId, tenantSlug }`
+// (UnlikeOtherAuthenticator `signConfidentialAccessToken`). Only the two ids
+// bind the tenant; any further workspace detail UOA adds is ignored, never a
+// reason to refuse a verified token.
 const ActiveClaimSchema = z.object({
   orgId: z.string().min(1),
   teamId: z.string().min(1),
-}).strict()
+}).passthrough()
 
 const DelegationClaimsSchema = z.object({
   iss: z.string().min(1),
