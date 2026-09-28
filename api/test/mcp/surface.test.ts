@@ -1,8 +1,42 @@
 import { readFile } from 'node:fs/promises'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
+import { isToolGroupId, TOOL_GROUPS } from '../../src/mcp/tool-groups.js'
 import { startTestServer } from './harness.js'
 
 const NOT_YET: string[] = []
+
+// The seed classification (docs/spec/nessie-integration.md §3): destructive and
+// structural tools wait for an owner's grant; everything else is on by default.
+const EXPLICIT_TOOLS = [
+  'crm_object_type_define', 'crm_object_type_update', 'crm_object_type_archive',
+  'crm_attribute_define', 'crm_attribute_update', 'crm_attribute_archive',
+  'crm_attribute_group_define', 'crm_attribute_group_reorder', 'crm_attribute_group_archive',
+  'crm_derived_attribute_define', 'crm_derived_attribute_update',
+  'crm_relation_type_define', 'crm_relation_type_update', 'crm_relation_type_archive',
+  'crm_matching_rule_set', 'crm_template_apply',
+  'crm_record_delete', 'crm_merge_records', 'crm_unmerge',
+  'crm_record_erase', 'crm_suppression_remove', 'crm_write_guard_set',
+  'crm_export', 'crm_webhook_set', 'crm_webhook_delete',
+  'crm_pipeline_define', 'crm_pipeline_update', 'crm_event_type_define',
+]
+
+// Every granted mutator ships with the read that resolves its ids.
+const RESOLVING_READS = [
+  'crm_schema_get', 'crm_record_get', 'crm_records_query', 'crm_links_list', 'crm_list_entries',
+  'crm_view_run', 'crm_tasks_list', 'crm_suppression_list', 'crm_webhook_list', 'crm_file_list',
+  'crm_pipeline_stages_list', 'crm_derived_refresh_status',
+]
+
+const GROUP_COUNTS = {
+  schema: 18, records: 12, links: 3, 'lists-views': 9,
+  activity: 14, 'search-quality': 5, compliance: 6, io: 8,
+}
+
+const ToolClassMeta = z.object({
+  'live.deepcrm/group': z.object({ id: z.string(), label: z.string(), order: z.number().int() }).strict(),
+  'live.deepcrm/access': z.enum(['standard', 'explicit']),
+})
 
 function numberedSection(markdown: string, section: number): string {
   const start = new RegExp(`^## ${section}\\.\\s`, 'm').exec(markdown)
@@ -70,5 +104,32 @@ describe('documented MCP tool surface', () => {
       .toEqual(sorted(documentedNames.filter((name) => !listedSet.has(name))))
     expect(sorted(implemented.filter((name) => !listedSet.has(name))), 'implemented tools are listed').toEqual([])
     expect(sorted(listed), 'NOT_YET tracks the only documented tools not registered').toEqual(sorted(implemented))
+  })
+
+  it('classifies every listed tool by group and access class in _meta', async () => {
+    const tools = (await client.listTools()).tools.map((tool) => ({
+      name: tool.name, ...ToolClassMeta.parse(tool._meta),
+    }))
+    expect(tools).toHaveLength(75)
+
+    for (const tool of tools) {
+      const group = tool['live.deepcrm/group']
+      if (!isToolGroupId(group.id)) throw new Error(`${tool.name} names an unknown group '${group.id}'`)
+      expect(group, `${tool.name} group`).toEqual({ id: group.id, ...TOOL_GROUPS[group.id] })
+    }
+
+    const counts: Record<string, number> = {}
+    for (const tool of tools) {
+      const id = tool['live.deepcrm/group'].id
+      counts[id] = (counts[id] ?? 0) + 1
+    }
+    expect(counts).toEqual(GROUP_COUNTS)
+
+    const explicit = tools.filter((tool) => tool['live.deepcrm/access'] === 'explicit').map((tool) => tool.name)
+    expect(sorted(explicit)).toEqual(sorted(EXPLICIT_TOOLS))
+    expect(tools.length - explicit.length).toBe(47)
+
+    const access = new Map(tools.map((tool) => [tool.name, tool['live.deepcrm/access']]))
+    for (const read of RESOLVING_READS) expect(access.get(read), `${read} is a resolving read`).toBe('standard')
   })
 })

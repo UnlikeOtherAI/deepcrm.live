@@ -12,7 +12,7 @@ export function registerSearchTools(
   deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_search',
+    name: 'crm_search', group: 'search-quality', access: 'standard',
     description: 'Rank visible records by keyword, semantic similarity, or hybrid RRF. Use similar_to for indexed neighbours and crm_records_query for exact lookup. Recently changed linked names can lag indexing briefly.',
     input: CrmSearchInputShape,
     handler: async (args) => {
@@ -27,7 +27,7 @@ export function registerSearchTools(
     },
   })
   defineTool(server, {
-    name: 'crm_find_duplicates',
+    name: 'crm_find_duplicates', group: 'search-quality', access: 'standard',
     description: 'Scan visible records of one object type using active matching rules and optional semantic similarity. Returns a Task; poll it for evidence groups. Never merges records.',
     input: CrmFindDuplicatesToolInputShape,
     handler: async (args) => {

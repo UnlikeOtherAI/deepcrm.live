@@ -16,7 +16,7 @@ export function registerQualityTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_data_quality',
+    name: 'crm_data_quality', group: 'search-quality', access: 'standard',
     description: 'Find visible records with missing required values, stale activity, required-relation orphans, or duplicate values on unique attributes. Each bucket includes a reusable crm_records_query filter.',
     input: CrmDataQuality.in.shape,
     handler: async (args) => {
@@ -28,7 +28,7 @@ export function registerQualityTools(
     },
   })
   defineTool(server, {
-    name: 'crm_merge_records',
+    name: 'crm_merge_records', group: 'search-quality', access: 'explicit',
     description: 'Merge visible same-type duplicates into one survivor. Re-points links and lists, moves surviving unique keys, and leaves reversible redirects. Requires merge entitlement; use crm_find_duplicates first.',
     input: CrmMergeRecords.in.shape,
     handler: withApproval(deps, ctx, 'crm_merge_records', CrmMergeRecords.in.shape, {
@@ -47,7 +47,7 @@ export function registerQualityTools(
     }),
   })
   defineTool(server, {
-    name: 'crm_unmerge',
+    name: 'crm_unmerge', group: 'search-quality', access: 'explicit',
     description: 'Undo one crm_merge_records operation from its merge_change_id. Restores records, links, lists, and derived keys atomically; returns conflicts without partial restoration.',
     input: CrmUnmerge.in.shape,
     handler: async (args) => {

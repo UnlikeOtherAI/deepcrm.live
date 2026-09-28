@@ -35,7 +35,7 @@ export function registerIoTools(
   deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_export',
+    name: 'crm_export', group: 'io', access: 'explicit',
     description: 'Export exactly one object type or saved view for offline analysis when paginated queries are unsuitable. Returns a Task with a redacted, row-capped CSV or JSONL result at a signed, single-use URL valid for at most one hour; may raise POLICY_DENIED or APPROVAL_REQUIRED.',
     input: CrmExportInputShape,
     handler: withApproval(deps, ctx, 'crm_export', CrmExportInputShape, {
@@ -55,7 +55,7 @@ export function registerIoTools(
     }),
   })
   defineTool(server, {
-    name: 'crm_changes_since',
+    name: 'crm_changes_since', group: 'io', access: 'standard',
     description: 'Read the visible, policy-redacted team change feed by commit-ordered decimal cursor. Omit cursor to start now; use from=beginning only for retained-history replay.',
     input: CrmChangesSince.in.shape,
     handler: async (args) => {
@@ -70,7 +70,7 @@ export function registerIoTools(
     },
   })
   defineTool(server, {
-    name: 'crm_file_register',
+    name: 'crm_file_register', group: 'io', access: 'standard',
     description: 'Register external file metadata only. DeepCRM stores provider/key, size, MIME and checksum, never blobs, signed URLs or secrets. Conflicting provider keys fail.',
     input: CrmFileRegister.in.shape,
     handler: async (args) => ok(await registerFile(deps, ctx, {
@@ -80,7 +80,7 @@ export function registerIoTools(
     }), 'file registered'),
   })
   defineTool(server, {
-    name: 'crm_file_link',
+    name: 'crm_file_link', group: 'io', access: 'standard',
     description: 'Attach a registered file to a visible record/activity or event with a typed purpose. Target visibility is checked before the attachment is stored.',
     input: CrmFileLink.in.shape,
     handler: async (args) => ok(await linkFile(deps, ctx, {
@@ -89,7 +89,7 @@ export function registerIoTools(
     }), 'file linked'),
   })
   defineTool(server, {
-    name: 'crm_file_list',
+    name: 'crm_file_list', group: 'io', access: 'standard',
     description: 'List authorized file links and signed short-lived DeepCRM file access URLs. Provider keys stay metadata and are never embedded in the URL.',
     input: CrmFileList.in.shape,
     handler: async (args) => ok(await listFiles(deps, ctx, {
@@ -98,7 +98,7 @@ export function registerIoTools(
     }), 'files listed'),
   })
   defineTool(server, {
-    name: 'crm_event_type_define',
+    name: 'crm_event_type_define', group: 'activity', access: 'explicit',
     description: 'Define an immutable behavioural event vocabulary and property schema. Use this before ingesting product or integration events.',
     input: CrmEventTypeDefine.in.shape,
     handler: async (args) => ok(await defineEventType(deps, ctx, {
@@ -107,7 +107,7 @@ export function registerIoTools(
     }), 'event type defined'),
   })
   defineTool(server, {
-    name: 'crm_event_ingest',
+    name: 'crm_event_ingest', group: 'activity', access: 'standard',
     description: 'Append one immutable behavioural event. source plus external_id is idempotent; corrections are new events linked to the original, never updates.',
     input: CrmEventIngest.in.shape,
     handler: async (args) => ok(await ingestEvent(deps, ctx, {
@@ -117,7 +117,7 @@ export function registerIoTools(
     }), 'event ingested'),
   })
   defineTool(server, {
-    name: 'crm_events_query',
+    name: 'crm_events_query', group: 'activity', access: 'standard',
     description: 'Query immutable behavioural events by type, source or visible subject record. Cross-tenant and hidden subjects return NOT_FOUND or are omitted.',
     input: CrmEventsQuery.in.shape,
     handler: async (args) => ok(await queryEvents(deps, ctx, {
@@ -126,7 +126,7 @@ export function registerIoTools(
     }), 'events listed'),
   })
   defineTool(server, {
-    name: 'crm_webhook_set',
+    name: 'crm_webhook_set', group: 'io', access: 'explicit',
     description: 'Register or update an owner-approved HMAC webhook from now on. Creation or explicit rotation returns secret material once; integration code must keep it out of model context.',
     input: CrmWebhookSet.in.shape,
     handler: withApproval(deps, ctx, 'crm_webhook_set', CrmWebhookSet.in.shape, {
@@ -143,7 +143,7 @@ export function registerIoTools(
     }),
   })
   defineTool(server, {
-    name: 'crm_webhook_list',
+    name: 'crm_webhook_list', group: 'io', access: 'standard',
     description: 'List all webhooks in the entitled tenant, including inactive delivery errors. Secrets are never returned.',
     input: CrmWebhookList.in.shape,
     handler: async () => {
@@ -152,7 +152,7 @@ export function registerIoTools(
     },
   })
   defineTool(server, {
-    name: 'crm_webhook_delete',
+    name: 'crm_webhook_delete', group: 'io', access: 'explicit',
     description: 'Delete one owner-approved webhook by id inside the entitled tenant.',
     input: CrmWebhookDelete.in.shape,
     handler: withApproval(deps, ctx, 'crm_webhook_delete', CrmWebhookDelete.in.shape, {

@@ -194,6 +194,8 @@ describe('defineTool', () => {
     })
     const definition = {
       name: 'crm_registration_test',
+      group: 'records' as const,
+      access: 'standard' as const,
       input: { value: z.string().describe('test value') },
       handler: () => ok({}, '{}'),
     }
@@ -216,6 +218,8 @@ describe('defineTool', () => {
     })
     expect(() => defineTool(server, {
       name: 'crm_registration_missing_descriptions',
+      group: 'records',
+      access: 'standard',
       description: 'Registration test.',
       input: {
         missing: z.string(),
@@ -226,6 +230,67 @@ describe('defineTool', () => {
     })).toThrow(
       "Tool 'crm_registration_missing_descriptions' input fields lack descriptions: missing, blank",
     )
+  })
+
+  it('refuses a registration without a known group and access class', () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' })
+    servers.push(server)
+    configureToolRuntime(server, {
+      requestId: 'request_runtime', clock: () => 10, log: () => undefined,
+    })
+    const definition = {
+      name: 'crm_registration_unclassified',
+      description: 'Registration test.',
+      input: { value: z.string().describe('test value') },
+      handler: () => ok({}, '{}'),
+    }
+    // Reflect.apply stands in for an untyped caller the compiler would stop.
+    for (const unclassified of [
+      definition,
+      { ...definition, group: 'records' },
+      { ...definition, access: 'standard' },
+      { ...definition, group: 'crm', access: 'standard' },
+      { ...definition, group: 'records', access: 'optional' },
+    ]) {
+      expect(() => Reflect.apply(defineTool, undefined, [server, unclassified])).toThrow(
+        "Tool 'crm_registration_unclassified' must declare its group and access class",
+      )
+    }
+  })
+
+  it('lists each tool with its group and access class in _meta', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' })
+    servers.push(server)
+    configureToolRuntime(server, {
+      requestId: 'request_runtime', clock: () => 10, log: () => undefined,
+    })
+    for (const [name, group, access] of [
+      ['crm_meta_standard', 'records', 'standard'],
+      ['crm_meta_explicit', 'lists-views', 'explicit'],
+    ] as const) {
+      defineTool(server, {
+        name, group, access,
+        description: 'Registration metadata test.',
+        input: { value: z.string().describe('test value') },
+        handler: () => ok({}, '{}'),
+      })
+    }
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'test-client', version: '0.0.0' })
+    clients.push(client)
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    const listed = await client.listTools()
+    expect(listed.tools.map((tool) => [tool.name, tool._meta])).toEqual([
+      ['crm_meta_standard', {
+        'live.deepcrm/group': { id: 'records', label: 'Records', order: 2 },
+        'live.deepcrm/access': 'standard',
+      }],
+      ['crm_meta_explicit', {
+        'live.deepcrm/group': { id: 'lists-views', label: 'Lists and views', order: 4 },
+        'live.deepcrm/access': 'explicit',
+      }],
+    ])
   })
 
   it('validates and dispatches ordinary and params-level MRTR calls with request context', async () => {
@@ -239,6 +304,8 @@ describe('defineTool', () => {
     })
     defineTool(server, {
       name: 'crm_test',
+      group: 'records',
+      access: 'standard',
       description: 'Test the T21 dispatcher.',
       input: { value: z.string().describe('test value') },
       handler: (args, mrtr, extra) => {

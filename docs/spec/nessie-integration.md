@@ -15,18 +15,20 @@ Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per use
 ## 2. Enablement
 
 1. Owner toggles **DeepCRM** for a team in Nessie Integrations.
-2. Nessie provisions a **team-scoped, tool-projecting** `McpServerInstance` from the `deep-crm` catalog entry, probes `tools/list` with a delegation for the enabling owner, and projects every tool as `mcp_crm_<name-without-prefix>` (e.g. `crm_record_assert` → `mcp_crm_record_assert`).
+2. Nessie provisions a **team-scoped, tool-projecting** `McpServerInstance` from the `deep-crm` catalog entry, probes `tools/list` as the person who chose DeepCRM as the team's CRM, and projects every tool as `mcp_crm_<name-without-prefix>` (e.g. `crm_record_assert` → `mcp_crm_record_assert`) with the group and access class it carries (§3). Nessie re-reads the list as that person on a schedule; an unchanged `_meta["live.deepcrm/etag"]` (the server build) means nothing changed.
 3. DeepCRM provisions the tenant on that first call (flow F10) — no separate "create workspace" API.
 4. Disable: Nessie removes the instance; DeepCRM data stays (the tenant persists; re-enable reconnects). Deleting a UOA team ⇒ UOA-driven cleanup (out of scope for v1; tracked as an open question).
 
 ## 3. Grants (what agents see by default)
 
-| Tools | Default for team agents | Rationale |
-|---|---|---|
-| all read tools, `crm_record_create/update/assert`, `crm_link*`, `crm_activity_log`, `crm_note_add`, `crm_task_*`, `crm_list_*`, `crm_view_*`, `crm_search`, `crm_changes_since`, `crm_pipeline_summary`, `crm_data_quality`, `crm_find_duplicates`, `crm_suppression_add/check/list` | **ON** | cheap, unmetered, reversible, policy-checked server-side |
-| `crm_merge_records`, `crm_unmerge`, `crm_record_delete`, `crm_record_erase`, `crm_suppression_remove`, `crm_origin_guard_set`, `crm_export`, all schema `define`/archive tools, `crm_matching_rule_set`, `crm_template_apply`, `crm_webhook_*` | `requiresExplicitGrant` — OFF until an owner grants per agent | destructive or structural; DeepCRM additionally enforces policy/approval, so the grant is defence in depth, not the only gate |
+Every tool carries its group and access class in `_meta`; the registration is the list, Nessie stores what the wire says, and a tool without a class is explicit on Nessie's side.
 
-Nessie's "tool that takes an id ships with the read that resolves it" rule holds: every granted mutator has its read in the default-ON set.
+- `_meta["live.deepcrm/group"]` = `{ id, label, order }` — one of the eight groups of `mcp-surface.md` §10 (`schema`, `records`, `links`, `lists-views`, `activity`, `search-quality`, `compliance`, `io`). Ids are stable; Nessie orders groups by `order` and labels them by `label`.
+- `_meta["live.deepcrm/access"]` = `standard` (**ON** by default for team agents: reads, record create/update/assert/restore, links, activities, notes, tasks, lists, views, pipeline stage moves, event ingest, file registration, search, quality reads, suppression add/check/list, change feed, webhook list) or `explicit` (`requiresExplicitGrant` — **OFF** until an owner grants it per agent: merge and unmerge, record delete and erase, suppression removal, `crm_write_guard_set`, export, webhook set/delete, every schema-group tool except `crm_schema_get` and `crm_derived_refresh_status`, and the structural `crm_pipeline_define`, `crm_pipeline_update`, `crm_event_type_define`).
+
+`mcp-surface.md` §10 lists the explicit set and the per-group counts, regenerated from the registrations. The class is defence in depth: DeepCRM still enforces policy and approval on every call. Every granted mutator's resolving read is standard — `crm_schema_get`, `crm_record_get`, `crm_records_query`, `crm_links_list`, `crm_list_entries`, `crm_view_run`, `crm_tasks_list`, `crm_suppression_list`, `crm_webhook_list`, `crm_file_list`, `crm_pipeline_stages_list`, `crm_derived_refresh_status` — so Nessie's "tool that takes an id ships with the read that resolves it" rule holds, and `api/test/mcp/surface.test.ts` pins it.
+
+**What a Nessie agent may do.** Every team is seeded with an `agent:nessie:*` allow for every policy pair the code requests (`policy-defaults.json`, auth-and-tenancy §4), and an agent is evaluated against both that wildcard and the human it acts for, with the human's own no-rule fallback. A Nessie agent may therefore do exactly what the person it acts for may do — the person's role rules (member deny-with-approval on delete, merge, export and schema; owner-only erase and suppression removal; attribute sensitivity) are the whole gate — and which tools the agent holds at all is Nessie's grant. A per-agent `agent:nessie:<agentId>` deny still beats the wildcard.
 
 ## 4. Approvals (MRTR ↔ Nessie)
 

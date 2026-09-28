@@ -11,6 +11,13 @@ import {
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 import { z } from 'zod'
 import { z as z4 } from 'zod/v4'
+import {
+  isToolAccess,
+  isToolGroupId,
+  toolClassMeta,
+  type ToolAccess,
+  type ToolGroupId,
+} from '../tool-groups.js'
 import { readMrtr, type MrtrInput } from './input-required.js'
 import { toolError, type ToolLogger } from './result.js'
 
@@ -45,6 +52,10 @@ export type ToolRuntimeOptions = {
 
 export type ToolDefinition<Shape extends z.ZodRawShape> = {
   name: string
+  /** The `tools/list` group (`_meta["live.deepcrm/group"]`); see ../tool-groups.ts. */
+  group: ToolGroupId
+  /** `standard` (on by default for a caller's agents) or `explicit` (off until granted). */
+  access: ToolAccess
   description: string
   input: Shape
   handler: (
@@ -70,6 +81,9 @@ function assertDiscoverableTool<Shape extends z.ZodRawShape>(
 ): void {
   if (definition.description.length > 300) {
     throw new Error(`Tool '${definition.name}' description exceeds 300 characters`)
+  }
+  if (!isToolGroupId(definition.group) || !isToolAccess(definition.access)) {
+    throw new Error(`Tool '${definition.name}' must declare its group and access class`)
   }
   const missingDescriptions = Object.entries(definition.input)
     .filter(([, field]) => (field.description?.trim().length ?? 0) === 0)
@@ -150,6 +164,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
   server.registerTool(definition.name, {
     description: definition.description,
     inputSchema,
+    _meta: toolClassMeta(definition.group, definition.access),
   }, async (args, requestExtra) => {
     return tool.invoke({ arguments: args }, requestExtra)
   })

@@ -5,9 +5,30 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const surfacePath = fileURLToPath(new URL('../docs/mcp-surface.md', import.meta.url))
 const markerSections = ['2', '3', '4', '5', '6', '7', '7a', '8']
+const groupMetaKey = 'live.deepcrm/group'
+const accessMetaKey = 'live.deepcrm/access'
+const summaryPattern = /<!-- tools:summary:start -->\n[\s\S]*?\n<!-- tools:summary:end -->/g
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function toolClass(name, meta) {
+  if (!isRecord(meta)) throw new Error(`Tool '${name}' has no _meta`)
+  const group = meta[groupMetaKey]
+  const access = meta[accessMetaKey]
+  if (
+    !isRecord(group)
+    || typeof group.id !== 'string'
+    || typeof group.label !== 'string'
+    || !Number.isInteger(group.order)
+  ) {
+    throw new Error(`Tool '${name}' has no valid ${groupMetaKey}`)
+  }
+  if (access !== 'standard' && access !== 'explicit') {
+    throw new Error(`Tool '${name}' has no valid ${accessMetaKey}`)
+  }
+  return { group: { id: group.id, label: group.label, order: group.order }, access }
 }
 
 function readCatalog() {
@@ -35,6 +56,7 @@ function readCatalog() {
       name: entry.name,
       description: entry.description,
       inputSchema: entry.inputSchema,
+      ...toolClass(entry.name, entry.meta),
     }
   })
 }
@@ -68,14 +90,16 @@ function parseToolRows(block, section) {
     const cells = splitTableRow(line)
     const name = /^`(crm_[a-z0-9_]+)`$/.exec(cells[0] ?? '')?.[1]
     if (name === undefined) continue
-    if (cells.length !== 4) {
-      throw new Error(`Tool '${name}' in marker ${section} does not have four columns`)
+    if (cells.length !== 6) {
+      throw new Error(`Tool '${name}' in marker ${section} does not have six columns`)
     }
     rows.push({
       name,
-      description: cells[1],
-      input: cells[2],
-      output: cells[3],
+      group: cells[1],
+      access: cells[2],
+      description: cells[3],
+      input: cells[4],
+      output: cells[5],
     })
   }
   if (rows.length === 0) throw new Error(`Marker ${section} contains no MCP tools`)
@@ -164,20 +188,55 @@ function escapeTableCell(value) {
 
 function renderTable(rows, catalogByName) {
   const rendered = [
-    '| Tool | Description | Input | Output |',
-    '|---|---|---|---|',
+    '| Tool | Group | Access | Description | Input | Output |',
+    '|---|---|---|---|---|---|',
   ]
   for (const row of rows) {
     const tool = catalogByName.get(row.name)
+    const group = tool === undefined ? row.group : `\`${tool.group.id}\``
+    const access = tool === undefined ? row.access : `\`${tool.access}\``
     const description = tool === undefined
       ? row.description
       : escapeTableCell(tool.description)
     const input = tool === undefined
       ? row.input
       : `\`${escapeTableCell(inputPropertyList(tool.inputSchema))}\``
-    rendered.push(`| \`${row.name}\` | ${description} | ${input} | ${row.output} |`)
+    rendered.push(`| \`${row.name}\` | ${group} | ${access} | ${description} | ${input} | ${row.output} |`)
   }
   return rendered.join('\n')
+}
+
+function renderSummary(catalog) {
+  const groups = new Map()
+  for (const tool of catalog) {
+    const existing = groups.get(tool.group.id)
+    if (
+      existing !== undefined
+      && (existing.label !== tool.group.label || existing.order !== tool.group.order)
+    ) {
+      throw new Error(`Group '${tool.group.id}' is declared with two labels or orders`)
+    }
+    const entry = existing ?? { ...tool.group, tools: 0, explicit: 0 }
+    entry.tools += 1
+    if (tool.access === 'explicit') entry.explicit += 1
+    groups.set(tool.group.id, entry)
+  }
+  const ordered = [...groups.values()].sort((left, right) => left.order - right.order)
+  const explicit = catalog.filter((tool) => tool.access === 'explicit')
+  return [
+    '<!-- tools:summary:start -->',
+    `${catalog.length} tools in ${ordered.length} groups, ${explicit.length} explicit and `
+      + `${catalog.length - explicit.length} standard.`,
+    '',
+    '| Order | Group | Label | Tools | Explicit |',
+    '|---|---|---|---|---|',
+    ...ordered.map((group) => (
+      `| ${group.order} | \`${group.id}\` | ${group.label} | ${group.tools} | ${group.explicit} |`
+    )),
+    '',
+    `Explicit: ${explicit.map((tool) => `\`${tool.name}\``).join(', ')}.`,
+    '<!-- tools:summary:end -->',
+  ].join('\n')
 }
 
 const catalog = readCatalog()
@@ -202,11 +261,14 @@ for (const name of catalogByName.keys()) {
   if (!documentedNames.has(name)) throw new Error(`Catalog tool '${name}' has no documented table row`)
 }
 
+if ([...markdown.matchAll(summaryPattern)].length !== 1) {
+  throw new Error('Expected one MCP tool summary marker')
+}
 const rewritten = markdown.replace(
   /<!-- tools:start:([2-8](?:a)?) -->\n([\s\S]*?)\n<!-- tools:end -->/g,
   (_match, section, block) => {
     if (typeof section !== 'string' || typeof block !== 'string') throw new Error('Invalid MCP tool marker')
     return `<!-- tools:start:${section} -->\n${renderTable(parseToolRows(block, section), catalogByName)}\n<!-- tools:end -->`
   },
-)
+).replace(summaryPattern, () => renderSummary(catalog))
 writeFileSync(surfacePath, rewritten, 'utf8')

@@ -13,6 +13,8 @@ export type ToolDoc = {
   name: string
   description: string
   inputSchema: Tool['inputSchema']
+  /** `Tool._meta` as listed: the tool's group and access class (./tool-groups.ts). */
+  meta: NonNullable<Tool['_meta']>
 }
 
 function catalogContext(): ActorContext {
@@ -54,10 +56,12 @@ export async function describeTools(): Promise<ToolDoc[]> {
       if (tool.description === undefined || tool.description.trim() === '') {
         throw new Error(`Tool '${tool.name}' has no description`)
       }
+      if (tool._meta === undefined) throw new Error(`Tool '${tool.name}' has no _meta`)
       return {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        meta: tool._meta,
       }
     })
   } finally {
