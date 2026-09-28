@@ -74,7 +74,19 @@ function tokenHash(token: string): string {
 function newToken(): string {
   return `apr_${randomBytes(32).toString('base64url')}`
 }
-function requiredRole(input: ApprovalRequestInput): 'admin' | 'owner' {
+type ApproverRole = 'admin' | 'owner'
+
+/** An owner satisfies an admin-required approval; an admin never satisfies an owner-required one. */
+export function roleSatisfies(required: ApproverRole, actual: ActorContext['onBehalfOf']['role']): boolean {
+  return actual === 'owner' || (required === 'admin' && actual === 'admin')
+}
+
+/** The `required_role` values `actual` satisfies, for the approval row predicates. */
+function satisfiedRoles(actual: ActorContext['onBehalfOf']['role']): ApproverRole[] {
+  return (['admin', 'owner'] as const).filter((required) => roleSatisfies(required, actual))
+}
+
+function requiredRole(input: ApprovalRequestInput): ApproverRole {
   if (
     input.resourceType === 'webhook'
     || input.tool === 'crm_record_erase'
@@ -82,7 +94,7 @@ function requiredRole(input: ApprovalRequestInput): 'admin' | 'owner' {
   ) return 'owner'
   return 'admin'
 }
-function message(input: ApprovalRequestInput, role: 'admin' | 'owner'): string {
+function message(input: ApprovalRequestInput, role: ApproverRole): string {
   return input.message ?? `Approve ${input.tool}? Requires ${role === 'admin' ? 'an admin' : 'an owner'}.`
 }
 function challengeSchema(messageText: string): typeof InputRequests._output {
@@ -105,6 +117,11 @@ function invalidApproval(detail: string): never {
   throw new ServiceError(ErrorCode.APPROVAL_REQUIRED, 'Approval is required', {
     next: 'retry_with_approval', detail,
   })
+}
+function satisfiedRoleList(ctx: ActorContext): Prisma.Sql {
+  const roles = satisfiedRoles(ctx.onBehalfOf.role)
+  if (roles.length === 0) invalidApproval('approval_not_pending')
+  return Prisma.join(roles)
 }
 function storedArgs(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -260,7 +277,7 @@ async function rejectApproval(
         AND action = ${input.tool}
         AND arguments_hash = ${input.requestStatePayload.argumentsHash}
         AND continuation_token_hash = ${tokenHash(approvalToken)}
-        AND required_role = ${ctx.onBehalfOf.role ?? ''}
+        AND required_role IN (${satisfiedRoleList(ctx)})
         AND on_behalf_of <> ${ctx.onBehalfOf.uoaUserId}
         AND status = 'pending'::"ApprovalStatus" AND expires_at > ${ctx.now}
       RETURNING id
@@ -300,7 +317,7 @@ export async function prepareApproval(
       action: input.tool,
       argumentsHash: input.requestStatePayload.argumentsHash,
       continuationTokenHash: tokenHash(approvalToken),
-      requiredRole: ctx.onBehalfOf.role,
+      requiredRole: { in: satisfiedRoles(ctx.onBehalfOf.role) },
       onBehalfOf: input.requestStatePayload.uoaUserId,
       status: 'pending',
       expiresAt: { gt: ctx.now },
@@ -341,7 +358,7 @@ export async function consumeApproval(
       AND action = ${input.tool}
       AND arguments_hash = ${input.argumentsHash}
       AND continuation_token_hash = ${tokenHash(input.approvalToken)}
-      AND required_role = ${ctx.onBehalfOf.role ?? ''}
+      AND required_role IN (${satisfiedRoleList(ctx)})
       AND on_behalf_of <> ${ctx.onBehalfOf.uoaUserId}
       AND status = 'pending'::"ApprovalStatus" AND expires_at > ${ctx.now}
     RETURNING id

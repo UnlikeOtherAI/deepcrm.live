@@ -53,7 +53,7 @@ The design held up structurally (headless MCP surface, metadata engine, tenancy,
 | S2.7 | Claims schema-validated (zod), strict string equality on `sub` match, empty claims rejected. |
 | S3.1 | Canonical JSON (sorted keys, NFC) over complete arguments minus `inputResponses`; **the approved execution runs from the stored `argumentsSnapshot`**, not the retry body. |
 | S3.2 | Normative consumption predicate: tenant + tool name + arguments hash + pending + unexpired + role, single-use in-tx (with R1 C8). |
-| S3.3 | `required_role` enforced exactly (owner ≠ admin). |
+| S3.3 | `required_role` enforced exactly (owner ≠ admin). *Amended 2026-09-29:* an owner satisfies `admin`; an admin still never satisfies `owner` (a lesser role never consumes a greater requirement) — a one-owner team could otherwise never complete an admin-gated request (auth-and-tenancy §4). |
 | S3.4 | Caps: 100 pending approvals per team, 10 per requester; identical `(action, hash)` deduped. |
 | S3.5 | Tokens ≥128-bit CSPRNG, stored hashed. |
 | S3.6 | v1 policies are **immutable post-seed** except by operator migration; stated in the docs; policy-admin tools are an open question. |

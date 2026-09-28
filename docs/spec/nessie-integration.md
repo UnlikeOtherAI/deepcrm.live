@@ -35,7 +35,7 @@ Every tool carries its group and access class in `_meta`; the registration is th
 When DeepCRM returns `resultType: "input_required"` with an approval elicitation + `requestState` (spec MRTR — mcp-surface §0.4, flow F6):
 1. The Nessie worker surfaces the elicitation to the model as the tool result (a normal result, not an error) and preserves `requestState` in run state.
 2. The agent asks in-channel; Nessie's existing `ApprovalRequest` may mirror it (`action = "deepcrm:<tool>"`) so the admin can click Approve.
-3. On approval, Nessie re-issues the **same** `tools/call` with `inputResponses` (the `ElicitResult` with `{ approved: true }`) and the **echoed `requestState`**, under a delegation for the **approving admin** (a different human than the requester) — DeepCRM verifies the state, checks the approver's `role` claim exactly, and executes from the stored arguments snapshot.
+3. On approval, Nessie re-issues the **same** `tools/call` with `inputResponses` (the `ElicitResult` with `{ approved: true }`) and the **echoed `requestState`**, under a delegation for the **approving admin** (a different human than the requester) — DeepCRM verifies the state, checks that the approver's `role` satisfies the required role (an owner satisfies `admin`; an admin never satisfies `owner`), and executes from the stored arguments snapshot. The continuation may arrive through a `nessie` **agent** context whose `sub` is the approving admin: the approver is the context's human, and the write's actor stays the agent.
 4. Expired approvals (24 h) require a fresh call; DeepCRM keeps the `approval_requests` row for audit.
 
 ## 5. Events into Nessie

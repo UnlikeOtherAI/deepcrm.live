@@ -56,7 +56,7 @@ Spec-shaped (2026-07-28 MRTR pattern). When a call needs a decision, the result 
     "requestState": "<echoed>" } }
 ```
 
-- **Approvals** are the same shape with an elicitation asking the approving admin/owner for `{ approved: boolean, note? }`; the retry must arrive under a delegation whose `role` satisfies `required_role` exactly, from a different human than the original requester. The executed arguments come from the stored approval snapshot, not the retry body (auth-and-tenancy §4). Approval requests expire after 24 h.
+- **Approvals** are the same shape with an elicitation asking the approving admin/owner for `{ approved: boolean, note? }`; the retry must arrive under a delegation whose `role` satisfies `required_role` (an owner satisfies `admin`; an admin never satisfies `owner`), from a different human than the original requester. The executed arguments come from the stored approval snapshot, not the retry body (auth-and-tenancy §4). Approval requests expire after 24 h.
 
 ### 0.5 Long-running work — Tasks extension
 
