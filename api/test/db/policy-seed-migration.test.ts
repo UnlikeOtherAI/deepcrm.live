@@ -136,10 +136,13 @@ describe('nessie agent policy bindings migration', () => {
             rules: policyDefaults.rules.length, nessie: 26, policyVersion: 2,
           })
         }
-        const bindings = await db.policyBinding.count({ where: {
-          actorId: NESSIE_WILDCARD, policyRule: { organizationId: first.organizationId, teamId: first.teamId },
-        } })
-        expect(bindings).toBe(26)
+        const bindings = await db.$queryRaw<Array<{ count: bigint }>>`
+          SELECT count(*)::bigint AS count FROM policy_bindings b
+          JOIN policy_rules r ON r.id = b.policy_rule_id
+          WHERE r.organization_id = ${first.organizationId}::uuid AND r.team_id = ${first.teamId}::uuid
+            AND b.actor_type = 'agent' AND b.actor_id = ${NESSIE_WILDCARD}
+        `
+        expect(bindings[0]?.count).toBe(26n)
       } finally {
         await db.$disconnect()
       }
