@@ -173,6 +173,44 @@ describe('authenticate', () => {
     })
   })
 
+  it('accepts a human acting in the app UI as the human, with no agent provenance', async () => {
+    const human = { actor: 'human', agentId: undefined, runId: undefined, toolCallId: undefined }
+    const options = authOptions({
+      expectedTool: { tool: 'crm_record_create', argsSha256: 'a'.repeat(64) },
+    })
+    const result = await authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext({ claims: human }),
+    }, options)
+    const principal = authenticated(result)
+
+    expect(principal.app).toBe('nessie')
+    expect(principal.agentId).toBeNull()
+    expect(principal.provenance).toBeNull()
+    expect(principal.role).toBe('admin')
+  })
+
+  it('never reads a context that omits its agent as a human', async () => {
+    const noAgent = { agentId: undefined, runId: undefined, toolCallId: undefined }
+    const humanWithAgent = { actor: 'human' }
+    const humanWrongTool = {
+      actor: 'human', agentId: undefined, runId: undefined, toolCallId: undefined, tool: 'crm_record_delete',
+    }
+    const options = authOptions({
+      expectedTool: { tool: 'crm_record_create', argsSha256: 'a'.repeat(64) },
+    })
+    const call = async (claims: JWTPayload): Promise<AuthenticationResult> => authenticate({
+      authorization: `Bearer ${APP_KEY}`,
+      'x-uoa-delegation': await signDelegation(),
+      'x-nessie-context': await signContext({ claims }),
+    }, options)
+
+    await expect(call(noAgent)).resolves.toEqual({ ok: false, reason: 'invalid_context' })
+    await expect(call(humanWithAgent)).resolves.toEqual({ ok: false, reason: 'invalid_context' })
+    await expect(call(humanWrongTool)).resolves.toEqual({ ok: false, reason: 'invalid_context' })
+  })
+
   it('rejects context proof binding mismatches', async () => {
     const options = authOptions({
       expectedTool: { tool: 'crm_record_create', argsSha256: 'a'.repeat(64) },

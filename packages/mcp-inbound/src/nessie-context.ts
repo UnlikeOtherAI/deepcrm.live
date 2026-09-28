@@ -11,9 +11,10 @@ const ContextClaimsSchema = z.object({
   sub: z.string().min(1),
   iat: z.number().int(),
   exp: z.number().int(),
-  agentId: z.string().min(1),
-  runId: z.string().min(1),
-  toolCallId: z.string().min(1),
+  actor: z.enum(['agent', 'human']).optional(),
+  agentId: z.string().min(1).optional(),
+  runId: z.string().min(1).optional(),
+  toolCallId: z.string().min(1).optional(),
   requestId: z.string().min(1),
   delegation_jti: z.string().min(1).optional(),
   tool: z.string().min(1).optional(),
@@ -26,14 +27,23 @@ export type ExpectedContextBinding = {
   argsSha256: string
 }
 
+/**
+ * What the calling app's signed context says about who is acting.
+ *
+ * An agent call names the agent and its run (`agentId`, `runId`,
+ * `toolCallId`). A person acting in the app's own UI is attested positively
+ * with `actor: "human"` and names no agent or run: the app never invents
+ * agent provenance for a click, and a context that merely omits the agent is
+ * refused rather than read as a human (auth-and-tenancy §1, R20).
+ */
 export type NessieContext = {
   sub: string
-  agentId: string
+  agentId: string | null
   provenance: {
     runId: string
     toolCallId: string
     requestId: string
-  }
+  } | null
 }
 
 export type NessieContextOptions = {
@@ -82,6 +92,15 @@ export async function verifyNessieContext(
     ) throw new Error('Context binding does not match invocation')
   }
 
+  if (claims.actor === 'human') {
+    if (claims.agentId !== undefined || claims.runId !== undefined || claims.toolCallId !== undefined) {
+      throw new Error('A human context names no agent or run')
+    }
+    return { sub: claims.sub, agentId: null, provenance: null }
+  }
+  if (claims.agentId === undefined || claims.runId === undefined || claims.toolCallId === undefined) {
+    throw new Error('An agent context names its agent, run and tool call')
+  }
   return {
     sub: claims.sub,
     agentId: claims.agentId,
