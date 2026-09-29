@@ -53,7 +53,9 @@ const representativeConfigs: Record<AttributeType, readonly Record<string, unkno
       properties: { plan: { type: 'string', enum: ['pro', 'team'] }, seats: { type: 'integer', minimum: 1 } },
     } },
     { schema: { type: 'array', minItems: 2, items: { type: 'string', minLength: 10 } } },
-    { schema: { type: 'object', examples: [{ tier: 'gold' }], required: ['tier'] } },
+    { schema: {
+      type: 'object', examples: [{ tier: 'gold' }], required: ['tier'], properties: { tier: { type: 'string' } },
+    } },
     { schema: { anyOf: [{ type: 'number', exclusiveMinimum: 5 }, { type: 'null' }] } },
   ],
 }
