@@ -176,6 +176,11 @@ async function schema(options: SchemaOptions = {}): Promise<LoadedSchema> {
   }, { organizationId, teamId })
 }
 
+const nameHint = { type: 'personal_name', expected: { full: 'Ada Lovelace' } }
+const referenceExample = '0b6f3c2e-8d4a-4f1b-9c5e-2a7d1e3f4b60'
+const companyHint = { type: 'record_reference', expected: referenceExample }
+const contactsHint = { type: 'record_reference', expected: [referenceExample] }
+
 function failure(action: () => void): ServiceError {
   try {
     action()
@@ -200,7 +205,7 @@ describe('record validation', () => {
     expect(result.data).toEqual({ emails: ['ada@example.com', 'bob@example.com'] })
     expect(result.linkOps).toEqual([])
     expect(failure(() => validateRecordData(loaded, person, {}, { name: null }, 'create')).details).toEqual({
-      issues: [{ path: '/name', message: 'Invalid attribute value' }],
+      issues: [{ path: '/name', message: 'Invalid attribute value', ...nameHint }],
     })
     expect(validateRecordData(loaded, person, { emails: ['a@example.com'] }, { emails: [] }, 'update').data)
       .toEqual({ emails: [] })
@@ -208,6 +213,32 @@ describe('record validation', () => {
       .toEqual({ default_email: 'ada@example.com', name: { full: 'Ada Lovelace' }, source: 'website' })
     expect(validateRecordData(loaded, person, { name: { full: 'Ada' } }, {}, 'update').data)
       .toEqual({ name: { full: 'Ada' } })
+  })
+
+  it('names the attribute type and one accepted value when a value is refused, never the refused value', async () => {
+    const loaded = await schema()
+    const person = loaded.objectTypesBySlug.get('person')
+    if (person === undefined) throw new Error('person fixture missing')
+    for (const name of ['Nessie agent check', { first_name: 'Nessie', last_name: 'agent check' }, {}]) {
+      const refused = failure(() => validateRecordData(loaded, person, {}, { name }, 'create'))
+      expect(refused.code).toBe(ErrorCode.VALIDATION_FAILED)
+      expect(refused.details).toEqual({
+        issues: [{ path: '/name', message: 'Invalid attribute value', ...nameHint }],
+      })
+      expect(JSON.stringify(refused.details)).not.toContain('Nessie')
+    }
+    expect(failure(() => validateRecordData(loaded, person, {}, {
+      emails: 'ada@example.com', amounts: [{ amount: 12, currency: 'USD' }],
+    }, 'update')).details).toEqual({
+      issues: [
+        { path: '/amounts', message: 'Invalid attribute value', type: 'currency',
+          expected: [{ amount: '1250.50', currency: 'USD' }] },
+        { path: '/emails', message: 'Invalid attribute value', type: 'email', expected: ['ada@example.com'] },
+      ],
+    })
+    expect(validateRecordData(loaded, person, {}, {
+      name: nameHint.expected, emails: ['ada@example.com'],
+    }, 'create').data).toMatchObject({ name: { full: 'Ada Lovelace' }, emails: ['ada@example.com'] })
   })
 
   it('extracts reference intents deterministically without storing reference data', async () => {
@@ -241,14 +272,14 @@ describe('record validation', () => {
       name: { full: 'Ada' },
     }, 'create')).details).toEqual({
       issues: [
-        { path: '/company', message: 'Invalid attribute value' },
-        { path: '/contacts', message: 'Invalid attribute value' },
+        { path: '/company', message: 'Invalid attribute value', ...companyHint },
+        { path: '/contacts', message: 'Invalid attribute value', ...contactsHint },
       ],
     })
     expect(failure(() => validateRecordData(loaded, person, {}, { company: null }, 'update')).details)
-      .toEqual({ issues: [{ path: '/company', message: 'Invalid attribute value' }] })
+      .toEqual({ issues: [{ path: '/company', message: 'Invalid attribute value', ...companyHint }] })
     expect(failure(() => validateRecordData(loaded, person, {}, { contacts: [] }, 'update')).details)
-      .toEqual({ issues: [{ path: '/contacts', message: 'Invalid attribute value' }] })
+      .toEqual({ issues: [{ path: '/contacts', message: 'Invalid attribute value', ...contactsHint }] })
     expect(validateRecordData(loaded, person, {}, {
       name: { full: 'Ada' }, company: firstTarget, contacts: [secondTarget],
     }, 'create').linkOps).toHaveLength(2)
@@ -323,7 +354,9 @@ describe('record validation', () => {
     expect(currentData).toEqual(currentBefore)
     expect(patch).toEqual(patchBefore)
     expect(failure(() => validateRecordData(loaded, person, {}, { title: Number.NaN }, 'update')).details)
-      .toEqual({ issues: [{ path: '/title', message: 'Invalid attribute value' }] })
+      .toEqual({
+        issues: [{ path: '/title', message: 'Invalid attribute value', type: 'text', expected: 'Example text' }],
+      })
   })
 
   it('uses canonical fallback de-duplication and enforces the exact UTF-8 byte boundary', async () => {

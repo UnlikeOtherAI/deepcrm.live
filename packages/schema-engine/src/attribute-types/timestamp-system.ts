@@ -20,6 +20,7 @@ export const timestampSystem: AttributeTypeDef = {
   type: 'timestamp_system',
   configSchema,
   valueSchema: () => timestampValueSchema,
+  example: () => '2026-01-15T09:30:00.000Z',
   normalize: () => null,
   toSearchText: () => null,
   supportsMulti: false,

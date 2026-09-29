@@ -20,6 +20,7 @@ export const date: AttributeTypeDef = {
   type: 'date',
   configSchema,
   valueSchema: () => z.string().refine(isGregorianDate, 'must be a real Gregorian YYYY-MM-DD date'),
+  example: () => '2026-01-15',
   normalize: (value) => z.string().refine(isGregorianDate).parse(value),
   toSearchText: (value) => z.string().refine(isGregorianDate).parse(value),
   supportsMulti: true,

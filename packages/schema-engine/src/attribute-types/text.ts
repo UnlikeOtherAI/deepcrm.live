@@ -19,6 +19,7 @@ export const text: AttributeTypeDef = {
     const parsedConfig = configSchema.parse(config)
     return z.string().max(parsedConfig.maxLength)
   },
+  example: (config) => 'Example text'.slice(0, configSchema.parse(config).maxLength),
   normalize: normalizedText,
   toSearchText: normalizedText,
   supportsMulti: true,

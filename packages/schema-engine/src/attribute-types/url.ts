@@ -32,6 +32,7 @@ export const url: AttributeTypeDef = {
   type: 'url',
   configSchema,
   valueSchema: () => urlValueSchema,
+  example: () => 'https://example.com/pricing',
   normalize: (value) => urlValueSchema.parse(value),
   toSearchText: (value) => urlValueSchema.parse(value),
   supportsMulti: true,

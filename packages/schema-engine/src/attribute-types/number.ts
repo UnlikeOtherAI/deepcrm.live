@@ -32,6 +32,23 @@ function canonicalDecimal(value: number, config: unknown): string {
   return checkedDecimal(new Decimal(input.toString()), config)
 }
 
+/** 42, pulled inside [min, max] and rounded inward to the configured precision. */
+function exampleNumber(config: unknown): number {
+  const parsedConfig = configSchema.parse(config)
+  let value = new Decimal(42)
+  let rounding: Decimal.Rounding = Decimal.ROUND_HALF_UP
+  if (parsedConfig.min !== undefined && value.lessThan(parsedConfig.min)) {
+    value = new Decimal(parsedConfig.min)
+    rounding = Decimal.ROUND_CEIL
+  }
+  if (parsedConfig.max !== undefined && value.greaterThan(parsedConfig.max)) {
+    value = new Decimal(parsedConfig.max)
+    rounding = Decimal.ROUND_FLOOR
+  }
+  if (parsedConfig.precision !== undefined) value = value.toDecimalPlaces(parsedConfig.precision, rounding)
+  return value.toNumber()
+}
+
 function storedDecimal(value: unknown, config: unknown): string {
   if (typeof value === 'number') return canonicalDecimal(value, config)
   if (typeof value !== 'string') throw new Error('number must be canonical decimal text')
@@ -49,6 +66,7 @@ export const number: AttributeTypeDef = {
       return z.NEVER
     }
   }),
+  example: exampleNumber,
   normalize: (value, config) => canonicalDecimal(z.number().finite().parse(value), config),
   toSearchText: (value, config) => storedDecimal(value, config),
   supportsMulti: true,

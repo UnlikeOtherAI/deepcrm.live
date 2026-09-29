@@ -29,6 +29,7 @@ export const phone: AttributeTypeDef = {
   type: 'phone',
   configSchema,
   valueSchema: () => phoneValueSchema,
+  example: () => '+442071838750',
   normalize: (value) => phoneValueSchema.parse(value),
   toSearchText: (value) => phoneValueSchema.parse(value),
   supportsMulti: true,

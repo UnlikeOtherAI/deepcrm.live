@@ -1,12 +1,12 @@
 import { Prisma, tenantWhere } from "@deepcrm/db";
 import { ErrorCode, ServiceError, type ActorContext } from "@deepcrm/schemas";
-import { attributeTypes } from "../attribute-types/index.js";
 import type { ChangeIntent } from "../records/changes.js";
 import { canonicalJsonValue, type JsonValue } from "../records/json.js";
 import { lockLinkTopology, lockRecords } from "../records/locks.js";
 import { refreshMatchingRecords } from "../matching/index.js";
 import type { LoadedRelationType, LoadedSchema } from "../schema/load.js";
 import type { RecordTx } from "../schema/tx.js";
+import { validatedEdgeData } from "./edge-data.js";
 import { enforceRelationEdgeLimits } from "./edge-limits.js";
 import type { LinkInput, LinkOperationResult, ResolvedLinkOperationHandler } from "./types.js";
 type ActiveRecord = {
@@ -18,91 +18,6 @@ function relation(schema: LoadedSchema, slug: string): LoadedRelationType {
   if (found === undefined || found.archivedAt !== null)
     throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, "Relation type is not active");
   return found;
-}
-function inputData(
-  value: Record<string, unknown> | undefined,
-  relationType: LoadedRelationType,
-): { [key: string]: JsonValue } {
-  const raw = value ?? {};
-  const parsed = canonicalJsonValue(raw);
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new ServiceError(ErrorCode.VALIDATION_FAILED, "Invalid link data", {
-      issues: [{ path: "/data", message: "Invalid link data" }],
-    });
-  }
-  const specs = canonicalJsonValue(relationType.edgeAttributes);
-  if (!Array.isArray(specs))
-    throw new ServiceError(
-      ErrorCode.SCHEMA_CONFLICT,
-      "Relation edge attributes are invalid",
-    );
-  const result: Record<string, JsonValue> = {};
-  for (const spec of specs) {
-    if (spec === null || Array.isArray(spec) || typeof spec !== "object")
-      throw new ServiceError(
-        ErrorCode.SCHEMA_CONFLICT,
-        "Relation edge attributes are invalid",
-      );
-    const slug = spec.slug;
-    const type = spec.type;
-    if (typeof slug !== "string" || typeof type !== "string")
-      throw new ServiceError(
-        ErrorCode.SCHEMA_CONFLICT,
-        "Relation edge attributes are invalid",
-      );
-    const supplied = parsed[slug];
-    if (supplied === undefined) {
-      if (spec.is_required === true)
-        throw new ServiceError(
-          ErrorCode.VALIDATION_FAILED,
-          "Invalid link data",
-          { issues: [{ path: `/data/${slug}`, message: "Invalid link data" }] },
-        );
-      continue;
-    }
-    try {
-      const definition = Object.entries(attributeTypes).find(
-        ([name]) => name === type,
-      )?.[1];
-      if (definition === undefined) throw new Error("unknown edge type");
-      const rawConfig = spec.config;
-      if (
-        rawConfig !== undefined &&
-        (rawConfig === null ||
-          Array.isArray(rawConfig) ||
-          typeof rawConfig !== "object")
-      )
-        throw new Error("invalid edge config");
-      const config = Object.fromEntries(
-        Object.entries(rawConfig ?? {}).filter(([key]) => key !== "type"),
-      );
-      const valueSchema = definition.valueSchema(config);
-      const valid = valueSchema.safeParse(supplied);
-      if (!valid.success) throw new Error("invalid");
-      result[slug] = canonicalJsonValue(valid.data);
-    } catch {
-      throw new ServiceError(ErrorCode.VALIDATION_FAILED, "Invalid link data", {
-        issues: [{ path: `/data/${slug}`, message: "Invalid link data" }],
-      });
-    }
-  }
-  for (const key of Object.keys(parsed)) {
-    if (
-      !Object.hasOwn(result, key) &&
-      !specs.some(
-        (spec) =>
-          spec !== null &&
-          !Array.isArray(spec) &&
-          typeof spec === "object" &&
-          spec.slug === key,
-      )
-    ) {
-      throw new ServiceError(ErrorCode.VALIDATION_FAILED, "Invalid link data", {
-        issues: [{ path: `/data/${key}`, message: "Unknown edge attribute" }],
-      });
-    }
-  }
-  return result;
 }
 function prismaJson(value: JsonValue): Prisma.InputJsonValue | null {
   if (value === null) return null;
@@ -339,7 +254,7 @@ export async function linkRecords(
   ]));
   const conflicts = await tx.recordLink.findMany(query);
   compatible(relationType, from, to);
-  const data = inputData(input.data, relationType);
+  const data = validatedEdgeData(input.data, relationType);
   if (onResolved !== undefined)
     await onResolved({
       relationTypeId: relationType.id,

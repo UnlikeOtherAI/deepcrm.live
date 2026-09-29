@@ -14,6 +14,7 @@ export const rating: AttributeTypeDef = {
   type: 'rating',
   configSchema,
   valueSchema: ratingValue,
+  example: (config) => Math.min(4, configSchema.parse(config).max),
   normalize: () => null,
   toSearchText: (value, config) => String(ratingValue(config).parse(value)),
   supportsMulti: true,

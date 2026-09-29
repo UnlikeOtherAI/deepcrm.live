@@ -2,7 +2,8 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import type { ValidateFunction } from 'ajv'
 import { z } from 'zod'
 
-import { type AttributeTypeDef } from './types.js'
+import { instanceOf } from './json-example.js'
+import { type AttributeTypeDef, type ExampleValue } from './types.js'
 
 type JsonPrimitive = boolean | number | string | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -187,6 +188,16 @@ function jsonValueSchema(config: unknown) {
   })
 }
 
+function jsonExample(config: unknown): ExampleValue {
+  const parsedConfig = configSchema.parse(config)
+  if (parsedConfig.schema === undefined) return { key: 'value' }
+  const inspected = inspectJson(parsedConfig.schema)
+  if (isFailure(inspected)) throw new Error('JSON Schema config is not inspectable')
+  const example = instanceOf(inspected.value)
+  if (!compiledValidator(inspected.canonical)(example)) throw new Error('no small instance satisfies the JSON Schema')
+  return example
+}
+
 export function jsonValidatorCacheStats(): { size: number; compilations: number } {
   return { size: validators.size, compilations: compilationCount }
 }
@@ -200,6 +211,7 @@ export const json: AttributeTypeDef = {
   type: 'json',
   configSchema,
   valueSchema: jsonValueSchema,
+  example: jsonExample,
   normalize: () => null,
   toSearchText: () => null,
   supportsMulti: true,

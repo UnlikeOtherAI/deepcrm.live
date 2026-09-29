@@ -39,6 +39,10 @@ export const currency: AttributeTypeDef = {
   type: 'currency',
   configSchema,
   valueSchema: valueFor,
+  example: (config) => {
+    const parsedConfig = configSchema.parse(config)
+    return { amount: '1250.50', currency: parsedConfig.fixedCurrency ?? parsedConfig.defaultCurrency }
+  },
   normalize: () => null,
   toSearchText: (value, config) => {
     const parsed = valueFor(config).parse(value)

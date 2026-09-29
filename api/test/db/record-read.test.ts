@@ -151,6 +151,12 @@ describe('record read service', () => {
       objectType: 'case', matchAttribute: 'name', value: 'Alice',
     }))
     expect(nonunique.code).toBe(ErrorCode.VALIDATION_FAILED)
+    const refused = await caught(getRecord(deps, context(target), {
+      objectType: 'case', matchAttribute: 'email', value: 'alice at example',
+    }))
+    expect(refused.details).toEqual({
+      issues: [{ path: '/value', message: 'Invalid match attribute value', type: 'email', expected: 'ada@example.com' }],
+    })
   })
 
   it('redacts attributes and edge details, groups visible links, and fails closed for approval', async () => {

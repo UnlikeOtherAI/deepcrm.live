@@ -21,7 +21,7 @@ import { select } from './select.js'
 import { status } from './status.js'
 import { text } from './text.js'
 import { timestampSystem } from './timestamp-system.js'
-import { type AttributeTypeDef } from './types.js'
+import { type AttributeTypeDef, type ExampleValue } from './types.js'
 import { url } from './url.js'
 
 export const attributeTypes: Record<AttributeType, AttributeTypeDef> = {
@@ -53,4 +53,22 @@ export function getAttributeType(type: AttributeType): AttributeTypeDef {
   const definition = attributeTypes[type]
   if (definition === undefined) throw new Error(`Unknown attribute type: ${type}`)
   return definition
+}
+
+export type ExampleTarget = { type: AttributeType; config: unknown; isMulti: boolean }
+
+/**
+ * One value an agent can write to this attribute — wrapped in an array for a multi attribute —
+ * proven against the type's own `valueSchema` first. Undefined only when the stored config admits
+ * no value (every option archived, an unsatisfiable range or JSON Schema) or does not parse.
+ */
+export function attributeExample(attribute: ExampleTarget): ExampleValue | undefined {
+  const definition = getAttributeType(attribute.type)
+  try {
+    const example = definition.example(attribute.config)
+    if (!definition.valueSchema(attribute.config).safeParse(example).success) return undefined
+    return attribute.isMulti ? [example] : example
+  } catch {
+    return undefined
+  }
 }

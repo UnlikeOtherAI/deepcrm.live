@@ -49,6 +49,7 @@ export const domain: AttributeTypeDef = {
   type: 'domain',
   configSchema,
   valueSchema: () => domainValueSchema,
+  example: () => 'example.com',
   normalize: (value) => domainValueSchema.parse(value),
   toSearchText: (value) => domainValueSchema.parse(value),
   supportsMulti: true,

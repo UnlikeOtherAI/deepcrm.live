@@ -138,11 +138,16 @@ export const AttributeDetail = AttributeSpec.extend({
   id: Uuid, group: Slug.nullable(), is_system: z.boolean(), position: z.number().int(),
   archived_at: IsoDateTime.nullable(),
 })
+// Only the single-object detail carries examples; crm://schema stays compact.
+export const ObjectTypeAttributeDetail = AttributeDetail.extend({
+  example: z.unknown().optional()
+    .describe('one value this attribute accepts, an array when is_multi; absent only when the config admits no value'),
+})
 export const ObjectTypeDetail = z.object({
   id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(),
   icon: z.string().nullable(), kind: z.enum(['system','standard','custom']),
   primary_attribute: Slug.nullable(), attribute_groups: z.array(AttributeGroupDetail).default([]),
-  attributes: z.array(AttributeDetail),
+  attributes: z.array(ObjectTypeAttributeDetail),
   relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(),
     other_object_type: Slug.nullable(), cardinality: Cardinality })),
   archived_at: IsoDateTime.nullable(),
@@ -836,7 +841,11 @@ export const NextHint = z.enum(['retry_with_approval','fetch_and_retry','use_red
 export const ErrorPayload = z.object({
   code: ErrorCodeSchema, message: z.string().describe('template text; never echoes submitted values'),
   next: NextHint.describe('what the agent should do next'),
-  issues: z.array(z.object({ path: z.string().describe('RFC 6901 JSON Pointer'), message: z.string() })).optional(), // VALIDATION_FAILED
+  issues: z.array(z.object({ path: z.string().describe('RFC 6901 JSON Pointer'), message: z.string(),
+    type: AttributeType.optional().describe('type of the attribute whose value was refused'),
+    expected: z.unknown().optional()
+      .describe('one value that attribute accepts (an array for a multi attribute); never the refused value'),
+  })).optional(), // VALIDATION_FAILED
   current: z.number().int().optional(),                                              // VERSION_CONFLICT
   attribute: Slug.optional(), record_id: Uuid.optional(), candidates: z.array(Candidate).optional(), // DUPLICATE_FOUND
   redirect_to: Uuid.optional(),                                                      // MERGED

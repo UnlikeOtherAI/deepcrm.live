@@ -143,7 +143,7 @@ async function latestSchema(deps: AppDeps, ctx: ActorContext) {
 export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps): void {
   defineTool(server, {
     name: 'crm_schema_get', group: 'schema', access: 'standard',
-    description: 'Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail.',
+    description: 'Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail, including one example value per attribute to copy when writing.',
     input: CrmSchemaGet.in.shape,
     handler: async (args) => {
       const schema = await latestSchema(deps, ctx)

@@ -8,6 +8,7 @@ import {
   type ActorContext,
 } from '@deepcrm/schemas'
 import {
+  attributeExample,
   findUniqueRecord,
   getAttributeType,
   keyHash,
@@ -112,14 +113,25 @@ function activeAttribute(schema: LoadedSchema, objectType: LoadedObjectType, slu
   throw new ServiceError(ErrorCode.UNKNOWN_ATTRIBUTE, 'Attribute does not exist', { attribute: slug })
 }
 
+/** A match value refused for its type: name the type and one value it accepts, never the refused one. */
+function invalidMatchValue(attribute: LoadedObjectType['attributes'][number]): never {
+  const expected = attributeExample({ type: attribute.type, config: attribute.config, isMulti: false })
+  throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Record get input is invalid', {
+    issues: [{
+      path: '/value', message: 'Invalid match attribute value', type: attribute.type,
+      ...(expected === undefined ? {} : { expected }),
+    }],
+  })
+}
+
 function parsedUniqueValues(attribute: LoadedObjectType['attributes'][number], value: unknown): JsonValue[] {
   const supplied = attribute.isMulti && Array.isArray(value) ? value : [value]
   if (supplied.length === 0) invalid('/value', 'Match value must not be empty')
   const values: JsonValue[] = []
   for (const item of supplied) {
     const validation = getAttributeType(attribute.type).valueSchema(attribute.config).safeParse(item)
-    if (!validation.success) invalid('/value', 'Invalid match attribute value')
-    if (!isJsonValue(validation.data)) invalid('/value', 'Invalid match attribute value')
+    if (!validation.success) invalidMatchValue(attribute)
+    if (!isJsonValue(validation.data)) invalidMatchValue(attribute)
     values.push(validation.data)
   }
   return values

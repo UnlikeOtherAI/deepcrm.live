@@ -34,6 +34,7 @@ export const richText: AttributeTypeDef = {
   type: 'rich_text',
   configSchema,
   valueSchema: () => z.string().max(100_000),
+  example: () => 'Met at **Web Summit**; follow up in March.',
   normalize: () => null,
   toSearchText: (value) => stripMarkdown(z.string().max(100_000).parse(value)).slice(0, 2048),
   supportsMulti: true,

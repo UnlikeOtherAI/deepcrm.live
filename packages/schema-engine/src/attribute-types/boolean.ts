@@ -9,6 +9,7 @@ export const boolean: AttributeTypeDef = {
   type: 'boolean',
   configSchema,
   valueSchema: () => valueSchema,
+  example: () => true,
   normalize: (value) => valueSchema.parse(value) ? 'true' : 'false',
   toSearchText: (value) => valueSchema.parse(value) ? 'true' : 'false',
   supportsMulti: true,

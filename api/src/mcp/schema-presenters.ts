@@ -5,11 +5,12 @@ import {
   RelationTypeDetail,
   SchemaSnapshot,
 } from '@deepcrm/schemas'
-import type {
-  LoadedAttribute,
-  LoadedObjectType,
-  LoadedRelationType,
-  LoadedSchema,
+import {
+  attributeExample,
+  type LoadedAttribute,
+  type LoadedObjectType,
+  type LoadedRelationType,
+  type LoadedSchema,
 } from '@deepcrm/schema-engine'
 
 function iso(value: Date | null): string | null {
@@ -75,6 +76,12 @@ function attribute(schema: LoadedSchema, attributeValue: LoadedAttribute) {
     position: attributeValue.position,
     archived_at: iso(attributeValue.archivedAt),
   })
+}
+
+/** The object-type detail adds one writable example per attribute; `crm://schema` stays compact. */
+function attributeWithExample(schema: LoadedSchema, attributeValue: LoadedAttribute) {
+  const example = attributeExample(attributeValue)
+  return { ...attribute(schema, attributeValue), ...(example === undefined ? {} : { example }) }
 }
 
 function edgeAttributes(relation: LoadedRelationType): AttributeSpec[] {
@@ -205,7 +212,7 @@ export function presentObjectType(schema: LoadedSchema, objectType: LoadedObject
     kind: objectType.kind,
     primary_attribute: primaryAttribute(objectType),
     attribute_groups: attributeGroups(objectType),
-    attributes: objectType.attributes.map((attributeValue) => attribute(schema, attributeValue)),
+    attributes: objectType.attributes.map((attributeValue) => attributeWithExample(schema, attributeValue)),
     relation_types: relationSummaries(schema, objectType),
     pipelines: pipelineSummaries(schema, objectType),
     archived_at: iso(objectType.archivedAt),

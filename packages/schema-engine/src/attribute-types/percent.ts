@@ -9,6 +9,7 @@ export const percent: AttributeTypeDef = {
   type: 'percent',
   configSchema,
   valueSchema: () => valueSchema,
+  example: () => 25,
   normalize: () => null,
   toSearchText: (value) => `${valueSchema.parse(value)}%`,
   supportsMulti: true,

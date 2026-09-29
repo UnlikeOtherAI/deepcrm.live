@@ -34,6 +34,11 @@ export const select: AttributeTypeDef = {
   type: 'select',
   configSchema,
   valueSchema: (config) => selectedValue(config, false),
+  example: (config) => {
+    const option = configSchema.parse(config).options.find((candidate) => candidate.archived !== true)
+    if (option === undefined) throw new Error('select has no active option')
+    return option.id
+  },
   normalize: (value, config) => selectedValue(config, true).parse(value),
   toSearchText: (value, config) => {
     const id = selectedValue(config, true).parse(value)

@@ -18,6 +18,7 @@ export const recordReference: AttributeTypeDef = {
   type: 'record_reference',
   configSchema,
   valueSchema: () => recordReferenceValueSchema,
+  example: () => '0b6f3c2e-8d4a-4f1b-9c5e-2a7d1e3f4b60',
   normalize: (value) => recordReferenceValueSchema.parse(value),
   toSearchText: () => null,
   supportsMulti: true,

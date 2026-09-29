@@ -19,6 +19,7 @@ export const location: AttributeTypeDef = {
   type: 'location',
   configSchema,
   valueSchema: () => locationValueSchema,
+  example: () => ({ line1: '1 Example Street', city: 'London', country: 'GB' }),
   normalize: () => null,
   toSearchText: (value) => {
     const locationValue = locationValueSchema.parse(value)

@@ -28,6 +28,7 @@ The product. One streamable-HTTP endpoint, MCP spec **2026-07-28**, stateless. T
 - Results are `structuredContent` JSON; `content[0].text` carries **the serialized JSON of the same payload** (spec guidance — text-only clients still see ids and cursors).
 - A **record** renders as `{ id, object_type, display_name, version, data, owner, created_at, updated_at, last_activity_at, redacted_attributes: [], links?, redirected_from? }`. Every embedded record (timeline items, link `related`, candidates, hits, feed events) passes the same redaction as a primary read.
 - Errors: `isError: true`, `structuredContent: { code, message, next, ...details }` with codes from `schema-engine.md` §10. `next` is a machine hint: `retry_with_approval | fetch_and_retry | use_redirect | fix_input | fatal`.
+- A `VALIDATION_FAILED` issue that refuses an attribute value for its type (record data, list entry data, link edge data, a `crm_record_get` match value) also carries `type` (the attribute type) and, whenever the config admits a value, `expected` — one value that attribute accepts, wrapped in an array for a multi attribute: `{ path: "/name", message: "Invalid attribute value", type: "personal_name", expected: { "full": "Ada Lovelace" } }`. The refused value is never echoed.
 
 ### 0.4 Multi round-trip (MRTR) — confirmations and approvals
 
@@ -67,7 +68,7 @@ Spec-shaped (2026-07-28 MRTR pattern). When a call needs a decision, the result 
 | URI | Content |
 |---|---|
 | `crm://schema` | `{ schema_version, object_types: [ObjectTypeSummary], relation_types: [...], matching_rules: [...], lists: [ListSummary], views: [ViewSummary] }` |
-| `crm://schema/{object_type}` | full `ObjectTypeDetail` (attributes with type, config, flags, sensitivity, description) |
+| `crm://schema/{object_type}` | full `ObjectTypeDetail` (attributes with type, config, flags, sensitivity, description, and an `example` value to copy when writing) |
 | `crm://templates` | available template slugs with descriptions (the live registry — `crm_template_apply` validates against it) |
 | `crm://lists` | index of static lists and dynamic segments (slug, name, kind, object scope, refresh state, evaluation version) |
 | `crm://lists/{slug}` | a list or dynamic segment definition, including object scope, filter freshness and entry count |
@@ -91,7 +92,7 @@ equivalent capability shape.
 <!-- tools:start:2 -->
 | Tool | Group | Access | Description | Input | Output |
 |---|---|---|---|---|---|
-| `crm_schema_get` | `schema` | `standard` | Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail. | `{ object_type?: string }` | `crm://schema` body or one `ObjectTypeDetail` |
+| `crm_schema_get` | `schema` | `standard` | Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail, including one example value per attribute to copy when writing. | `{ object_type?: string }` | `crm://schema` body or one `ObjectTypeDetail` (each attribute with an `example`) |
 | `crm_object_type_define` | `schema` | `explicit` | Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with crm_attribute_define. | `{ slug: string, singular_name: string, plural_name: string, description: string, icon?: string, attributes?: array, primary_attribute?: string }` | `ObjectTypeDetail` |
 | `crm_object_type_update` | `schema` | `explicit` | Rename or re-describe an object type, or change its primary attribute. | `{ object_type: string, singular_name?: string, plural_name?: string, description?: string, icon?: string, primary_attribute?: string }` | `ObjectTypeDetail` |
 | `crm_object_type_archive` | `schema` | `explicit` | Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count. | `{ object_type: string, reason?: string }` | `{ archived: true, records: n }` |
@@ -118,7 +119,7 @@ equivalent capability shape.
 <!-- tools:start:3 -->
 | Tool | Group | Access | Description | Input | Output |
 |---|---|---|---|---|---|
-| `crm_record_create` | `records` | `standard` | Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. | `{ object_type: string, data: object, links?: array, owner?: object, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, reason?: string, idempotency_key?: string }` | `{ record, duplicates?: Candidate[] }` |
+| `crm_record_create` | `records` | `standard` | Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. A refused value returns VALIDATION_FAILED issues naming its type and an expected value. | `{ object_type: string, data: object, links?: array, owner?: object, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, reason?: string, idempotency_key?: string }` | `{ record, duplicates?: Candidate[] }` |
 | `crm_record_update` | `records` | `standard` | Patch attributes; null clears an attribute. Supply expected_version for concurrency protection. Metadata changes are policy enforced. | `{ id: string, data: object, owner?: object \| null, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, expected_version?: integer, reason?: string, idempotency_key?: string }` | `{ record }` |
 | `crm_record_assert` | `records` | `standard` | Create or patch by a unique attribute for sync/import writes. Multiple multi-value matches return DUPLICATE_FOUND. Inline links are atomic. | `{ object_type: string, match_attribute: string, data: object, links?: array, owner?: object, reason?: string, idempotency_key?: string }` | `{ record, created: boolean, duplicates?: Candidate[] }` |
 | `crm_record_get` | `records` | `standard` | Fetch one visible record by id or a unique attribute. include_links groups active related records; include_timeline returns recent activity. | `{ id?: string, object_type?: string, match_attribute?: string, value?: unknown, include_links?: boolean, include_timeline?: integer }` | `{ record, links?, timeline? }` |

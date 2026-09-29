@@ -1,6 +1,6 @@
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
-import { getAttributeType } from '../attribute-types/index.js'
+import { attributeExample, getAttributeType } from '../attribute-types/index.js'
 import type { LoadedAttribute, LoadedObjectType, LoadedSchema } from '../schema/load.js'
 import { canonicalJson, canonicalJsonValue, type JsonValue } from './json.js'
 import type { LinkIntent, ValidatedRecordData, ValidationIssue } from './types.js'
@@ -66,13 +66,25 @@ function virtual(attribute: LoadedAttribute): boolean {
     || attribute.valueSource !== 'stored'
 }
 
-function issue(issues: ValidationIssue[], path: string, message: string): void {
+function issue(
+  issues: ValidationIssue[], path: string, message: string, hint: Pick<ValidationIssue, 'type' | 'expected'> = {},
+): void {
   if (!issues.some((existing) => existing.path === path && existing.message === message)) {
-    issues.push({ path, message })
+    issues.push({ path, message, ...hint })
   }
 }
 
-function invalid(issues: ValidationIssue[], slug: string): void {
+/** A value refused for its attribute type: name the type and one value it accepts, never the refused one. */
+function invalid(issues: ValidationIssue[], attribute: LoadedAttribute): void {
+  const expected = attributeExample(attribute)
+  issue(issues, pointer(attribute.slug), 'Invalid attribute value', {
+    type: attribute.type,
+    ...(expected === undefined ? {} : { expected }),
+  })
+}
+
+/** Stored data holds a slug with no stored attribute behind it; there is no value shape to offer. */
+function unexpectedStored(issues: ValidationIssue[], slug: string): void {
   issue(issues, pointer(slug), 'Invalid attribute value')
 }
 
@@ -107,14 +119,14 @@ function parse(attribute: LoadedAttribute, value: unknown, issues: ValidationIss
   try {
     const result = getAttributeType(attribute.type).valueSchema(attribute.config).safeParse(value)
     if (!result.success) {
-      invalid(issues, attribute.slug)
+      invalid(issues, attribute)
       return undefined
     }
     const serialized = JSON.stringify(result.data)
     if (serialized === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Attribute result is not JSON')
     return canonicalJsonValue(JSON.parse(serialized))
   } catch {
-    invalid(issues, attribute.slug)
+    invalid(issues, attribute)
     return undefined
   }
 }
@@ -133,7 +145,7 @@ function deduplicate(
       const normalized = definition.normalize(value, attribute.config)
       key = normalized === null ? `canonical:${canonicalJson(value)}` : `normalized:${normalized}`
     } catch {
-      invalid(issues, attribute.slug)
+      invalid(issues, attribute)
       return undefined
     }
     if (seen.has(key)) continue
@@ -166,16 +178,16 @@ function reference(
 ): LinkIntent | undefined {
   if (value === null) {
     if (attribute.isRequired) {
-      invalid(issues, attribute.slug)
+      invalid(issues, attribute)
       return undefined
     }
     return intent(schema, objectType, attribute, [])
   }
-  if (!attribute.isMulti && Array.isArray(value)) { invalid(issues, attribute.slug); return undefined }
-  if (attribute.isMulti && !Array.isArray(value)) { invalid(issues, attribute.slug); return undefined }
+  if (!attribute.isMulti && Array.isArray(value)) { invalid(issues, attribute); return undefined }
+  if (attribute.isMulti && !Array.isArray(value)) { invalid(issues, attribute); return undefined }
   if (attribute.isMulti && Array.isArray(value) && value.length === 0) {
     if (attribute.isRequired) {
-      invalid(issues, attribute.slug)
+      invalid(issues, attribute)
       return undefined
     }
     return intent(schema, objectType, attribute, [])
@@ -200,12 +212,12 @@ function stored(
   attribute: LoadedAttribute, value: unknown, data: Record<string, JsonValue>, issues: ValidationIssue[],
 ): void {
   if (value === null) {
-    if (attribute.isRequired) invalid(issues, attribute.slug)
+    if (attribute.isRequired) invalid(issues, attribute)
     else delete data[attribute.slug]
     return
   }
-  if (!attribute.isMulti && Array.isArray(value)) { invalid(issues, attribute.slug); return }
-  if (attribute.isMulti && !Array.isArray(value)) { invalid(issues, attribute.slug); return }
+  if (!attribute.isMulti && Array.isArray(value)) { invalid(issues, attribute); return }
+  if (attribute.isMulti && !Array.isArray(value)) { invalid(issues, attribute); return }
   if (attribute.isMulti) {
     const rawValues: unknown[] = Array.isArray(value) ? value : []
     const parsed = rawValues.map((raw) => parse(attribute, raw, issues))
@@ -257,7 +269,7 @@ function currentRecordData(
       attribute === undefined ||
       attribute.type === 'record_reference' ||
       attribute.type === 'timestamp_system'
-    ) invalid(issues, slug)
+    ) unexpectedStored(issues, slug)
   }
   return data
 }
@@ -310,7 +322,7 @@ export function validateRecordData(
       ))
       : Object.hasOwn(data, attribute.slug)
     if (!present && !issues.some((item) => item.path === pointer(attribute.slug))) {
-      invalid(issues, attribute.slug)
+      invalid(issues, attribute)
     }
   }
   if (issues.length > 0) fail(issues)

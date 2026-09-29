@@ -25,6 +25,7 @@ export const email: AttributeTypeDef = {
   type: 'email',
   configSchema,
   valueSchema: () => emailValueSchema,
+  example: () => 'ada@example.com',
   normalize: (value) => emailValueSchema.parse(value),
   toSearchText: (value) => emailValueSchema.parse(value),
   supportsMulti: true,

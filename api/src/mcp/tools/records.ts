@@ -38,7 +38,7 @@ export function registerRecordTools(
 ): void {
   defineTool(server, {
     name: 'crm_record_create', group: 'records', access: 'standard',
-    description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates.',
+    description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. A refused value returns VALIDATION_FAILED issues naming its type and an expected value.',
     input: CrmRecordCreate.in.shape,
     handler: async (args) => {
       const result = await createRecord(deps, ctx, {

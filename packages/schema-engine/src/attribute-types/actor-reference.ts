@@ -24,6 +24,9 @@ export const actorReference: AttributeTypeDef = {
   type: 'actor_reference',
   configSchema,
   valueSchema: actorValue,
+  example: (config) => configSchema.parse(config).allow.includes('human')
+    ? { type: 'human', id: '<UOA user id>' }
+    : { type: 'agent', id: 'agent:<app>:<agent id>' },
   normalize: (value, config) => {
     const parsed = actorValue(config).parse(value)
     return `${parsed.type}:${parsed.id}`

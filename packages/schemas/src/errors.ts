@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { AttributeType } from './attribute-config.js'
 import { SlugSchema, UuidSchema } from './ids.js'
 import { Candidate } from './matching.js'
 
@@ -37,6 +38,9 @@ export const ErrorPayload = z.object({
   next: NextHint.describe('what the agent should do next'),
   issues: z.array(z.object({
     path: z.string().describe('RFC 6901 JSON Pointer'), message: z.string(),
+    type: AttributeType.optional().describe('type of the attribute whose value was refused'),
+    expected: z.unknown().optional()
+      .describe('one value that attribute accepts (an array for a multi attribute); never the refused value'),
   })).optional(), // VALIDATION_FAILED
   current: z.number().int().optional(),                                              // VERSION_CONFLICT
   attribute: Slug.optional(), record_id: Uuid.optional(),

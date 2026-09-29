@@ -8,10 +8,15 @@ export const filterOpValues = [
 
 export type FilterOp = (typeof filterOpValues)[number]
 
+/** A JSON value an agent can copy: what one attribute value looks like on the wire. */
+export type ExampleValue = boolean | number | string | null | ExampleValue[] | { [key: string]: ExampleValue }
+
 export type AttributeTypeDef = {
   type: AttributeType
   configSchema: z.ZodType
   valueSchema: (config: unknown) => z.ZodType
+  /** One single (never multi-wrapped) value that `valueSchema(config)` accepts. */
+  example: (config: unknown) => ExampleValue
   normalize: (value: unknown, config: unknown) => string | null
   toSearchText: (value: unknown, config: unknown) => string | null
   supportsMulti: boolean

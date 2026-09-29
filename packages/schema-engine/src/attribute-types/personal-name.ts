@@ -25,6 +25,7 @@ export const personalName: AttributeTypeDef = {
   type: 'personal_name',
   configSchema,
   valueSchema: () => personalNameValueSchema,
+  example: () => ({ full: 'Ada Lovelace' }),
   normalize: (value) => personalNameValueSchema.parse(value).full.toLocaleLowerCase(),
   toSearchText: (value) => personalNameValueSchema.parse(value).full,
   supportsMulti: true,

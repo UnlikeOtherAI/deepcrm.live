@@ -25,6 +25,7 @@ export const registryId: AttributeTypeDef = {
   type: 'registry_id',
   configSchema,
   valueSchema: () => registryIdValueSchema,
+  example: () => '12345678',
   normalize: (value) => registryIdValueSchema.parse(value),
   toSearchText: (value) => registryIdValueSchema.parse(value),
   supportsMulti: true,

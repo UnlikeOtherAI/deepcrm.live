@@ -33,7 +33,11 @@ export const AttributeDetail = AttributeSpec.extend({
   position: z.number().int(),
   archived_at: IsoDateTime.nullable(),
 })
-export const ObjectTypeDetail = z.object({ id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(), icon: z.string().nullable(), kind: z.enum(['system','standard','custom']), primary_attribute: Slug.nullable(), attribute_groups: z.array(AttributeGroupDetail).default([]), attributes: z.array(AttributeDetail), relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(), other_object_type: Slug.nullable(), cardinality: Cardinality })), pipelines: z.array(PipelineDetail).default([]), archived_at: IsoDateTime.nullable() })
+export const ObjectTypeAttributeDetail = AttributeDetail.extend({
+  example: z.unknown().optional()
+    .describe('one value this attribute accepts, an array when is_multi; copy its shape when writing. Absent only when the config admits no value'),
+})
+export const ObjectTypeDetail = z.object({ id: Uuid, slug: Slug, singular_name: z.string(), plural_name: z.string(), description: z.string(), icon: z.string().nullable(), kind: z.enum(['system','standard','custom']), primary_attribute: Slug.nullable(), attribute_groups: z.array(AttributeGroupDetail).default([]), attributes: z.array(ObjectTypeAttributeDetail), relation_types: z.array(z.object({ slug: Slug, direction: z.enum(['from','to']), name: z.string(), other_object_type: Slug.nullable(), cardinality: Cardinality })), pipelines: z.array(PipelineDetail).default([]), archived_at: IsoDateTime.nullable() })
 export const RelationTypeDetail = z.object({ id: Uuid, slug: Slug, from_object_type: Slug.nullable(), to_object_type: Slug.nullable(), forward_name: z.string(), inverse_name: z.string(), description: z.string(), cardinality: Cardinality, edge_limits: RelationEdgeLimit, on_delete: OnDelete, edge_attributes: z.array(AttributeSpec), is_system: z.boolean(), archived_at: IsoDateTime.nullable() })
 export { MatchingRule } from './matching.js'
 export const ViewSummary = z.object({

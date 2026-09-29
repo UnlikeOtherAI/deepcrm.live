@@ -47,6 +47,13 @@ export const status: AttributeTypeDef = {
   type: 'status',
   configSchema,
   valueSchema: (config) => statusValue(config, false),
+  example: (config) => {
+    const option = [...configSchema.parse(config).options]
+      .sort((left, right) => left.position - right.position)
+      .find((candidate) => candidate.archived !== true)
+    if (option === undefined) throw new Error('status has no active option')
+    return option.id
+  },
   normalize: (value, config) => statusValue(config, true).parse(value),
   toSearchText: (value, config) => {
     const id = statusValue(config, true).parse(value)

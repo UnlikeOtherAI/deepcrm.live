@@ -49,6 +49,7 @@ export const datetime: AttributeTypeDef = {
   type: 'datetime',
   configSchema,
   valueSchema: () => datetimeValueSchema,
+  example: () => '2026-01-15T09:30:00Z',
   normalize: (value) => datetimeValueSchema.parse(value),
   toSearchText: (value) => datetimeValueSchema.parse(value),
   supportsMulti: true,
