@@ -155,12 +155,14 @@ describe('approval MRTR', () => {
     organizationIds.push(tenant.organizationId)
     const requester = context(tenant, 'member', 'approval_owner_requester')
 
-    await requireApproval(deps, requester, {
+    const erase = await requireApproval(deps, requester, {
       tool: 'crm_record_erase',
       resourceType: 'record',
       resourceId: crypto.randomUUID(),
       args: { id: crypto.randomUUID(), reason: 'gdpr_request', suppress: true },
     })
+    // The calling app reads who may answer from the elicitation, not its prose.
+    expect(erase.inputRequests.approval?.params._meta).toEqual({ 'live.deepcrm/required_role': 'owner' })
     await requireApproval(deps, requester, {
       tool: 'crm_suppression_remove',
       resourceType: 'suppression',
@@ -181,6 +183,19 @@ describe('approval MRTR', () => {
       { action: 'crm_record_erase', requiredRole: 'owner' },
       { action: 'crm_suppression_remove', requiredRole: 'owner' },
     ])
+  })
+
+  it('names admin as the approver role for an ordinary gated call', async () => {
+    const seeded = await seedTenant(db)
+    const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
+    organizationIds.push(tenant.organizationId)
+    const challenge = await requireApproval(deps, context(tenant, 'member', 'approval_admin_role_meta'), {
+      tool: 'crm_record_delete',
+      resourceType: 'record',
+      resourceId: crypto.randomUUID(),
+      args: { id: crypto.randomUUID() },
+    })
+    expect(challenge.inputRequests.approval?.params._meta).toEqual({ 'live.deepcrm/required_role': 'admin' })
   })
 
   it('lets a different admin consume a member merge approval exactly once', async () => {

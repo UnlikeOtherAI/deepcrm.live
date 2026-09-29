@@ -1,11 +1,16 @@
 import { z } from 'zod'
 
+/** The `_meta` key naming the least role that may answer an approval elicitation. */
+export const APPROVAL_REQUIRED_ROLE_META_KEY = 'live.deepcrm/required_role'
+
 export const ElicitationRequest = z.object({
   method: z.literal('elicitation/create'),
   params: z.object({
     mode: z.literal('form'),
     message: z.string(),
     requestedSchema: z.record(z.unknown()).describe('JSON Schema for the requested object'),
+    _meta: z.record(z.unknown()).optional()
+      .describe('Machine-readable facts about the request, e.g. the approver role'),
   }),
 })
 export const InputRequests = z.record(z.string(), ElicitationRequest)

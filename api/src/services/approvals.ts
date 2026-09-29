@@ -5,7 +5,7 @@ import {
   type AuditTx, type PolicyResourceType,
 } from '@deepcrm/db'
 import {
-  ApprovalContent, ErrorCode, ServiceError,
+  APPROVAL_REQUIRED_ROLE_META_KEY, ApprovalContent, ErrorCode, ServiceError,
   type ActorContext, type InputRequests, type InputResponses, type RequestStatePayload,
 } from '@deepcrm/schemas'
 
@@ -97,13 +97,20 @@ function requiredRole(input: ApprovalRequestInput): ApproverRole {
 function message(input: ApprovalRequestInput, role: ApproverRole): string {
   return input.message ?? `Approve ${input.tool}? Requires ${role === 'admin' ? 'an admin' : 'an owner'}.`
 }
-function challengeSchema(messageText: string): typeof InputRequests._output {
+/**
+ * The approval elicitation. Its `_meta` names the least role that may answer
+ * (`owner` for erasure and suppression removal, else `admin`), so a calling
+ * app can offer the decision only to people DeepCRM will accept it from
+ * instead of reading the role out of the message text.
+ */
+function challengeSchema(messageText: string, role: ApproverRole): typeof InputRequests._output {
   return {
     approval: {
       method: 'elicitation/create',
       params: {
         mode: 'form',
         message: messageText,
+        _meta: { [APPROVAL_REQUIRED_ROLE_META_KEY]: role },
         requestedSchema: {
           type: 'object',
           properties: { approved: { type: 'boolean' }, note: { type: 'string' } },
@@ -231,7 +238,7 @@ export async function requireApproval(
   })
   const messageText = message(input, role)
   return {
-    inputRequests: challengeSchema(messageText),
+    inputRequests: challengeSchema(messageText, role),
     requestStatePayload: {
       app: ctx.app,
       uoaUserId: ctx.onBehalfOf.uoaUserId,

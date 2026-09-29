@@ -25,6 +25,11 @@ describe('MRTR contracts', () => {
   it('accepts the normative elicitation maps and results', () => {
     expect(ElicitationRequest.parse(confirmation)).toEqual(confirmation)
     expect(InputRequests.parse({ confirm: confirmation })).toEqual({ confirm: confirmation })
+    const approval = {
+      ...confirmation,
+      params: { ...confirmation.params, _meta: { 'live.deepcrm/required_role': 'owner' } },
+    }
+    expect(InputRequests.parse({ approval })).toEqual({ approval })
     expect(ElicitResult.parse({ action: 'accept', content: { confirmed: true } })).toEqual({
       action: 'accept', content: { confirmed: true },
     })
