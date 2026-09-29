@@ -194,6 +194,7 @@ describe('defineTool', () => {
     })
     const definition = {
       name: 'crm_registration_test',
+      title: 'Registration test',
       group: 'records' as const,
       access: 'standard' as const,
       input: { value: z.string().describe('test value') },
@@ -208,6 +209,24 @@ describe('defineTool', () => {
       name: 'crm_registration_too_long',
       description: 'x'.repeat(301),
     })).toThrow("Tool 'crm_registration_too_long' description exceeds 300 characters")
+    expect(() => defineTool(server, {
+      ...definition,
+      name: 'crm_registration_title_at_cap',
+      title: 'x'.repeat(40),
+      description: 'Registration test.',
+    })).not.toThrow()
+    for (const title of ['x'.repeat(41), '', '   ', ' Create record', 'Create record ']) {
+      expect(() => defineTool(server, {
+        ...definition,
+        name: 'crm_registration_bad_title',
+        title,
+        description: 'Registration test.',
+      })).toThrow("Tool 'crm_registration_bad_title' needs a trimmed title of 1–40 characters")
+    }
+    const untitled = { ...definition, name: 'crm_registration_untitled', title: undefined, description: 'Test.' }
+    // Reflect.apply stands in for an untyped caller the compiler would stop.
+    expect(() => Reflect.apply(defineTool, undefined, [server, untitled]))
+      .toThrow("Tool 'crm_registration_untitled' needs a trimmed title of 1–40 characters")
   })
 
   it('rejects every top-level input field without a nonempty description', () => {
@@ -218,6 +237,7 @@ describe('defineTool', () => {
     })
     expect(() => defineTool(server, {
       name: 'crm_registration_missing_descriptions',
+      title: 'Registration test',
       group: 'records',
       access: 'standard',
       description: 'Registration test.',
@@ -240,6 +260,7 @@ describe('defineTool', () => {
     })
     const definition = {
       name: 'crm_registration_unclassified',
+      title: 'Registration test',
       description: 'Registration test.',
       input: { value: z.string().describe('test value') },
       handler: () => ok({}, '{}'),
@@ -258,18 +279,18 @@ describe('defineTool', () => {
     }
   })
 
-  it('lists each tool with its group and access class in _meta', async () => {
+  it('lists each tool with its title, group and access class', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' })
     servers.push(server)
     configureToolRuntime(server, {
       requestId: 'request_runtime', clock: () => 10, log: () => undefined,
     })
-    for (const [name, group, access] of [
-      ['crm_meta_standard', 'records', 'standard'],
-      ['crm_meta_explicit', 'lists-views', 'explicit'],
+    for (const [name, title, group, access] of [
+      ['crm_meta_standard', 'Standard metadata', 'records', 'standard'],
+      ['crm_meta_explicit', 'Explicit metadata', 'lists-views', 'explicit'],
     ] as const) {
       defineTool(server, {
-        name, group, access,
+        name, title, group, access,
         description: 'Registration metadata test.',
         input: { value: z.string().describe('test value') },
         handler: () => ok({}, '{}'),
@@ -281,12 +302,12 @@ describe('defineTool', () => {
     await server.connect(serverTransport)
     await client.connect(clientTransport)
     const listed = await client.listTools()
-    expect(listed.tools.map((tool) => [tool.name, tool._meta])).toEqual([
-      ['crm_meta_standard', {
+    expect(listed.tools.map((tool) => [tool.name, tool.title, tool._meta])).toEqual([
+      ['crm_meta_standard', 'Standard metadata', {
         'live.deepcrm/group': { id: 'records', label: 'Records', order: 2 },
         'live.deepcrm/access': 'standard',
       }],
-      ['crm_meta_explicit', {
+      ['crm_meta_explicit', 'Explicit metadata', {
         'live.deepcrm/group': { id: 'lists-views', label: 'Lists and views', order: 4 },
         'live.deepcrm/access': 'explicit',
       }],
@@ -304,6 +325,7 @@ describe('defineTool', () => {
     })
     defineTool(server, {
       name: 'crm_test',
+      title: 'Dispatcher test',
       group: 'records',
       access: 'standard',
       description: 'Test the T21 dispatcher.',

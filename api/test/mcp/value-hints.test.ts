@@ -22,6 +22,7 @@ const ObjectDetail = z.object({
 
 let client: Awaited<ReturnType<typeof startTestServer>>['client']
 let closeServer: () => Promise<void>
+let tenant: { organizationId: string; teamId: string }
 
 async function call(name: string, args: Record<string, unknown>) {
   return ToolResult.parse(await client.callTool({ name, arguments: args }))
@@ -34,6 +35,7 @@ beforeAll(async () => {
   const team = await db.team.findUniqueOrThrow({
     where: { externalTeamId: 'team_dev' }, select: { id: true, organizationId: true },
   })
+  tenant = { organizationId: team.organizationId, teamId: team.id }
   const grants = [
     ['schema', 'view'], ['schema', 'define'], ['record', 'view'], ['record', 'create'], ['attribute', 'view'],
   ] as const
@@ -51,7 +53,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await db.policyRule.deleteMany({ where: { createdById: ruleOwner } })
+  await db.policyRule.deleteMany({ where: { ...tenant, createdById: ruleOwner } })
   await closeServer()
   await db.$disconnect()
 })

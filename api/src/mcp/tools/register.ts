@@ -87,8 +87,11 @@ function assertDiscoverableTool<Shape extends z.ZodRawShape>(
   if (definition.description.length > 300) {
     throw new Error(`Tool '${definition.name}' description exceeds 300 characters`)
   }
-  const title = definition.title.trim()
-  if (title.length === 0 || title !== definition.title || title.length > MAX_TOOL_TITLE_LENGTH) {
+  const title: unknown = definition.title
+  if (
+    typeof title !== 'string' || title.length === 0
+    || title.length > MAX_TOOL_TITLE_LENGTH || title.trim() !== title
+  ) {
     throw new Error(`Tool '${definition.name}' needs a trimmed title of 1–${MAX_TOOL_TITLE_LENGTH} characters`)
   }
   if (!isToolGroupId(definition.group) || !isToolAccess(definition.access)) {
