@@ -47,6 +47,7 @@ function readCatalog() {
     if (
       !isRecord(entry)
       || typeof entry.name !== 'string'
+      || typeof entry.title !== 'string'
       || typeof entry.description !== 'string'
       || !isRecord(entry.inputSchema)
     ) {
@@ -54,6 +55,7 @@ function readCatalog() {
     }
     return {
       name: entry.name,
+      title: entry.title,
       description: entry.description,
       inputSchema: entry.inputSchema,
       ...toolClass(entry.name, entry.meta),
@@ -90,16 +92,17 @@ function parseToolRows(block, section) {
     const cells = splitTableRow(line)
     const name = /^`(crm_[a-z0-9_]+)`$/.exec(cells[0] ?? '')?.[1]
     if (name === undefined) continue
-    if (cells.length !== 6) {
-      throw new Error(`Tool '${name}' in marker ${section} does not have six columns`)
+    if (cells.length !== 7) {
+      throw new Error(`Tool '${name}' in marker ${section} does not have seven columns`)
     }
     rows.push({
       name,
-      group: cells[1],
-      access: cells[2],
-      description: cells[3],
-      input: cells[4],
-      output: cells[5],
+      title: cells[1],
+      group: cells[2],
+      access: cells[3],
+      description: cells[4],
+      input: cells[5],
+      output: cells[6],
     })
   }
   if (rows.length === 0) throw new Error(`Marker ${section} contains no MCP tools`)
@@ -188,11 +191,12 @@ function escapeTableCell(value) {
 
 function renderTable(rows, catalogByName) {
   const rendered = [
-    '| Tool | Group | Access | Description | Input | Output |',
-    '|---|---|---|---|---|---|',
+    '| Tool | Title | Group | Access | Description | Input | Output |',
+    '|---|---|---|---|---|---|---|',
   ]
   for (const row of rows) {
     const tool = catalogByName.get(row.name)
+    const title = tool === undefined ? row.title : escapeTableCell(tool.title)
     const group = tool === undefined ? row.group : `\`${tool.group.id}\``
     const access = tool === undefined ? row.access : `\`${tool.access}\``
     const description = tool === undefined
@@ -201,7 +205,7 @@ function renderTable(rows, catalogByName) {
     const input = tool === undefined
       ? row.input
       : `\`${escapeTableCell(inputPropertyList(tool.inputSchema))}\``
-    rendered.push(`| \`${row.name}\` | ${group} | ${access} | ${description} | ${input} | ${row.output} |`)
+    rendered.push(`| \`${row.name}\` | ${title} | ${group} | ${access} | ${description} | ${input} | ${row.output} |`)
   }
   return rendered.join('\n')
 }

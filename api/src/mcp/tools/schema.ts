@@ -142,7 +142,7 @@ async function latestSchema(deps: AppDeps, ctx: ActorContext) {
 
 export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps): void {
   defineTool(server, {
-    name: 'crm_schema_get', group: 'schema', access: 'standard',
+    name: 'crm_schema_get', title: 'Read workspace model', group: 'schema', access: 'standard',
     description: 'Get the workspace data model and visible saved views. Call this first in a session; cache by schema_version. Pass object_type for full field detail, including one example value per attribute to copy when writing.',
     input: CrmSchemaGet.in.shape,
     handler: async (args) => {
@@ -158,7 +158,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_object_type_define', group: 'schema', access: 'explicit',
+    name: 'crm_object_type_define', title: 'Define object type', group: 'schema', access: 'explicit',
     description: 'Create a custom object type (a new kind of record, e.g. "subscription"). Attributes can be added now or later with crm_attribute_define.',
     input: CrmObjectTypeDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_object_type_define', CrmObjectTypeDefine.in.shape, {
@@ -182,7 +182,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_object_type_update', group: 'schema', access: 'explicit',
+    name: 'crm_object_type_update', title: 'Update object type', group: 'schema', access: 'explicit',
     description: 'Rename or re-describe an object type, or change its primary attribute.',
     input: CrmObjectTypeUpdate.in.shape,
     handler: async (args) => {
@@ -201,7 +201,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_object_type_archive', group: 'schema', access: 'explicit',
+    name: 'crm_object_type_archive', title: 'Archive object type', group: 'schema', access: 'explicit',
     description: 'Archive a custom object type. Records are kept but hidden; MRTR confirmation states the record count.',
     input: CrmObjectTypeArchive.in.shape,
     handler: withApproval(deps, ctx, 'crm_object_type_archive', CrmObjectTypeArchive.in.shape, {
@@ -222,7 +222,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_define', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_define', title: 'Define attribute', group: 'schema', access: 'explicit',
     description: 'Add an attribute (field) to an object type. Use record_reference to relate to other object types. Unique attributes enable crm_record_assert.',
     input: CrmAttributeDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_attribute_define', CrmAttributeDefine.in.shape, {
@@ -248,7 +248,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_update', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_update', title: 'Update attribute', group: 'schema', access: 'explicit',
     description: 'Change an attribute name, description, options, required/indexed/sensitivity flags. Type, slug and is_multi are immutable. Tightening may require MRTR; normalize-affecting config changes require a key-recompute backfill; sensitivity raises trigger a reindex Task.',
     input: CrmAttributeUpdate.in.shape,
     handler: async (args) => {
@@ -268,7 +268,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_derived_attribute_define', group: 'schema', access: 'explicit',
+    name: 'crm_derived_attribute_define', title: 'Define derived attribute', group: 'schema', access: 'explicit',
     description: 'Define a read-only derived attribute using a bounded formula, rollup, relation sync, or score definition. Values are materialized; direct record writes fail.',
     input: CrmDerivedAttributeDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_derived_attribute_define', CrmDerivedAttributeDefine.in.shape, {
@@ -293,7 +293,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_derived_attribute_update', group: 'schema', access: 'explicit',
+    name: 'crm_derived_attribute_update', title: 'Update derived attribute', group: 'schema', access: 'explicit',
     description: 'Update a derived attribute definition or metadata. Definition changes mark refresh pending and may change materialized values after worker refresh.',
     input: CrmDerivedAttributeUpdate.in.shape,
     handler: async (args) => {
@@ -310,7 +310,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_derived_refresh_status', group: 'schema', access: 'standard',
+    name: 'crm_derived_refresh_status', title: 'Check derived refresh status', group: 'schema', access: 'standard',
     description: 'Read compact refresh state for derived attributes. Use after writes or definition changes to see pending, refreshing, ready, or failed materialization.',
     input: CrmDerivedRefreshStatus.in.shape,
     handler: async (args) => {
@@ -330,7 +330,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_archive', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_archive', title: 'Archive attribute', group: 'schema', access: 'explicit',
     description: 'Archive an attribute; values are retained in history. MRTR confirmation states how many records carry a value.',
     input: CrmAttributeArchive.in.shape,
     handler: withApproval(deps, ctx, 'crm_attribute_archive', CrmAttributeArchive.in.shape, {
@@ -353,7 +353,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_group_define', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_group_define', title: 'Define attribute group', group: 'schema', access: 'explicit',
     description: 'Create ordered display metadata for attributes on an object type. Optionally assigns existing fields to the group; record values and visibility rules are unchanged.',
     input: CrmAttributeGroupDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_attribute_group_define', CrmAttributeGroupDefine.in.shape, {
@@ -372,7 +372,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_group_reorder', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_group_reorder', title: 'Reorder attribute groups', group: 'schema', access: 'explicit',
     description: 'Replace the display order for all active attribute groups on an object type. Does not change field values, sensitivity, or visibility behavior.',
     input: CrmAttributeGroupReorder.in.shape,
     handler: async (args) => {
@@ -389,7 +389,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_attribute_group_archive', group: 'schema', access: 'explicit',
+    name: 'crm_attribute_group_archive', title: 'Archive attribute group', group: 'schema', access: 'explicit',
     description: 'Archive an attribute display group and leave its fields active as ungrouped fields. Does not alter any stored record values.',
     input: CrmAttributeGroupArchive.in.shape,
     handler: withApproval(deps, ctx, 'crm_attribute_group_archive', CrmAttributeGroupArchive.in.shape, {
@@ -403,7 +403,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_relation_type_define', group: 'schema', access: 'explicit',
+    name: 'crm_relation_type_define', title: 'Define relation type', group: 'schema', access: 'explicit',
     description: 'Define a named, typed relationship between object types (e.g. person —works_at→ company) with cardinality and optional attributes on the link itself. All four cardinalities are supported; a record_reference attribute owns exactly one backing relation, never shared.',
     input: CrmRelationTypeDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_relation_type_define', CrmRelationTypeDefine.in.shape, {
@@ -429,7 +429,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_relation_type_update', group: 'schema', access: 'explicit',
+    name: 'crm_relation_type_update', title: 'Update relation type', group: 'schema', access: 'explicit',
     description: 'Update relation metadata, edge attributes, delete behavior or active-edge limits. Limit reductions that conflict with live data fail with relation/label/bound evidence only.',
     input: CrmRelationTypeUpdate.in.shape,
     handler: async (args) => {
@@ -449,7 +449,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_relation_type_archive', group: 'schema', access: 'explicit',
+    name: 'crm_relation_type_archive', title: 'Archive relation type', group: 'schema', access: 'explicit',
     description: 'Archive a relation type; links are kept but inactive.',
     input: CrmRelationTypeArchive.in.shape,
     handler: withApproval(deps, ctx, 'crm_relation_type_archive', CrmRelationTypeArchive.in.shape, {
@@ -470,7 +470,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_matching_rule_set', group: 'schema', access: 'explicit',
+    name: 'crm_matching_rule_set', title: 'Set matching rules', group: 'schema', access: 'explicit',
     description: 'Replace duplicate rules for an object type. Existing live data may require an internal backfill; until collision-free activation, the old generation remains effective. Re-call to inspect; set retry_backfill only after resolving reported collisions or a terminal job failure/cancel.',
     input: CrmMatchingRuleSet.in.shape,
     handler: async (args) => jsonResult(await replaceSchemaMatchingRules(deps, ctx, args.object_type, {
@@ -480,7 +480,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
   })
 
   defineTool(server, {
-    name: 'crm_template_apply', group: 'schema', access: 'explicit',
+    name: 'crm_template_apply', title: 'Apply schema template', group: 'schema', access: 'explicit',
     description: 'Apply a schema template by slug (see crm://templates), e.g. standard_crm, standard_sales, standard_service, or standard_commerce. Idempotent: existing slugs untouched. Unknown slug ⇒ UNKNOWN_TEMPLATE {available}.',
     input: CrmTemplateApply.in.shape,
     handler: async (args) => {

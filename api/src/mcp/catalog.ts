@@ -11,6 +11,8 @@ const CATALOG_NOW = new Date('2026-01-01T00:00:00.000Z')
 
 export type ToolDoc = {
   name: string
+  /** `Tool.title`: the short action a person sees. */
+  title: string
   description: string
   inputSchema: Tool['inputSchema']
   /** `Tool._meta` as listed: the tool's group and access class (./tool-groups.ts). */
@@ -56,9 +58,11 @@ export async function describeTools(): Promise<ToolDoc[]> {
       if (tool.description === undefined || tool.description.trim() === '') {
         throw new Error(`Tool '${tool.name}' has no description`)
       }
+      if (tool.title === undefined || tool.title.trim() === '') throw new Error(`Tool '${tool.name}' has no title`)
       if (tool._meta === undefined) throw new Error(`Tool '${tool.name}' has no _meta`)
       return {
         name: tool.name,
+        title: tool.title,
         description: tool.description,
         inputSchema: tool.inputSchema,
         meta: tool._meta,

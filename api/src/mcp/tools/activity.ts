@@ -19,7 +19,7 @@ export function registerActivityTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_activity_log', group: 'activity', access: 'standard',
+    name: 'crm_activity_log', title: 'Log activity', group: 'activity', access: 'standard',
     description: 'Log a timestamped interaction about visible records; use crm_note_add for an untimed note. external_ref updates the existing activity and last_activity_at stays monotonic. Returns the activity record. Fails NOT_FOUND for hidden targets or policy errors when create/link is not allowed.',
     input: CrmActivityLog.in.shape,
     handler: async (args) => {
@@ -40,7 +40,7 @@ export function registerActivityTools(
   })
 
   defineTool(server, {
-    name: 'crm_note_add', group: 'activity', access: 'standard',
+    name: 'crm_note_add', title: 'Add note', group: 'activity', access: 'standard',
     description: 'Attach an untimed markdown note to visible records; use crm_activity_log for a timestamped interaction. The note, links, and monotonic last_activity_at update are atomic. Returns the note record. Fails NOT_FOUND for hidden targets or policy errors when create/link is not allowed.',
     input: CrmNoteAdd.in.shape,
     handler: async (args) => {
@@ -56,7 +56,7 @@ export function registerActivityTools(
   })
 
   defineTool(server, {
-    name: 'crm_record_timeline', group: 'activity', access: 'standard',
+    name: 'crm_record_timeline', title: 'Read record timeline', group: 'activity', access: 'standard',
     description: "Read a visible record's activities, notes, tasks, and changes; hops 1 includes visible linked records. Use crm_record_history for change-only audit detail. Returns redacted items and a cursor. Errors: NOT_FOUND for hidden anchors, policy errors for denied view, VALIDATION_FAILED for cursor mismatch.",
     input: CrmRecordTimeline.in.shape,
     handler: async (args) => jsonResult(await recordTimeline(deps, ctx, {
@@ -71,7 +71,7 @@ export function registerActivityTools(
   })
 
   defineTool(server, {
-    name: 'crm_task_create', group: 'activity', access: 'standard',
+    name: 'crm_task_create', title: 'Create task', group: 'activity', access: 'standard',
     description: 'Create a task, optionally assigned and atomically linked to visible records. Use crm_note_add for information with no action. Returns the task record with applied defaults. Fails NOT_FOUND for hidden about records or policy errors when create/link is not allowed.',
     input: CrmTaskCreate.in.shape,
     handler: async (args) => {
@@ -90,7 +90,7 @@ export function registerActivityTools(
   })
 
   defineTool(server, {
-    name: 'crm_task_update', group: 'activity', access: 'standard',
+    name: 'crm_task_update', title: 'Update task', group: 'activity', access: 'standard',
     description: 'Patch a visible active task; null clears nullable fields. Use expected_version to prevent stale writes. Returns the updated task record. Fails NOT_FOUND for non-task or hidden records, VERSION_CONFLICT for stale versions, and policy errors when edit is not allowed.',
     input: CrmTaskUpdate.in.shape,
     handler: async (args) => {
@@ -111,7 +111,7 @@ export function registerActivityTools(
   })
 
   defineTool(server, {
-    name: 'crm_tasks_list', group: 'activity', access: 'standard',
+    name: 'crm_tasks_list', title: 'List tasks', group: 'activity', access: 'standard',
     description: 'List visible tasks by exact status or assignee, inclusive due window, and optional visible about record. Use crm_records_query for custom task filters. Returns a redacted page and opaque cursor. Fails NOT_FOUND for a hidden about record or VALIDATION_FAILED for cursor mismatch.',
     input: CrmTasksList.in.shape,
     handler: async (args) => jsonResult(await listTasks(deps, ctx, {

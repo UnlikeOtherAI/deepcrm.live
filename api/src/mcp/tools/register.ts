@@ -50,8 +50,13 @@ export type ToolRuntimeOptions = {
   log: ToolLogger
 }
 
+/** A person reads `Tool.title` ("Using DeepCRM: Create record"); an agent reads the description. */
+export const MAX_TOOL_TITLE_LENGTH = 40
+
 export type ToolDefinition<Shape extends z.ZodRawShape> = {
   name: string
+  /** Short sentence-case action shown to people, e.g. "Create record"; unique, at most 40 characters. */
+  title: string
   /** The `tools/list` group (`_meta["live.deepcrm/group"]`); see ../tool-groups.ts. */
   group: ToolGroupId
   /** `standard` (on by default for a caller's agents) or `explicit` (off until granted). */
@@ -81,6 +86,10 @@ function assertDiscoverableTool<Shape extends z.ZodRawShape>(
 ): void {
   if (definition.description.length > 300) {
     throw new Error(`Tool '${definition.name}' description exceeds 300 characters`)
+  }
+  const title = definition.title.trim()
+  if (title.length === 0 || title !== definition.title || title.length > MAX_TOOL_TITLE_LENGTH) {
+    throw new Error(`Tool '${definition.name}' needs a trimmed title of 1–${MAX_TOOL_TITLE_LENGTH} characters`)
   }
   if (!isToolGroupId(definition.group) || !isToolAccess(definition.access)) {
     throw new Error(`Tool '${definition.name}' must declare its group and access class`)
@@ -162,6 +171,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
   }
   runtime.tools.set(definition.name, tool)
   server.registerTool(definition.name, {
+    title: definition.title,
     description: definition.description,
     inputSchema,
     _meta: toolClassMeta(definition.group, definition.access),

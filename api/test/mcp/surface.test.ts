@@ -132,4 +132,21 @@ describe('documented MCP tool surface', () => {
     const access = new Map(tools.map((tool) => [tool.name, tool['live.deepcrm/access']]))
     for (const read of RESOLVING_READS) expect(access.get(read), `${read} is a resolving read`).toBe('standard')
   })
+
+  it('gives every listed tool a unique, trimmed title of at most 40 characters', async () => {
+    const tools = (await client.listTools()).tools
+    expect(tools).toHaveLength(75)
+    const titles = new Map<string, string>()
+    for (const tool of tools) {
+      const title = tool.title ?? ''
+      expect(title, `${tool.name} title`).toMatch(/^\S(?:.*\S)?$/u)
+      expect(title.length, `${tool.name} title length`).toBeLessThanOrEqual(40)
+      expect(titles.get(title), `${tool.name} shares its title`).toBeUndefined()
+      titles.set(title, tool.name)
+    }
+    const byName = new Map(tools.map((tool) => [tool.name, tool.title]))
+    expect(byName.get('crm_record_create')).toBe('Create record')
+    expect(byName.get('crm_records_query')).toBe('Query records')
+    expect(byName.get('crm_schema_get')).toBe('Read workspace model')
+  })
 })

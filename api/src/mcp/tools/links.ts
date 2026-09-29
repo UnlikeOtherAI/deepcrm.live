@@ -21,7 +21,7 @@ export function registerLinkTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_link', group: 'links', access: 'standard',
+    name: 'crm_link', title: 'Link records', group: 'links', access: 'standard',
     description: 'Relate two visible records with optional edge data. Cardinality replacements are returned in ended_links. Reusing an idempotency key with changed arguments fails.',
     input: CrmLink.in.shape,
     handler: async (args) => {
@@ -39,7 +39,7 @@ export function registerLinkTools(
   })
 
   defineTool(server, {
-    name: 'crm_unlink', group: 'links', access: 'standard',
+    name: 'crm_unlink', title: 'Unlink records', group: 'links', access: 'standard',
     description: 'End an active link while retaining history. Identify it by link_id or a full relation triple; an ambiguous triple ends the newest active link.',
     input: CrmUnlinkInput.shape,
     handler: async (args) => {
@@ -69,7 +69,7 @@ export function registerLinkTools(
   })
 
   defineTool(server, {
-    name: 'crm_links_list', group: 'links', access: 'standard',
+    name: 'crm_links_list', title: 'List record links', group: 'links', access: 'standard',
     description: 'List visible links for one visible record with related record summaries. Filter by relation and direction; include_history adds ended links. Cursor binds all filters.',
     input: CrmLinksList.in.shape,
     handler: async (args) => jsonResult(await listRecordLinks(deps, ctx, {

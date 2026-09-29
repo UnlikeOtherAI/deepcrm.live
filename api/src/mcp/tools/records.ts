@@ -37,7 +37,7 @@ export function registerRecordTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_record_create', group: 'records', access: 'standard',
+    name: 'crm_record_create', title: 'Create record', group: 'records', access: 'standard',
     description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. A refused value returns VALIDATION_FAILED issues naming its type and an expected value.',
     input: CrmRecordCreate.in.shape,
     handler: async (args) => {
@@ -53,7 +53,7 @@ export function registerRecordTools(
     },
   })
   defineTool(server, {
-    name: 'crm_record_update', group: 'records', access: 'standard',
+    name: 'crm_record_update', title: 'Update record', group: 'records', access: 'standard',
     description: 'Patch attributes; null clears an attribute. Supply expected_version for concurrency protection. Metadata changes are policy enforced.',
     input: CrmRecordUpdate.in.shape,
     handler: async (args) => {
@@ -66,7 +66,7 @@ export function registerRecordTools(
     },
   })
   defineTool(server, {
-    name: 'crm_record_assert', group: 'records', access: 'standard',
+    name: 'crm_record_assert', title: 'Create or update record', group: 'records', access: 'standard',
     description: 'Create or patch by a unique attribute for sync/import writes. Multiple multi-value matches return DUPLICATE_FOUND. Inline links are atomic.',
     input: CrmRecordAssert.in.shape,
     handler: async (args) => {
@@ -82,7 +82,7 @@ export function registerRecordTools(
     },
   })
   defineTool(server, {
-    name: 'crm_record_get', group: 'records', access: 'standard',
+    name: 'crm_record_get', title: 'Read record', group: 'records', access: 'standard',
     description: 'Fetch one visible record by id or a unique attribute. include_links groups active related records; include_timeline returns recent activity.',
     input: CrmRecordGetInput.shape,
     handler: async (args) => jsonResult(await getRecord(deps, ctx, {
@@ -91,7 +91,7 @@ export function registerRecordTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_records_query', group: 'records', access: 'standard',
+    name: 'crm_records_query', title: 'Query records', group: 'records', access: 'standard',
     description: 'List visible records with exact structured filters, sort and opaque cursor. Use crm_record_get for a known record and crm_search for fuzzy text.',
     input: CrmRecordsQueryToolInput.shape,
     handler: async (args) => jsonResult(await queryRecords(deps, ctx, {
@@ -102,7 +102,7 @@ export function registerRecordTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_records_count', group: 'records', access: 'standard',
+    name: 'crm_records_count', title: 'Count records', group: 'records', access: 'standard',
     description: 'Count visible records matching an exact structured filter. This shares crm_records_query policy and visibility rules and avoids pagination.',
     input: CrmRecordsCountToolInput.shape,
     handler: async (args) => jsonResult(await countRecords(deps, ctx, {
@@ -111,13 +111,13 @@ export function registerRecordTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_records_get_many', group: 'records', access: 'standard',
+    name: 'crm_records_get_many', title: 'Read records by id', group: 'records', access: 'standard',
     description: 'Fetch up to 100 visible records by id in input order. Hidden, unavailable, and foreign-tenant ids are reported only as missing.',
     input: CrmRecordsGetMany.in.shape,
     handler: async (args) => jsonResult(await getManyRecords(deps, ctx, args.ids)),
   })
   defineTool(server, {
-    name: 'crm_records_bulk_assert', group: 'records', access: 'standard',
+    name: 'crm_records_bulk_assert', title: 'Bulk create or update records', group: 'records', access: 'standard',
     description: 'Queue 1–10,000 sync-safe record upserts by one unique attribute. Returns a Task immediately; poll tasks/get, then read tasks/result. Each row is independently reported.',
     input: CrmRecordsBulkAssert.in.shape,
     handler: async (args) => {
@@ -132,7 +132,7 @@ export function registerRecordTools(
     },
   })
   defineTool(server, {
-    name: 'crm_record_delete', group: 'records', access: 'explicit',
+    name: 'crm_record_delete', title: 'Delete record', group: 'records', access: 'explicit',
     description: 'Soft-delete a visible record and end links according to relation policy. Requires delete entitlement or approval.',
     input: CrmRecordDelete.in.shape,
     handler: withApproval(deps, ctx, 'crm_record_delete', CrmRecordDelete.in.shape, {
@@ -148,7 +148,7 @@ export function registerRecordTools(
     }),
   })
   defineTool(server, {
-    name: 'crm_record_restore', group: 'records', access: 'standard',
+    name: 'crm_record_restore', title: 'Restore record', group: 'records', access: 'standard',
     description: 'Restore a soft-deleted record and recoverable links. Restore conflicts identify a current unique-key holder.',
     input: CrmRecordRestore.in.shape,
     handler: withApproval(deps, ctx, 'crm_record_restore', CrmRecordRestore.in.shape, {
@@ -163,13 +163,13 @@ export function registerRecordTools(
     }),
   })
   defineTool(server, {
-    name: 'crm_record_at', group: 'records', access: 'standard',
+    name: 'crm_record_at', title: 'Read record at a point in time', group: 'records', access: 'standard',
     description: 'Reconstruct visible record values and reference links at an ISO timestamp from change history.',
     input: CrmRecordAt.in.shape,
     handler: async (args) => jsonResult(await recordAt(deps, ctx, { recordId: args.id, at: args.at })),
   })
   defineTool(server, {
-    name: 'crm_record_history', group: 'records', access: 'standard',
+    name: 'crm_record_history', title: 'Read record history', group: 'records', access: 'standard',
     description: 'Read field-level history for one visible record. Cursor is bound to id, attributes and limit.',
     input: CrmRecordHistory.in.shape,
     handler: async (args) => jsonResult(await recordHistory(deps, ctx, {

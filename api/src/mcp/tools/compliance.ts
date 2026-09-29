@@ -31,25 +31,25 @@ export function registerComplianceTools(
   deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_suppression_add', group: 'compliance', access: 'standard',
+    name: 'crm_suppression_add', title: 'Add suppression', group: 'compliance', access: 'standard',
     description: 'Add a hashed suppression entry. Use for objections, erasure, bounces, and manual channel holds. Values are normalized in memory and never stored raw.',
     input: CrmSuppressionAdd.in.shape,
     handler: async (args) => jsonResult(await addSuppression(deps, ctx, args)),
   })
   defineTool(server, {
-    name: 'crm_suppression_check', group: 'compliance', access: 'standard',
+    name: 'crm_suppression_check', title: 'Check suppression', group: 'compliance', access: 'standard',
     description: 'Call before outbound contact on the exact channel. all entries and unexpired channel entries suppress; expired entries return suppressed false.',
     input: CrmSuppressionCheck.in.shape,
     handler: async (args) => jsonResult(await checkSuppression(deps, ctx, args)),
   })
   defineTool(server, {
-    name: 'crm_suppression_list', group: 'compliance', access: 'standard',
+    name: 'crm_suppression_list', title: 'List suppressions', group: 'compliance', access: 'standard',
     description: 'List suppression metadata and hashes only. Use filters to inspect compliance state; raw suppressed values are never returned.',
     input: CrmSuppressionList.in.shape,
     handler: async (args) => jsonResult(await listSuppressions(deps, ctx, args)),
   })
   defineTool(server, {
-    name: 'crm_suppression_remove', group: 'compliance', access: 'explicit',
+    name: 'crm_suppression_remove', title: 'Remove suppression', group: 'compliance', access: 'explicit',
     description: 'Remove one hashed suppression entry by value and channel. This is owner approval-gated because it may re-enable outbound contact.',
     input: CrmSuppressionRemove.in.shape,
     handler: withApproval(deps, ctx, 'crm_suppression_remove', CrmSuppressionRemove.in.shape, {
@@ -59,7 +59,7 @@ export function registerComplianceTools(
     }, async (args, _mrtr, approval) => jsonResult(await removeSuppression(deps, ctx, args, approval))),
   })
   defineTool(server, {
-    name: 'crm_record_erase', group: 'compliance', access: 'explicit',
+    name: 'crm_record_erase', title: 'Erase record', group: 'compliance', access: 'explicit',
     description: 'Right-to-erasure operation. Suppresses contact facts first, scrubs record, link data, list entry data, historical values, search, keys, and grants, emits record.erased, and leaves a permanent ERASED tombstone. Owner approval-gated and irreversible.',
     input: CrmRecordErase.in.shape,
     handler: withApproval(deps, ctx, 'crm_record_erase', CrmRecordErase.in.shape, {
@@ -70,7 +70,7 @@ export function registerComplianceTools(
     }, async (args, _mrtr, approval) => jsonResult(await eraseCrmRecord(deps, ctx, args, approval))),
   })
   defineTool(server, {
-    name: 'crm_write_guard_set', group: 'compliance', access: 'explicit',
+    name: 'crm_write_guard_set', title: 'Set write guard', group: 'compliance', access: 'explicit',
     description: 'Set rejected origins, require_origin, and app keys forced to team-visible writes. Owner-only; rejected writes return ORIGIN_REJECTED or VISIBILITY_REJECTED.',
     input: CrmWriteGuardSet.in.shape,
     handler: async (args) => jsonResult(await setWriteGuard(deps, ctx, args)),

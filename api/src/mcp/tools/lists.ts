@@ -35,7 +35,7 @@ export function registerListTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
   defineTool(server, {
-    name: 'crm_list_create', group: 'lists-views', access: 'standard',
+    name: 'crm_list_create', title: 'Create list', group: 'lists-views', access: 'standard',
     description: 'Create a curated single-object or mixed-record list with optional typed entry attributes. Entry metadata uses the same validation rules as record data. Errors: policy denial, unknown object type, or schema conflict.',
     input: CrmListCreate.in.shape,
     handler: async (args) => jsonResult(await createList(deps, ctx, {
@@ -44,7 +44,7 @@ export function registerListTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_list_update', group: 'lists-views', access: 'standard',
+    name: 'crm_list_update', title: 'Update list', group: 'lists-views', access: 'standard',
     description: 'Update list metadata; for dynamic lists, replacing filter schedules a membership refresh and advances evaluation_version. Static lists reject filter changes.',
     input: CrmListUpdate.in.shape,
     handler: async (args) => jsonResult(await updateList(deps, ctx, {
@@ -52,13 +52,13 @@ export function registerListTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_list_status', group: 'lists-views', access: 'standard',
+    name: 'crm_list_status', title: 'Read list status', group: 'lists-views', access: 'standard',
     description: 'Read dynamic-list evaluation state, object scope, filter, version, error code and last completed evaluation time.',
     input: CrmListStatus.in.shape,
     handler: async (args) => jsonResult(await listStatus(deps, ctx, args.list)),
   })
   defineTool(server, {
-    name: 'crm_list_add', group: 'lists-views', access: 'standard',
+    name: 'crm_list_add', title: 'Add records to list', group: 'lists-views', access: 'standard',
     description: 'Add visible live records to a curated list. Data is validated against list attributes; existing memberships are unchanged and excluded from added. Errors: policy denial, NOT_FOUND, or invalid object type/data.',
     input: CrmListAdd.in.shape,
     handler: async (args) => jsonResult(await addListEntries(deps, ctx, {
@@ -67,7 +67,7 @@ export function registerListTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_list_remove', group: 'lists-views', access: 'standard',
+    name: 'crm_list_remove', title: 'Remove records from list', group: 'lists-views', access: 'standard',
     description: 'Remove visible record memberships from a curated list. Missing memberships are ignored. Errors: policy denial or NOT_FOUND for the list or a hidden/foreign record.',
     input: CrmListRemove.in.shape,
     handler: async (args) => jsonResult(await removeListEntries(
@@ -75,7 +75,7 @@ export function registerListTools(
     )),
   })
   defineTool(server, {
-    name: 'crm_list_entries', group: 'lists-views', access: 'standard',
+    name: 'crm_list_entries', title: 'Read list entries', group: 'lists-views', access: 'standard',
     description: 'Read a cursor page of list entries joined to visible, policy-permitted live records. Entry attributes and record data are redacted independently. Errors: policy denial, NOT_FOUND, or cursor mismatch.',
     input: CrmListEntries.in.shape,
     handler: async (args) => jsonResult(await listEntries(deps, ctx, {
@@ -83,7 +83,7 @@ export function registerListTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_view_save', group: 'lists-views', access: 'standard',
+    name: 'crm_view_save', title: 'Save view', group: 'lists-views', access: 'standard',
     description: 'Create or replace a reusable structured record query. Filters, sort keys and projected attributes are validated against the active schema. Exact replays are no-ops. Errors: policy denial or invalid query metadata.',
     input: CrmViewSaveToolInput.shape,
     handler: async (args) => jsonResult(await saveView(deps, ctx, {
@@ -93,7 +93,7 @@ export function registerListTools(
     })),
   })
   defineTool(server, {
-    name: 'crm_view_run', group: 'lists-views', access: 'standard',
+    name: 'crm_view_run', title: 'Run view', group: 'lists-views', access: 'standard',
     description: 'Run a saved view with current row visibility, policy and attribute redaction. The opaque cursor is bound to the saved definition. Use crm_records_query for an ad hoc filter. Errors: policy denial, NOT_FOUND, or cursor mismatch.',
     input: CrmViewRun.in.shape,
     handler: async (args) => jsonResult(await runView(
@@ -101,7 +101,7 @@ export function registerListTools(
     )),
   })
   defineTool(server, {
-    name: 'crm_view_delete', group: 'lists-views', access: 'standard',
+    name: 'crm_view_delete', title: 'Delete view', group: 'lists-views', access: 'standard',
     description: 'Delete a saved view by slug and invalidate the schema resource version. This does not delete records. Errors: policy denial or NOT_FOUND.',
     input: CrmViewDelete.in.shape,
     handler: async (args) => jsonResult(await deleteView(deps, ctx, args.view)),
