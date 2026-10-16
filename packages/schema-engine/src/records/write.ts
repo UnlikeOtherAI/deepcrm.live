@@ -1,5 +1,5 @@
 import { tenantWhere } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
@@ -176,7 +176,7 @@ async function prepareCreate(
   const record = await tx.record.create({
     data: {
       ...tenantWhere(ctx.tenant), objectTypeId: objectType.id, data: validatedData, displayName,
-      visibility: requestedVisibility(input) ?? 'team', createdOnBehalfOf: ctx.onBehalfOf.uoaUserId,
+      visibility: requestedVisibility(input) ?? 'team', createdOnBehalfOf: onBehalfOfUserId(ctx),
       origin: input.origin ?? null, ownerType: input.owner?.type ?? null, ownerId: input.owner?.id ?? null,
       createdByType: ctx.actor.type, createdById: ctx.actor.id,
     },

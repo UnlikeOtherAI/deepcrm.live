@@ -5,6 +5,7 @@ import {
   ServiceError,
   type ActorContext,
   type AttributeSpec as AttributeSpecValue,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 import { getAttributeType, loadSchema, validateRecordData, type LoadedList,
   type LoadedObjectType, type LoadedSchema } from '@deepcrm/schema-engine'
@@ -62,7 +63,7 @@ async function audit(
 ): Promise<void> {
   await deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId,
-    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: onBehalfOfUserId(ctx),
     action, resourceType, resourceId, outcome, reason: null, metadata: metadata(ctx),
     requestId: ctx.requestId, ipAddress: null, userAgent: null,
   })

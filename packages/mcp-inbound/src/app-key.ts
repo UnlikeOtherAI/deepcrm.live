@@ -10,11 +10,14 @@ const AppRegistrationInputSchema = z.object({
   contextIssuer: z.string().min(1),
   sourceDomain: z.string().min(1),
   product: z.string().min(1),
+  // Tools the app may call on the data subject's own act, with no person
+  // signed in (auth-and-tenancy §1). Empty: the app never acts for nobody.
+  subjectTools: z.array(z.string().regex(/^crm_[a-z0-9_]+$/u)).default([]),
 }).strict()
 
 const AppRegistryInputSchema = z.record(z.string().min(1), AppRegistrationInputSchema)
 
-export type AppRegistration = z.infer<typeof AppRegistrationInputSchema> & {
+export type AppRegistration = z.output<typeof AppRegistrationInputSchema> & {
   contextJwks?: JWTVerifyGetKey
 }
 

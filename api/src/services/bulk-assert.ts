@@ -8,6 +8,7 @@ import {
   ErrorCode,
   ServiceError,
   type ActorContext,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -62,7 +63,7 @@ function actorContext(ctx: ActorContext) {
     app: ctx.app,
     actChain: ctx.actChain,
     actor: ctx.actor,
-    onBehalfOf: ctx.onBehalfOf,
+    onBehalfOf: requireOnBehalfOf(ctx),
     provenance: ctx.provenance,
     requestId: ctx.requestId,
   }
@@ -139,7 +140,7 @@ export async function enqueueBulkAssert(
   await validateMatchAttribute(deps, ctx, input)
   const operationKey = input.idempotencyKey ?? ctx.requestId
   const jobPayload = payload(ctx, input, operationKey)
-  const queueKey = `bulk-assert:${ctx.tenant.teamId}:${ctx.onBehalfOf.uoaUserId}:${operationKey}`
+  const queueKey = `bulk-assert:${ctx.tenant.teamId}:${requireOnBehalfOf(ctx).uoaUserId}:${operationKey}`
   try {
     const job = await enqueue(deps.db, {
       organizationId: ctx.tenant.organizationId,

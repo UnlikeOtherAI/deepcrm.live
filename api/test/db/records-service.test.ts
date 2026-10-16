@@ -4,7 +4,7 @@ import {
   canonicalJson, createDb, dropTenant, seedTenant, writeAudit, type PolicyAction,
 } from '@deepcrm/db'
 import { FakeEmbedder, type LinkWriter } from '@deepcrm/schema-engine'
-import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -332,7 +332,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
       data: {
         organizationId: target.organizationId,
         teamId: target.teamId,
-        principalUserId: ctx.onBehalfOf.uoaUserId,
+        principalUserId: requireOnBehalfOf(ctx).uoaUserId,
         tool: 'crm_record_create',
         key: input.idempotencyKey,
         argumentsHash: argsHash(input),
@@ -400,7 +400,7 @@ describe('record service policy, transaction, and idempotency seam', () => {
       resourceType: 'record',
       outcome: 'denied',
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
       requestId: ctx.requestId,
     })
   })

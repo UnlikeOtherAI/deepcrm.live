@@ -30,7 +30,9 @@ import { registerIoTools } from './tools/io.js'
 import { registerSearchTools } from './tools/search.js'
 import { registerQualityTools } from './tools/quality.js'
 import { registerComplianceTools } from './tools/compliance.js'
-import { configureToolRuntime, logToolEntry } from './tools/register.js'
+import {
+  configureToolRuntime, logToolEntry, restrictToolRuntime, type ToolExposure,
+} from './tools/register.js'
 import { registerTaskMethods } from './tasks.js'
 
 const PROTOCOL_VERSION = '2026-07-28'
@@ -131,7 +133,13 @@ export function installTransportResultWrapper(transport: Transport, version: str
   }
 }
 
-export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
+const ALL_TOOLS: ToolExposure = { kind: 'all' }
+
+export function buildMcpServer(
+  ctx: ActorContext,
+  deps: AppDeps,
+  exposure: ToolExposure = ALL_TOOLS,
+): McpServer {
   const server = new McpServer(
     { name: 'deepcrm', version: deps.version },
     {
@@ -147,6 +155,7 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
     clock: () => deps.clock().getTime(),
     log: logToolEntry,
   })
+  if (exposure.kind === 'only') restrictToolRuntime(server, exposure.tool)
 
   // Initialises the SDK's tools/list and tools/call handlers without exposing
   // a placeholder capability. T22+ registers real tools into this same registry.
@@ -164,9 +173,13 @@ export function buildMcpServer(ctx: ActorContext, deps: AppDeps): McpServer {
   registerSearchTools(server, ctx, deps)
   registerQualityTools(server, ctx, deps)
   registerComplianceTools(server, ctx, deps)
-  registerResources(server, ctx, deps)
-  registerPrompts(server)
-  registerTaskMethods(server, ctx, deps)
+  // A subject-attested call runs its one tool and reads nothing else: no
+  // resources, prompts or task methods are served to it.
+  if (exposure.kind === 'all') {
+    registerResources(server, ctx, deps)
+    registerPrompts(server)
+    registerTaskMethods(server, ctx, deps)
+  }
 
   server.server.setRequestHandler(ServerDiscoverRequestSchema, async () => {
     const result = {

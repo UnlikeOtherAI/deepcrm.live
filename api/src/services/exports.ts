@@ -11,6 +11,7 @@ import {
   type ActorContext,
   type Filter,
   type Sort,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -68,7 +69,7 @@ function actorContext(ctx: ActorContext) {
     app: ctx.app,
     actChain: ctx.actChain,
     actor: ctx.actor,
-    onBehalfOf: ctx.onBehalfOf,
+    onBehalfOf: requireOnBehalfOf(ctx),
     provenance: ctx.provenance,
     requestId: ctx.requestId,
   }
@@ -149,7 +150,7 @@ export async function enqueueExport(
         teamId: ctx.tenant.teamId,
         type: EXPORT_JOB,
         payload: jsonObject(payload),
-        idempotencyKey: `export:${ctx.tenant.teamId}:${ctx.onBehalfOf.uoaUserId}:${operationKey}`,
+        idempotencyKey: `export:${ctx.tenant.teamId}:${requireOnBehalfOf(ctx).uoaUserId}:${operationKey}`,
         maxAttempts: 3,
         matchesExistingPayload: (stored) => {
           const existing = ExportPayload.safeParse(stored)

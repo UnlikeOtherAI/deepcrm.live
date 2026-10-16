@@ -1,5 +1,5 @@
 import { type PolicyAction, type Prisma } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { type CreateRecordInput, type LoadedSchema, type UpdateRecordInput } from '@deepcrm/schema-engine'
 
 import type { AppDeps } from '../deps.js'
@@ -26,7 +26,7 @@ export async function writeRecordDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: descriptor.tool,
     resourceType: 'record',
     resourceId: descriptor.resourceId,

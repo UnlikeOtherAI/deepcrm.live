@@ -125,7 +125,7 @@ The schema engine package holds the pure, Prisma-transaction-scoped core (`valid
 | `DIRECT_DATABASE_URL` | — | Postgres without a pooler, for Prisma Migrate and `prisma db execute` (session-level advisory lock); equal to `DATABASE_URL` wherever no pooler is used |
 | `DEEPCRM_PROCESS_MODE` | `all` | `api` / `worker` / `all` |
 | `REQUIRE_AUTH` | `true` (prod) / `false` (dev) | off ⇒ dev principal |
-| `DEEPCRM_APPS` | — | per-app registry JSON: key hashes + context JWKS/issuer + sourceDomain/product ([uoa-integration.md](spec/uoa-integration.md)) |
+| `DEEPCRM_APPS` | — | per-app registry JSON: key hashes + context JWKS/issuer + sourceDomain/product + `subjectTools` (tools the app may call on the data subject's own act, default `[]`; [auth-and-tenancy.md](auth-and-tenancy.md) §1) ([uoa-integration.md](spec/uoa-integration.md)) |
 | `UOA_BASE_URL` | `https://authentication.unlikeotherai.com` | delegation issuer; JWKS at `${UOA_BASE_URL}/oauth/jwks.json` |
 | `DEEPCRM_DIRECT_CLIENTS` | `false` | accept UOA public-profile OAuth tokens (no app key) |
 | `DEEPCRM_UOA_CONFIG_PRIVATE_KEY_B64`, `DEEPCRM_UOA_CLIENT_SECRET` | — | DeepCRM's own UOA registration, outbound-only (chained Ledger attribution) |

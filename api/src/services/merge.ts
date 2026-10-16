@@ -8,7 +8,7 @@ import {
   type RecordTx,
   type UnmergeConflict,
 } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
 import type { ApprovalConsumption } from './approvals.js'
@@ -69,7 +69,7 @@ async function writeAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action,
     resourceType: 'merge',
     resourceId,
@@ -181,7 +181,7 @@ export async function mergeRecords(
           teamId: ctx.tenant.teamId,
           actorType: ctx.actor.type,
           actorId: ctx.actor.id,
-          onBehalfOf: ctx.onBehalfOf.uoaUserId,
+          onBehalfOf: onBehalfOfUserId(ctx),
           action: 'crm_merge_records',
           resourceType: 'merge',
           resourceId: result.mergeChangeId,
@@ -275,7 +275,7 @@ export async function unmergeRecords(
           teamId: ctx.tenant.teamId,
           actorType: ctx.actor.type,
           actorId: ctx.actor.id,
-          onBehalfOf: ctx.onBehalfOf.uoaUserId,
+          onBehalfOf: onBehalfOfUserId(ctx),
           action: 'crm_unmerge',
           resourceType: 'merge',
           resourceId: input.mergeChangeId,

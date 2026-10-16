@@ -1,5 +1,5 @@
 import { Prisma } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import type { RecordTx } from '../schema/tx.js'
 import { canonicalJson, type JsonValue } from './json.js'
@@ -93,7 +93,7 @@ export async function writeChanges(
         snapshot: json(change.snapshot),
         actorType: ctx.actor.type,
         actorId: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
         runId: ctx.provenance?.runId ?? null,
         toolCallId: ctx.provenance?.toolCallId ?? null,
         requestId: ctx.requestId,

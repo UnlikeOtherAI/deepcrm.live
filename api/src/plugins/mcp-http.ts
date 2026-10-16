@@ -5,17 +5,21 @@ import {
   type AppRegistry,
 } from '@deepcrm/mcp-inbound'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { ServiceError, type ActorContext, type Principal } from '@deepcrm/schemas'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { AppDeps } from '../deps.js'
 import type { Env } from '../env.js'
 import { buildMcpServer, installTransportResultWrapper } from '../mcp/server.js'
+import type { ToolExposure } from '../mcp/tools/register.js'
 import { buildActorContext } from '../services/context.js'
 import {
   consumeSeenRequestId,
+  consumeSubjectRequestId,
   expectedToolInvocation,
   recordPrincipalSeen,
   TokenVersionRegressionError,
 } from '../services/principals.js'
+import { answerTenantRefusal } from './mcp-refusal.js'
 
 const PROVISION_WINDOW_MS = 60_000
 const PROVISION_LIMIT_PER_APP = 30
@@ -101,6 +105,16 @@ async function auditAuthFailure(
   }))
 }
 
+function toolExposure(principal: Principal): ToolExposure {
+  return principal.kind === 'subject' ? { kind: 'only', tool: principal.tool } : { kind: 'all' }
+}
+
+async function consumeReplay(deps: AppDeps, ctx: ActorContext, principal: Principal, tool: string, args: string) {
+  return principal.kind === 'subject'
+    ? consumeSubjectRequestId(deps.db, ctx, principal)
+    : consumeSeenRequestId(deps.db, ctx, tool, args)
+}
+
 async function isFirstContact(deps: AppDeps, externalTeamId: string): Promise<boolean> {
   const existing = await deps.db.team.findUnique({
     where: { externalTeamId },
@@ -149,25 +163,33 @@ async function handleMcp(
   }
 
   const principal = principalResult.principal
+  // A subject attestation names exactly one call; a batch could carry calls
+  // its binding never saw.
+  if (principal.kind === 'subject' && Array.isArray(request.body)) {
+    await auditAuthFailure(deps, request, 'subject_tool_mismatch')
+    unauthorized(reply, env)
+    return
+  }
   if (
-    await isFirstContact(deps, principal.uoaTeamId)
+    principal.kind === 'delegated'
+    && await isFirstContact(deps, principal.uoaTeamId)
     && !limiter.allow(principal.app, deps.clock().getTime())
   ) {
     await reply.code(429).header('Retry-After', '60').send({ error: 'provisioning_rate_limited' })
     return
   }
 
-  // buildActorContext is the single tenancy-resolution seam and provisions a
-  // verified first-contact team before returning the request-scoped context.
+  // buildActorContext is the single tenancy-resolution seam: it provisions a
+  // verified first-contact team for a person, and finds only an existing one
+  // for a subject-attested call, before returning the request-scoped context.
   let ctx: Awaited<ReturnType<typeof buildActorContext>>
   try {
     ctx = await buildActorContext(deps, principal, requestId)
-    await recordPrincipalSeen(deps.db, ctx, principal)
+    if (principal.kind === 'delegated') await recordPrincipalSeen(deps.db, ctx, principal)
     if (
       env.REQUIRE_AUTH
-      &&
-      invocation?.destructive === true
-      && !await consumeSeenRequestId(deps.db, ctx, invocation.tool, invocation.argsSha256)
+      && invocation?.replayBounded === true
+      && !await consumeReplay(deps, ctx, principal, invocation.tool, invocation.argsSha256)
     ) {
       await auditAuthFailure(deps, request, 'request_replay')
       unauthorized(reply, env)
@@ -179,9 +201,13 @@ async function handleMcp(
       unauthorized(reply, env)
       return
     }
+    if (error instanceof ServiceError) {
+      await answerTenantRefusal(reply, request.body, error, requestId)
+      return
+    }
     throw error
   }
-  const server = buildMcpServer(ctx, deps)
+  const server = buildMcpServer(ctx, deps, toolExposure(principal))
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   installTransportResultWrapper(transport, deps.version)
   try {

@@ -1,5 +1,5 @@
 import { createDb } from '@deepcrm/db'
-import { ServiceError } from '@deepcrm/schemas'
+import { requireOnBehalfOf, ServiceError } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -56,7 +56,7 @@ describe('link service security boundaries', () => {
     const foreign = await fixture()
     const deps = linkDeps(db)
     const ctx = linkContext(target.tenant, 'uoa_link_caller')
-    await addLinkPolicy(db, target.tenant, 'record', 'deny', ctx.onBehalfOf.uoaUserId)
+    await addLinkPolicy(db, target.tenant, 'record', 'deny', requireOnBehalfOf(ctx).uoaUserId)
 
     await db.record.update({
       where: { id: target.people[0]! },

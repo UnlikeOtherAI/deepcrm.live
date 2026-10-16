@@ -1,5 +1,5 @@
 import { tenantWhere, writeAudit, type TenantRef } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import { canonicalJsonValue, type JsonValue } from '../records/json.js'
 import { lockRecords } from '../records/locks.js'
@@ -356,7 +356,7 @@ export async function setRecordStage(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'stage.set',
     resourceType: 'record',
     resourceId: record.id,

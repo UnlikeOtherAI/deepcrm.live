@@ -27,12 +27,20 @@ type ToolRuntime = {
   invoke(params: unknown, extra: ToolExtra): Promise<CallToolResult>
 }
 
+/**
+ * Which tools a per-request server runs: every tool, or only the one a
+ * subject attestation names (auth-and-tenancy §1). Every other tool is
+ * absent from `tools/list` and answers `POLICY_DENIED`.
+ */
+export type ToolExposure = { kind: 'all' } | { kind: 'only'; tool: string }
+
 type RuntimeConfig = {
   requestId: string
   clock: () => number
   log: ToolLogger
   tools: Map<string, ToolRuntime>
   installed: boolean
+  exposure: ToolExposure
 }
 
 const runtimes = new WeakMap<McpServer, RuntimeConfig>()
@@ -113,7 +121,18 @@ export function logToolEntry(entry: Parameters<ToolLogger>[0]): void {
 
 export function configureToolRuntime(server: McpServer, options: ToolRuntimeOptions): void {
   if (runtimes.has(server)) throw new Error('Tool runtime is already configured')
-  runtimes.set(server, { ...options, tools: new Map(), installed: false })
+  runtimes.set(server, { ...options, tools: new Map(), installed: false, exposure: { kind: 'all' } })
+}
+
+/** Narrows a configured runtime to one tool; call before any tool is defined. */
+export function restrictToolRuntime(server: McpServer, tool: string): void {
+  const runtime = runtimeFor(server)
+  if (runtime.tools.size > 0) throw new Error('Tool exposure must be set before tools are defined')
+  runtime.exposure = { kind: 'only', tool }
+}
+
+function exposes(exposure: ToolExposure, name: string): boolean {
+  return exposure.kind === 'all' || exposure.tool === name
 }
 
 function runtimeFor(server: McpServer): RuntimeConfig {
@@ -127,6 +146,12 @@ function installCallHandler(server: McpServer, runtime: RuntimeConfig): void {
   server.server.setRequestHandler(MrtrCallToolRequestSchema, async (request, extra) => {
     const tool = runtime.tools.get(request.params.name)
     if (tool === undefined) throw new McpError(McpErrorCode.InvalidParams, 'Tool not found')
+    if (!exposes(runtime.exposure, request.params.name)) {
+      const refused = new ServiceError(ErrorCode.POLICY_DENIED, 'This call may run only the tool its caller attested')
+      return toolError(refused, {
+        tool: request.params.name, requestId: runtime.requestId, durationMs: 0, log: runtime.log,
+      })
+    }
     return tool.invoke({
       arguments: request.params.arguments,
       inputResponses: request.params.inputResponses,
@@ -173,7 +198,7 @@ export function defineTool<Shape extends z.ZodRawShape>(
     },
   }
   runtime.tools.set(definition.name, tool)
-  server.registerTool(definition.name, {
+  const registered = server.registerTool(definition.name, {
     title: definition.title,
     description: definition.description,
     inputSchema,
@@ -181,5 +206,6 @@ export function defineTool<Shape extends z.ZodRawShape>(
   }, async (args, requestExtra) => {
     return tool.invoke({ arguments: args }, requestExtra)
   })
+  if (!exposes(runtime.exposure, definition.name)) registered.disable()
   installCallHandler(server, runtime)
 }

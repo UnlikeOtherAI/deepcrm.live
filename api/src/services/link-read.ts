@@ -15,6 +15,7 @@ import {
   Uuid,
   type ActorContext,
   type SecretBox,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -286,7 +287,7 @@ async function deniedAnchor(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'crm_links_list',
     resourceType: 'record',
     resourceId: anchor.id,

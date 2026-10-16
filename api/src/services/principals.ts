@@ -6,7 +6,8 @@ import {
   ErrorCode,
   ServiceError,
   type ActorContext,
-  type Principal,
+  type DelegatedPrincipal,
+  type SubjectPrincipal,
 } from '@deepcrm/schemas'
 import type { LoadedSchema } from '@deepcrm/schema-engine'
 
@@ -53,7 +54,7 @@ function stableHash(value: Record<string, unknown>): string {
 
 export function expectedToolInvocation(
   body: unknown,
-): { tool: string; argsSha256: string; destructive: boolean } | undefined {
+): { tool: string; argsSha256: string; replayBounded: boolean } | undefined {
   if (!isRecord(body) || body['method'] !== 'tools/call') return undefined
   const params = body['params']
   if (!isRecord(params) || typeof params['name'] !== 'string') return undefined
@@ -64,12 +65,14 @@ export function expectedToolInvocation(
   return {
     tool,
     argsSha256: stableHash(args),
-    destructive: isDestructiveTool(tool),
+    replayBounded: isReplayBoundedTool(tool),
   }
 }
 
-function isDestructiveTool(tool: string): boolean {
-  return tool === 'crm_merge_records'
+/** Destructive calls, and consent writes, whose context `requestId` is consumed once (auth-and-tenancy §1). */
+function isReplayBoundedTool(tool: string): boolean {
+  return tool === 'crm_consent_set'
+    || tool === 'crm_merge_records'
     || tool === 'crm_unmerge'
     || tool === 'crm_record_delete'
     || tool === 'crm_record_erase'
@@ -80,7 +83,7 @@ function isDestructiveTool(tool: string): boolean {
 
 async function enforceTokenVersion(
   db: Db,
-  principal: Principal,
+  principal: DelegatedPrincipal,
 ): Promise<void> {
   if (principal.tokenVersion === null) return
   const rows = await db.$queryRaw<Array<{ token_version: bigint }>>`
@@ -97,7 +100,7 @@ async function enforceTokenVersion(
 export async function recordPrincipalSeen(
   db: Db,
   ctx: ActorContext,
-  principal: Principal,
+  principal: DelegatedPrincipal,
 ): Promise<void> {
   await enforceTokenVersion(db, principal)
   await db.$transaction(async (tx) => {
@@ -141,7 +144,25 @@ export async function consumeSeenRequestId(
   tool: string,
   argsSha256: string,
 ): Promise<boolean> {
-  const requestId = ctx.provenance?.requestId ?? ctx.requestId
+  return consumeRequestId(db, ctx, ctx.provenance?.requestId ?? ctx.requestId, tool, argsSha256)
+}
+
+/** A subject attestation is consumed under the request id its app signed. */
+export async function consumeSubjectRequestId(
+  db: Db,
+  ctx: ActorContext,
+  principal: SubjectPrincipal,
+): Promise<boolean> {
+  return consumeRequestId(db, ctx, principal.requestId, principal.tool, principal.argsSha256)
+}
+
+async function consumeRequestId(
+  db: Db,
+  ctx: ActorContext,
+  requestId: string,
+  tool: string,
+  argsSha256: string,
+): Promise<boolean> {
   const now = ctx.now
   await db.$executeRaw`DELETE FROM seen_request_ids WHERE expires_at <= ${now}`
   const expiresAt = new Date(now.getTime() + REQUEST_REPLAY_TTL_MS)
@@ -191,7 +212,7 @@ export async function validateActorReferences(
       issues: [{ path: '', message: 'Agent actor references must use the current app namespace' }],
     })
   }
-  humanIds.delete(ctx.onBehalfOf.uoaUserId)
+  if (ctx.onBehalfOf !== null) humanIds.delete(ctx.onBehalfOf.uoaUserId)
   if (humanIds.size === 0) return
   const seen = await db.principalLastSeen.findMany({
     where: { teamId: ctx.tenant.teamId, uoaUserId: { in: [...humanIds] } },

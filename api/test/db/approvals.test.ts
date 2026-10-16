@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { createDb, dropTenant, seedTenant, type TenantRef } from '@deepcrm/db'
-import { ErrorCode, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, ErrorCode, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -48,7 +48,7 @@ function nessieAgentContext(
 async function clientFor(ctx: ActorContext): Promise<Client> {
   const server = buildMcpServer(ctx, deps)
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: `approval-${ctx.onBehalfOf.role}`, version: '0.0.0' })
+  const client = new Client({ name: `approval-${requireOnBehalfOf(ctx).role}`, version: '0.0.0' })
   servers.push(server)
   clients.push(client)
   await server.connect(serverTransport)

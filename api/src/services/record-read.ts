@@ -6,6 +6,7 @@ import {
   Slug,
   Uuid,
   type ActorContext,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 import {
   attributeExample,
@@ -270,7 +271,7 @@ async function writeDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'crm_record_get',
     resourceType: 'record',
     resourceId: record.id,

@@ -10,6 +10,8 @@ import {
   webhookSecretAdditionalData,
   type ActorContext,
   type WebhookEventValue,
+  onBehalfOfUserId,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -52,7 +54,7 @@ function auditInput(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action,
     resourceType: 'webhook',
     resourceId,
@@ -74,7 +76,7 @@ async function authorize(
     scopes: [{ scope: 'team', id: ctx.tenant.teamId }],
   })
   if (
-    ctx.onBehalfOf.role === 'owner'
+    ctx.onBehalfOf?.role === 'owner'
     && decision.allowed
     && (!decision.requiresApproval || approval !== undefined)
   ) return
@@ -163,7 +165,7 @@ export async function setWebhook(
           data: {
             id,
             ...ctx.tenant,
-            subscribingUoaUserId: ctx.onBehalfOf.uoaUserId,
+            subscribingUoaUserId: requireOnBehalfOf(ctx).uoaUserId,
             url,
             events: parsedEvents,
             secretCiphertext,
@@ -174,7 +176,7 @@ export async function setWebhook(
       : await tx.webhook.update({
           where: { id, ...tenantWhere(ctx.tenant) },
           data: {
-            subscribingUoaUserId: ctx.onBehalfOf.uoaUserId,
+            subscribingUoaUserId: requireOnBehalfOf(ctx).uoaUserId,
             events: parsedEvents,
             secretCiphertext,
             active: input.active,

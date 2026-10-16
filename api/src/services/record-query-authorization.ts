@@ -8,6 +8,7 @@ import {
   ServiceError,
   type ActorContext,
   type Filter,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -78,7 +79,7 @@ async function writeDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: tool,
     resourceType: 'object_type',
     resourceId: objectType.id,

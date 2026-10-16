@@ -5,7 +5,7 @@ import {
   type EraseResult,
   type RecordTx,
 } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { Db } from '@deepcrm/db'
 import type { QueueEnqueueTx } from '@deepcrm/queue'
 
@@ -24,7 +24,7 @@ async function deniedAudit(deps: AppDeps, ctx: ActorContext, recordId: string): 
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'crm_record_erase',
     resourceType: 'record',
     resourceId: recordId,
@@ -44,7 +44,7 @@ async function authorize(
   approval?: ApprovalConsumption,
 ): Promise<void> {
   const record = await requireVisibleRecord(deps.db, ctx, input.id)
-  if (ctx.onBehalfOf.role !== 'owner') {
+  if (ctx.onBehalfOf?.role !== 'owner') {
     await deniedAudit(deps, ctx, record.id)
     throw new ServiceError(ErrorCode.POLICY_DENIED, 'Record erasure requires an owner')
   }
@@ -93,7 +93,7 @@ export async function eraseCrmRecord(
       teamId: ctx.tenant.teamId,
       actorType: ctx.actor.type,
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: onBehalfOfUserId(ctx),
       action: 'crm_record_erase',
       resourceType: 'record',
       resourceId: input.id,

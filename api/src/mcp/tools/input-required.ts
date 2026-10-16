@@ -7,6 +7,7 @@ import {
   type ActorContext,
   type RequestStatePayload,
   type SecretBox,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 import { z } from 'zod'
 
@@ -109,7 +110,7 @@ export function verifyRequestState(
     payload.exp <= now
     || payload.exp > now + maxTtlSeconds
     || payload.app !== ctx.app
-    || payload.uoaUserId !== ctx.onBehalfOf.uoaUserId
+    || payload.uoaUserId !== onBehalfOfUserId(ctx)
     || payload.tool !== tool
     || payload.argumentsHash !== argsHash
   ) {

@@ -72,7 +72,7 @@ UOA **backend mode** (`/org/*` with the domain-hash bearer and no user token) is
 | Var | Default | Purpose |
 |---|---|---|
 | `UOA_BASE_URL` | `https://authentication.unlikeotherai.com` | issuer; JWKS at `${UOA_BASE_URL}/oauth/jwks.json` |
-| `DEEPCRM_APPS` | — | per-app registry: `{ "<name>": { "keyHashes": [...], "contextJwksUrl", "contextIssuer", "sourceDomain", "product" } }` |
+| `DEEPCRM_APPS` | — | per-app registry: `{ "<name>": { "keyHashes": [...], "contextJwksUrl", "contextIssuer", "sourceDomain", "product", "subjectTools"?: [...] } }` — `subjectTools` (default `[]`) lists the tools the app may call with a subject attestation and no delegation (auth-and-tenancy §1); UOA is not involved in those calls, which act for no person |
 | `DEEPCRM_DIRECT_CLIENTS` | `false` | accept UOA public-profile tokens with no app key (§5.2) |
 | `DEEPCRM_UOA_CONFIG_PRIVATE_KEY_B64` | — | DeepCRM's own config-signing key (only for §5 outbound; unset ⇒ outbound signing disabled) |
 | `DEEPCRM_UOA_CLIENT_SECRET` | — | DeepCRM's `uoa_sec_` per-domain secret (only for §5 outbound) |

@@ -1,4 +1,4 @@
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, onBehalfOfUserId, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import {
   applyTemplate,
   archiveAttributeGroup,
@@ -99,7 +99,7 @@ function actor(ctx: ActorContext) {
   return {
     type: ctx.actor.type,
     id: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     requestId: ctx.requestId,
   }
 }
@@ -111,7 +111,7 @@ function matchingIdentity(ctx: ActorContext): MatchingBackfillIdentity {
     })
   }
   return {
-    onBehalfOf: ctx.onBehalfOf,
+    onBehalfOf: requireOnBehalfOf(ctx),
     auditMetadata: { app: ctx.app, actChain: ctx.actChain, provenance: ctx.provenance },
   }
 }

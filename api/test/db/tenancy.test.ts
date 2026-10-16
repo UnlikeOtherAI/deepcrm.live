@@ -1,7 +1,7 @@
 import { createDb, writeAudit } from '@deepcrm/db'
 import { devPrincipal } from '@deepcrm/mcp-inbound'
 import { createProjectionLinkWriter, FakeEmbedder } from '@deepcrm/schema-engine'
-import { parseSecretBox, type Principal } from '@deepcrm/schemas'
+import { parseSecretBox, type DelegatedPrincipal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -36,7 +36,7 @@ function makeDeps(orgAllowlist: ReadonlySet<string> | null = null): AppDeps {
   }
 }
 
-function makePrincipal(suffix: string): Principal {
+function makePrincipal(suffix: string): DelegatedPrincipal {
   return {
     ...devPrincipal(`principal_${suffix}`),
     uoaOrgId: `org_${suffix}`,
@@ -55,7 +55,7 @@ function trackTenant(tenant: TenantResolution): void {
 
 async function expectProvisioned(
   tenant: TenantResolution,
-  principal: Principal,
+  principal: DelegatedPrincipal,
   requestId: string,
 ): Promise<void> {
   const where = { organizationId: tenant.organizationId, teamId: tenant.teamId }

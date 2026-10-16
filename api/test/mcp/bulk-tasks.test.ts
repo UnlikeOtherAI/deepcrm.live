@@ -8,7 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
 import { applyTemplate, FakeEmbedder } from '@deepcrm/schema-engine'
-import { BulkAssertResult } from '@deepcrm/schemas'
+import { requireOnBehalfOf, BulkAssertResult } from '@deepcrm/schemas'
 import { startWorker } from '@deepcrm/worker'
 import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -55,7 +55,7 @@ beforeAll(async () => {
   const actor = {
     type: ctx.actor.type,
     id: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
     requestId: ctx.requestId,
   }
   await db.$transaction(async (tx) => {

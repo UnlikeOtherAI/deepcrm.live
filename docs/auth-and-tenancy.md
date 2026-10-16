@@ -6,14 +6,26 @@ Every `/mcp` request is authenticated independently (the protocol is stateless; 
 
 | Header | Proves | Verification |
 |---|---|---|
-| `Authorization: Bearer <app key>` | the calling **product** (Nessie, DeepSignal, …) | SHA-256 of the key compared (timing-safe) against the app registry `DEEPCRM_APPS` (JSON: `{ "<name>": { "keyHashes": [sha256hex…], "contextJwksUrl": …, "contextIssuer": … } }`; `DEEPCRM_APP_KEYS` remains as the legacy single-JWKS form). The name becomes `principal.app`. |
+| `Authorization: Bearer <app key>` | the calling **product** (Nessie, DeepSignal, …) | SHA-256 of the key compared (timing-safe) against the app registry `DEEPCRM_APPS` (JSON: `{ "<name>": { "keyHashes": [sha256hex…], "contextJwksUrl": …, "contextIssuer": …, "sourceDomain": …, "product": …, "subjectTools": ["crm_…"] } }`, `subjectTools` defaulting to `[]`; `DEEPCRM_APP_KEYS` remains as the legacy single-JWKS form). The name becomes `principal.app`. |
 | `X-UOA-Delegation: <JWT>` | the **human** and **workspace** the call acts for — a UOA token-exchange resource token (confidential assertion exchange, UOA guide §4.6a) | RS256 via **`${UOA_BASE_URL}/oauth/jwks.json`**; `iss` = the UOA host; **`aud` = exactly `https://api.deepcrm.live`**; `exp − iat ≤ 300 s`; `scope ∋ ai.invoke`; claims `sub` (stable UOA user id), `org` (`{ org_id, org_role, team_roles, … }` — required), `active` (`{ orgId, teamId }` — required; identity-only tokens rejected), `source_domain`/`azp`/`product` (the immediate caller — must match the app key's registry entry), `act` (upstream product chain, recorded verbatim). Full contract + role resolution: [uoa-integration.md](spec/uoa-integration.md) §3. Revocation bound = the 300 s token life plus UOA's live membership re-read at every exchange. |
 | `X-App-Context: <JWT>` (alias `X-Nessie-Context`, accepted for the `nessie` app) | **agent/run provenance of the immediate caller** | RS256 via the **calling app's own** `contextJwksUrl`/`contextIssuer` from the registry (per-app, not one global signer — deepsignal policy-asks §6); **`aud = DEEPCRM_API_PUBLIC_URL` required**; max TTL 300 s, 30 s skew; claims `requestId`, `sub` = same UOA user as the delegation (strict string equality), and either `agentId`, `runId`, `toolCallId` (an agent acting) or `actor: "human"` with none of the three (a person acting in the app's own UI — a positive attestation, never inferred from a missing agent; the principal is then the human with no agent provenance), **`delegation_jti`** = the delegation's `jti` (binds the proof pair to one token — a captured context JWT cannot be recombined with a different delegation; R21), **`tool`** = the MCP tool name (must equal `Mcp-Name`/params) and **`args_sha256`** = the canonical-JSON hash of the arguments (mismatch ⇒ 401 — the context commits to the exact invocation). |
+
+**Subject-attested calls — the data subject's own act.** A person who signs up on a form, confirms by the emailed link, unsubscribes or subscribes again acts for themselves, with nobody signed in to the calling app. For that, and only for the tools the app's registry entry lists in `subjectTools`, DeepCRM accepts **an app key plus a context with `actor: "subject"` and no `X-UOA-Delegation`**:
+
+| Claim | Rule |
+|---|---|
+| `actor` | `"subject"` |
+| `org`, `team` | the UOA organisation id and UOA team id the act belongs to — both required |
+| `tool`, `args_sha256` | required: the context names exactly one call (there is no delegation `jti` to bind to); on a `tools/call` the tool and canonical argument hash must equal the invocation |
+| `requestId` | required, consumed once by the replay seen-set for `crm_consent_set` |
+| `sub`, `delegation_jti`, `agentId`, `runId`, `toolCallId` | must be absent |
+
+The principal is `{ kind: "subject", app, uoaOrgId, uoaTeamId, tool, argsSha256, requestId }`; its `ActorContext` has actor `{ type: "system", id: "subject:<app>" }`, `onBehalfOf: null` and no role, and every write and audit row it makes carries `on_behalf_of` null. Refusals are audited as `auth.failed` with reason `subject_not_allowed` (tool not in `subjectTools`), `subject_tool_mismatch` (the context names another tool than the call, or a batch body) or `invalid_context` (bad claims or argument hash); a delegation beside a subject context is `ambiguous_context`, and an agent or human context without a delegation is still `missing_delegation`. The per-request server built for a subject principal lists only the attested tool, serves no resources, prompts or task methods, and answers any other tool with `POLICY_DENIED`. Policy and record visibility are decided for a person, so for a call made for nobody both deny everything (`checkPolicy`, `canSee`, the SQL row gate); the one allowlisted tool decides its own reach (`crm_consent_set`/`crm_consent_get` read and write the subject's own consent regardless of record visibility — schema-engine §4d′). The tenant must already exist (§3). Trust: the app attests the org and team itself, so the app key plus its context signing key are the whole credential for these tools — keep `subjectTools` to the consent pair.
 
 Rules:
 - **Chained calls stay attributable at every hop.** The delegation's `act` chain (UOA RFC 8693 token exchange) is recorded verbatim into provenance and audit; `principal.app` is always the **immediate** caller — the delegation's `source_domain`/`product` must agree with the app key's registry entry, so a Nessie → DeepSignal → DeepCRM call reads `app = deepsignal`, `act = [nessie]` — never flattened. Agent policy bindings key on the immediate app: `agent:<app>:<agentId>`.
 - Every token's claims are schema-validated (zod): required, non-empty, correct types; garbage claims are a 401, never a coerced value.
-- **Destructive calls are replay-bounded:** `crm_merge_records`, `crm_record_delete`, `crm_record_erase`, `crm_export`, `crm_webhook_*`, `crm_unmerge` and approval consumption record the context token's `requestId` in a 300 s seen-set and reject replays. The seen-set is **Postgres-backed** (unlogged `seen_request_ids` table), so the bound holds across API replicas (R19). With the R21 binding claims, non-destructive replay within the 5-minute window is limited to re-issuing the *identical* call.
+- **Destructive calls are replay-bounded:** `crm_merge_records`, `crm_record_delete`, `crm_record_erase`, `crm_export`, `crm_webhook_*`, `crm_unmerge`, `crm_consent_set` and approval consumption record the context token's `requestId` in a 300 s seen-set and reject replays. The seen-set is **Postgres-backed** (unlogged `seen_request_ids` table), so the bound holds across API replicas (R19). With the R21 binding claims, non-destructive replay within the 5-minute window is limited to re-issuing the *identical* call.
 - **Forward-compatible epoch check:** UOA's resource tokens carry no `tv` claim today ([uoa-integration.md](spec/uoa-integration.md) §3.1) — carrying one is an **upstream ask filed with UOA**, not something DeepCRM can add to tokens it does not mint. If a `tv` claim appears, DeepCRM enforces per-subject monotonic non-regression (a token whose epoch is behind the last seen for that `sub` is 401), so the check activates the day UOA ships it (R22).
 - All three required when `REQUIRE_AUTH=true`. Missing/invalid ⇒ HTTP 401 with `WWW-Authenticate: Bearer resource_metadata="<DEEPCRM_API_PUBLIC_URL>/.well-known/oauth-protected-resource"` (RFC 9728).
 - With `REQUIRE_AUTH=false` the server serves the **dev principal** (`app=dev`, `user=usr_dev`, `org=org_dev`, `team=team_dev`, `agent=agent_dev`, role `owner`). **Boot fails closed:** the process refuses to start with `REQUIRE_AUTH=false` when `DEEPCRM_API_PUBLIC_URL` is not a localhost origin or `NODE_ENV=production` (review S2.3).
@@ -25,7 +37,22 @@ Direct clients (brief §9 Q3, **decided**): with `DEEPCRM_DIRECT_CLIENTS=true`, 
 ## 2. Principal and ActorContext
 
 ```ts
-type Principal = {
+type Principal = DelegatedPrincipal | SubjectPrincipal
+
+type SubjectPrincipal = {        // the data subject's own act (§1): no person, no role
+  kind: 'subject'
+  app: string
+  uoaOrgId: string               // attested by the app
+  uoaTeamId: string
+  sourceDomain: string           // from the app registration
+  product: string
+  tool: string                   // the one tool this request may run
+  argsSha256: string
+  requestId: string              // the replay seen-set key
+}
+
+type DelegatedPrincipal = {
+  kind: 'delegated'
   app: string                    // app key name
   uoaUserId: string
   uoaOrgId: string
@@ -44,15 +71,15 @@ type ActorContext = {
   tenant: { organizationId: string; teamId: string }   // local ids, resolved 1:1 from UOA ids
   app: string                                          // immediate caller — the agent binding is agent:<app>:<agentId> (R23)
   actChain: Array<{ sub: string; product: string }>    // upstream hops, into audit rows verbatim
-  actor: { type: 'human' | 'agent' | 'system'; id: string }  // agent when agentId present, else human
-  onBehalfOf: { uoaUserId: string; role: 'owner' | 'admin' | 'member' | null }  // the human + resolved role (null = no role, no gated access)
+  actor: { type: 'human' | 'agent' | 'system'; id: string }  // agent when agentId present, else human; system `subject:<app>` for a subject
+  onBehalfOf: { uoaUserId: string; role: 'owner' | 'admin' | 'member' | null } | null  // the human + resolved role (null role = no gated access); null only for a subject-attested call
   provenance: Principal['provenance']
   requestId: string
   now: Date
 }
 ```
 
-`actor` is the agent when `agentId` is present (the agent did the write, for the human). Policy is evaluated for **both**: the agent side (`agent:<ctx.app>:<agentId>` or the app wildcard `agent:<ctx.app>:*`) and the human side (the human's role and own bindings, with a human's no-rule fallback) — a deny on either denies (§4).
+`onBehalfOf` is null only for a subject-attested call. Attribution columns (`audit_logs.on_behalf_of`, `record_changes.on_behalf_of`, `records.created_on_behalf_of`, suppression and file rows) store null then — there is no sentinel id; every operation that needs a person (approvals, webhooks, exports, bulk Tasks, idempotency keys of the generic write tools, record visibility) refuses such a context with `POLICY_DENIED` (`requireOnBehalfOf`). `actor` is the agent when `agentId` is present (the agent did the write, for the human). Policy is evaluated for **both**: the agent side (`agent:<ctx.app>:<agentId>` or the app wildcard `agent:<ctx.app>:*`) and the human side (the human's role and own bindings, with a human's no-rule fallback) — a deny on either denies (§4).
 
 **Actor references are validated against membership evidence (R25):** `owner`, `assignee`, visibility grants and any `actor_reference` value naming a human must be the caller's own `sub` or a `uoaUserId` present in `principal_last_seen` for this team — cryptographically verified evidence of membership, without a UOA directory read (which the doctrine forbids). Agent actor ids must carry a known app namespace. Departure cannot be observed (no UOA signal); the `crm_data_quality` report gains a `stale_actors` bucket — owners/assignees/grants not seen in `DEEPCRM_ACTOR_STALE_DAYS` (default 60) — so a routing list quietly full of departed people surfaces instead of rotting.
 
@@ -61,6 +88,8 @@ type ActorContext = {
 - `organizations.external_org_id` ⇔ UOA `org.org_id` (`org_…`, unique). `teams.external_team_id` ⇔ UOA `active.teamId` (`tm_…`, unique), `teams.organization_id` FK. `active.orgId` must equal `org.org_id` or the request is rejected before resolution.
 - `resolveTenant(principal)` upserts both rows (name placeholders `Organisation <id8>`, `Team <id8>`; names are non-authoritative mirrors — DeepCRM stores no other UOA data) and returns local ids **plus the current `schema_version` and `policy_version` in the same query** (the cache keys, §4 of schema-engine). Runs once per request; the in-process 60 s cache holds **id resolution only**, never schema or policy state.
 - **Pairing check, transitional behavior, and R24 ownership:** if the team row exists, its `organization_id` must equal the delegation's organisation. Before T53/R24 lands, a verified-token mismatch returns `TENANT_MISMATCH`; it never reparents and performs no write. UOA remains the hierarchy authority, but only T53 introduces the `tenant.reparent` queue/revalidation/batched-rewrite flow and its retryable `TENANT_REPARENTING` outcome. The stored FK is a cache with a heavy refresh, never a second authority.
+- **A subject-attested call never provisions.** It resolves only an existing team whose `external_team_id` is the attested `team` and whose organisation's `external_org_id` is the attested `org`; anything else is `TENANT_NOT_FOUND` (the provisioning rate limiter and `principal_last_seen` are skipped — there is no person). The org allowlist still applies.
+- **Tenant refusals are typed.** A `ServiceError` raised while resolving the tenant (`TENANT_NOT_FOUND`, `TENANT_REPARENTING`, `TENANT_MISMATCH`, `POLICY_DENIED` from the allowlist) answers a `tools/call` with the same tool error result a tool returns (`isError`, `structuredContent.code`), any other request with a JSON-RPC error carrying `data.code` (`api/src/plugins/mcp-refusal.ts`).
 - **First-contact provisioning** (flow F10) occurs only after authentication and the optional `DEEPCRM_ORG_ALLOWLIST` env (comma-separated UOA org ids) check, both before any provisioning write. It is rate-limited per authenticated app key before `resolveTenant`, then serialised by the namespace-3 advisory lock on the external team id. In one caller transaction, only a first-created team receives idempotent default-policy seeding and the `system` template; the batch template seam produces one coherent version/audit outcome rather than a bump/audit per child.
 - Every CRM table carries `organization_id` **and** `team_id`; every query filters on both. **The one definition** is `packages/db/src/tenant-where.ts` — `tenantWhere(tenant: { organizationId, teamId })` returning the spreadable where-fragment. Enforcement is layered: `scripts/lint-tenant-where.mjs` (covering every tenant-scoped model and all find/count/update/delete ops) plus a runtime Prisma extension that throws on a CRM-table query without both tenant columns in `where` outside tests (review S1.5). Worker job handlers re-resolve the tenant from payload ids and abort on mismatch (review S1.4). **The raw-SQL search path is inside this boundary by construction (R6):** neither the lint nor the Prisma extension can see a `$queryRaw` vector scan, so every raw search/aggregate query is composed by one audited function (`searchQuery()` in the engine) that interpolates `tenantWhere` — and, where applicable, `visibilityWhere` — into the SQL itself; an adversarial cross-tenant embedding test (two tenants, near-identical vectors) is part of the definition of done (testing.md).
 - Tenant deletion cascades CRM data; `audit_logs` has no FK and survives.

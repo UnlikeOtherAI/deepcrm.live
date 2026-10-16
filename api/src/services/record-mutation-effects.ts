@@ -1,6 +1,6 @@
 import type { Db, Prisma } from '@deepcrm/db'
 import { enqueue, type QueueEnqueueTx } from '@deepcrm/queue'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, requireOnBehalfOf, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 type MutationEffectsTx = QueueEnqueueTx & Pick<Db, 'webhook' | 'list'>
 
@@ -32,7 +32,7 @@ function actorContextPayload(ctx: ActorContext): Prisma.InputJsonObject {
     app: ctx.app,
     actChain: ctx.actChain,
     actor: ctx.actor,
-    onBehalfOf: ctx.onBehalfOf,
+    onBehalfOf: requireOnBehalfOf(ctx),
     provenance: ctx.provenance,
     requestId: ctx.requestId,
   }
@@ -98,8 +98,13 @@ export async function enqueueRecordMutationEffects(
       priority: 100,
     })
   }
-  await enqueueDerivedRefresh(tx, ctx, touchedRecordIds, `derived:${ctx.tenant.teamId}:${lastSeq}`)
-  await enqueueDynamicListRefreshes(tx, ctx, String(lastSeq))
+  // Derived values and dynamic list membership are evaluated as the person a
+  // write was made for. A subject-attested write is made for nobody, so they
+  // refresh on the next write made for a person; search and the feed refresh now.
+  if (ctx.onBehalfOf !== null) {
+    await enqueueDerivedRefresh(tx, ctx, touchedRecordIds, `derived:${ctx.tenant.teamId}:${lastSeq}`)
+    await enqueueDynamicListRefreshes(tx, ctx, String(lastSeq))
+  }
   const activeWebhooks = await tx.webhook.count({
     where: { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId, active: true },
   })

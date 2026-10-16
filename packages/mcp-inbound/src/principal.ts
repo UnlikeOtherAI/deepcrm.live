@@ -1,7 +1,8 @@
-import { PrincipalSchema, type Principal } from '@deepcrm/schemas'
+import { DelegatedPrincipalSchema, type DelegatedPrincipal } from '@deepcrm/schemas'
 
-export function devPrincipal(requestId: string): Principal {
-  return PrincipalSchema.parse({
+export function devPrincipal(requestId: string): DelegatedPrincipal {
+  return DelegatedPrincipalSchema.parse({
+    kind: 'delegated',
     app: 'dev',
     uoaUserId: 'usr_dev',
     uoaOrgId: 'org_dev',

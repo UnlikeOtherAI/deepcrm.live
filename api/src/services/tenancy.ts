@@ -1,7 +1,9 @@
 import { writeAudit, type TenantRef } from '@deepcrm/db'
 import { enqueue } from '@deepcrm/queue'
 import { applyTemplateBatch, type TemplateAdded } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type Principal } from '@deepcrm/schemas'
+import {
+  ErrorCode, ServiceError, type DelegatedPrincipal, type Principal, type SubjectPrincipal,
+} from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
 import { seedDefaultPolicies } from './policy.js'
 
@@ -67,6 +69,34 @@ async function readCurrentVersions(
   }
 }
 
+/**
+ * A subject-attested call reaches only a tenant that already exists, by the
+ * UOA organisation and team ids its app attests; it never provisions. A team
+ * that is absent, or paired with another organisation, is `TENANT_NOT_FOUND`.
+ */
+async function resolveExistingTenant(
+  deps: AppDeps,
+  principal: SubjectPrincipal,
+): Promise<TenantResolution> {
+  const team = await deps.db.team.findUnique({
+    where: { externalTeamId: principal.uoaTeamId },
+    select: {
+      id: true, organizationId: true, schemaVersion: true, policyVersion: true,
+      organization: { select: { externalOrgId: true } },
+    },
+  })
+  if (team === null || team.organization.externalOrgId !== principal.uoaOrgId) {
+    throw new ServiceError(ErrorCode.TENANT_NOT_FOUND, 'No CRM workspace exists for this team')
+  }
+  cacheTenant(cacheKey(principal), { organizationId: team.organizationId, teamId: team.id })
+  return {
+    organizationId: team.organizationId,
+    teamId: team.id,
+    schemaVersion: team.schemaVersion,
+    policyVersion: team.policyVersion,
+  }
+}
+
 export async function resolveTenant(
   deps: AppDeps,
   principal: Principal,
@@ -82,7 +112,16 @@ export async function resolveTenant(
     if (current !== null) return current
   }
   tenantCache.delete(key)
+  if (principal.kind === 'subject') return resolveExistingTenant(deps, principal)
+  return provisionTenant(deps, principal, requestId, key)
+}
 
+async function provisionTenant(
+  deps: AppDeps,
+  principal: DelegatedPrincipal,
+  requestId: string,
+  key: string,
+): Promise<TenantResolution> {
   const resolved = await deps.db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(3, hashtext(${principal.uoaTeamId}))`
 

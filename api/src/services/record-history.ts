@@ -13,6 +13,7 @@ import {
   Slug,
   Uuid,
   type ActorContext,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -153,7 +154,7 @@ async function writeDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: tool,
     resourceType: 'record',
     resourceId: record.id,
