@@ -16,6 +16,7 @@ import {
   consumeSeenRequestId,
   consumeSubjectRequestId,
   expectedToolInvocation,
+  isReplayBounded,
   recordPrincipalSeen,
   TokenVersionRegressionError,
 } from '../services/principals.js'
@@ -188,7 +189,8 @@ async function handleMcp(
     if (principal.kind === 'delegated') await recordPrincipalSeen(deps.db, ctx, principal)
     if (
       env.REQUIRE_AUTH
-      && invocation?.replayBounded === true
+      && invocation !== undefined
+      && isReplayBounded(principal, invocation)
       && !await consumeReplay(deps, ctx, principal, invocation.tool, invocation.argsSha256)
     ) {
       await auditAuthFailure(deps, request, 'request_replay')

@@ -69,10 +69,9 @@ export function expectedToolInvocation(
   }
 }
 
-/** Destructive calls, and consent writes, whose context `requestId` is consumed once (auth-and-tenancy §1). */
+/** Destructive calls, whose context `requestId` is consumed once (auth-and-tenancy §1). */
 function isReplayBoundedTool(tool: string): boolean {
-  return tool === 'crm_consent_set'
-    || tool === 'crm_merge_records'
+  return tool === 'crm_merge_records'
     || tool === 'crm_unmerge'
     || tool === 'crm_record_delete'
     || tool === 'crm_record_erase'
@@ -145,6 +144,18 @@ export async function consumeSeenRequestId(
   argsSha256: string,
 ): Promise<boolean> {
   return consumeRequestId(db, ctx, ctx.provenance?.requestId ?? ctx.requestId, tool, argsSha256)
+}
+
+/**
+ * Whether this call's request id is consumed once: every destructive call,
+ * and a subject-attested consent write — a subject context rides on no
+ * delegation, so its signed `requestId` is the only replay bound it has.
+ */
+export function isReplayBounded(
+  principal: { kind: 'delegated' | 'subject' },
+  invocation: { tool: string; replayBounded: boolean },
+): boolean {
+  return invocation.replayBounded || (principal.kind === 'subject' && invocation.tool === 'crm_consent_set')
 }
 
 /** A subject attestation is consumed under the request id its app signed. */
