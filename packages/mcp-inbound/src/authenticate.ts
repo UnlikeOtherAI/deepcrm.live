@@ -99,6 +99,7 @@ async function authenticateSubject(
       tool: context.tool,
       argsSha256: context.argsSha256,
       requestId: context.requestId,
+      replayUntil: context.verifiesUntil,
     }),
   }
 }

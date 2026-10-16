@@ -125,6 +125,8 @@ describe('subject-attested calls', () => {
         tool: 'crm_consent_set',
         argsSha256: ARGS_HASH,
         requestId: 'subject_request_1',
+        // exp plus the 30 s clock tolerance: the replay seen-set holds the id that long.
+        replayUntil: (NOW_SECONDS + 300 + 30) * 1000,
       },
     })
   })

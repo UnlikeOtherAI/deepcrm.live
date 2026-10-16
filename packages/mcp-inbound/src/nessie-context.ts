@@ -72,6 +72,8 @@ export type SubjectContext = {
   tool: string
   argsSha256: string
   requestId: string
+  /** Unix milliseconds after which this context no longer verifies (`exp` plus clock tolerance). */
+  verifiesUntil: number
 }
 
 export type NessieContext = DelegatedContext | SubjectContext
@@ -110,6 +112,7 @@ function subjectContext(claims: ContextClaims): SubjectContext {
     tool: subject.tool,
     argsSha256: subject.args_sha256,
     requestId: claims.requestId,
+    verifiesUntil: (claims.exp + CLOCK_TOLERANCE_SECONDS) * 1000,
   }
 }
 

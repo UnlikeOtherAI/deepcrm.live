@@ -11,7 +11,8 @@ import {
 } from '@deepcrm/schemas'
 import type { LoadedSchema } from '@deepcrm/schema-engine'
 
-const REQUEST_REPLAY_TTL_MS = 300_000
+// A context lives at most 300 s and verifies with 30 s of clock skew either side.
+const REQUEST_REPLAY_TTL_MS = 360_000
 
 export class TokenVersionRegressionError extends Error {
   constructor() {
@@ -143,7 +144,8 @@ export async function consumeSeenRequestId(
   tool: string,
   argsSha256: string,
 ): Promise<boolean> {
-  return consumeRequestId(db, ctx, ctx.provenance?.requestId ?? ctx.requestId, tool, argsSha256)
+  const requestId = ctx.provenance?.requestId ?? ctx.requestId
+  return consumeRequestId(db, ctx, requestId, tool, argsSha256, new Date(ctx.now.getTime() + REQUEST_REPLAY_TTL_MS))
 }
 
 /**
@@ -164,7 +166,10 @@ export async function consumeSubjectRequestId(
   ctx: ActorContext,
   principal: SubjectPrincipal,
 ): Promise<boolean> {
-  return consumeRequestId(db, ctx, principal.requestId, principal.tool, principal.argsSha256)
+  // Held until the context stops verifying (its `exp` plus clock tolerance),
+  // so a captured subject context cannot be replayed in the tail.
+  const expiresAt = new Date(Math.max(principal.replayUntil, ctx.now.getTime() + REQUEST_REPLAY_TTL_MS))
+  return consumeRequestId(db, ctx, principal.requestId, principal.tool, principal.argsSha256, expiresAt)
 }
 
 async function consumeRequestId(
@@ -173,10 +178,10 @@ async function consumeRequestId(
   requestId: string,
   tool: string,
   argsSha256: string,
+  expiresAt: Date,
 ): Promise<boolean> {
   const now = ctx.now
   await db.$executeRaw`DELETE FROM seen_request_ids WHERE expires_at <= ${now}`
-  const expiresAt = new Date(now.getTime() + REQUEST_REPLAY_TTL_MS)
   const inserted = await db.$queryRaw<Array<{ request_id: string }>>`
     INSERT INTO seen_request_ids (
       organization_id, team_id, app, request_id, tool, args_sha256, seen_at, expires_at

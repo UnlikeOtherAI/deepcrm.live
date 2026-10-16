@@ -77,7 +77,7 @@ beforeAll(async () => {
     await seedDefaultPolicies(tx, target)
     await applyTemplate(tx, target, { type: 'system', id: 'subject-test', onBehalfOf: null, requestId: 'seed' },
       'standard_crm')
-  })
+  }, { timeout: 60_000 })
   app = buildApp(deps, env)
   await app.listen({ port: 0, host: '127.0.0.1' })
   const served = app.server.address()
@@ -155,6 +155,12 @@ describe('a subject-attested consent call through the real inbound auth', () => 
     })).resolves.toEqual({ actorType: 'system', actorId: 'subject:nessie', onBehalfOf: null })
 
     expect((await post(context, toolCall('crm_consent_set', signup))).status).toBe(401)
+    // Held at least as long as the context verifies: exp (iat + 300 s) plus 30 s of tolerance.
+    const seen = await deps.db.$queryRaw<Array<{ held_ms: number }>>`
+      SELECT (EXTRACT(EPOCH FROM (expires_at - seen_at)) * 1000)::float8 AS held_ms
+      FROM seen_request_ids WHERE team_id = ${tenant.teamId}::uuid AND request_id = ${requestId}
+    `
+    expect(seen[0]?.held_ms ?? 0).toBeGreaterThanOrEqual(330_000)
 
     const read = { email: 'subject-e2e@example.com' }
     const got = await envelope(await post(

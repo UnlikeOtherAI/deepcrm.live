@@ -40,6 +40,8 @@ export const SubjectPrincipalSchema = z.object({
   tool: z.string().min(1).describe('the one tool this request may run'),
   argsSha256: z.string().regex(/^[a-f0-9]{64}$/).describe('canonical-JSON hash of the attested arguments'),
   requestId: z.string().min(1).describe('the attested request id; the replay seen-set key'),
+  replayUntil: z.number().int().positive()
+    .describe('unix ms until which the context still verifies; the seen-set holds its request id that long'),
 }).strict()
 export type SubjectPrincipal = z.infer<typeof SubjectPrincipalSchema>
 
