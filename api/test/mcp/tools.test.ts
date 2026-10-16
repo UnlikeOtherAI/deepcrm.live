@@ -10,6 +10,7 @@ import {
   parseSecretBox,
   ServiceError,
   type ActorContext,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -158,7 +159,7 @@ describe('MRTR request state', () => {
       }, secretBox).requestState, ctx, 'crm_test', argumentsHash, secretBox),
       () => verifyRequestState(valid, { ...ctx, app: 'direct' }, 'crm_test', argumentsHash, secretBox),
       () => verifyRequestState(valid, {
-        ...ctx, onBehalfOf: { ...ctx.onBehalfOf, uoaUserId: 'other_user' },
+        ...ctx, onBehalfOf: { ...requireOnBehalfOf(ctx), uoaUserId: 'other_user' },
       }, 'crm_test', argumentsHash, secretBox),
       () => verifyRequestState(valid, ctx, 'crm_other', argumentsHash, secretBox),
       () => verifyRequestState(valid, ctx, 'crm_test', 'b'.repeat(64), secretBox),

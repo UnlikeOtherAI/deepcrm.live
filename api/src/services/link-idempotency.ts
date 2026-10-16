@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { canonicalJson, tenantWhere } from '@deepcrm/db'
 import type { RecordTx } from '@deepcrm/schema-engine'
-import { ErrorCode, LinkOut, ServiceError, Uuid, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, ErrorCode, LinkOut, ServiceError, Uuid, type ActorContext } from '@deepcrm/schemas'
 
 import type { LinkServiceResult } from './links.js'
 
@@ -52,7 +52,7 @@ export function linkArgumentHash(args: Record<string, unknown>): string {
 }
 
 function lockKey(ctx: ActorContext, tool: string, key: string): string {
-  return [ctx.tenant.teamId, ctx.onBehalfOf.uoaUserId, tool, key].join(':')
+  return [ctx.tenant.teamId, requireOnBehalfOf(ctx).uoaUserId, tool, key].join(':')
 }
 
 export async function reserveLinkReplay(
@@ -72,7 +72,7 @@ export async function reserveLinkReplay(
   const existing = await tx.idempotencyReplay.findFirst({
     where: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: descriptor.tool,
       key,
     },
@@ -89,7 +89,7 @@ export async function reserveLinkReplay(
   const created = await tx.idempotencyReplay.create({
     data: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: descriptor.tool,
       key,
       argumentsHash: hash,

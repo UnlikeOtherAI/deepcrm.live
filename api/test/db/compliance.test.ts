@@ -1,6 +1,6 @@
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
 import { FakeEmbedder, type LinkWriter } from '@deepcrm/schema-engine'
-import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -292,7 +292,7 @@ describe('suppression compliance service', () => {
       data: { email: 'neighbour@example.com' },
       displayName: 'Neighbour',
       visibility: 'team',
-      createdOnBehalfOf: owner.onBehalfOf.uoaUserId,
+      createdOnBehalfOf: requireOnBehalfOf(owner).uoaUserId,
       createdByType: 'human',
       createdById: owner.actor.id,
     } })
@@ -302,7 +302,7 @@ describe('suppression compliance service', () => {
       data: { email: 'Erase Me <erase@example.com>', company_number: '01234567' },
       displayName: 'Erase Me',
       visibility: 'users',
-      createdOnBehalfOf: owner.onBehalfOf.uoaUserId,
+      createdOnBehalfOf: requireOnBehalfOf(owner).uoaUserId,
       createdByType: 'human',
       createdById: owner.actor.id,
     } })
@@ -367,7 +367,7 @@ describe('suppression compliance service', () => {
         kind: 'create',
         actorType: owner.actor.type,
         actorId: owner.actor.id,
-        onBehalfOf: owner.onBehalfOf.uoaUserId,
+        onBehalfOf: requireOnBehalfOf(owner).uoaUserId,
         requestId: owner.requestId,
         resultingVersion: 1,
         seq: 1n,
@@ -380,7 +380,7 @@ describe('suppression compliance service', () => {
         attributeSlug: 'email',
         actorType: owner.actor.type,
         actorId: owner.actor.id,
-        onBehalfOf: owner.onBehalfOf.uoaUserId,
+        onBehalfOf: requireOnBehalfOf(owner).uoaUserId,
         requestId: owner.requestId,
         resultingVersion: 1,
         seq: 2n,

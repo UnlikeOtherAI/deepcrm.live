@@ -1,5 +1,5 @@
 import { tenantWhere, type Db, type SuppressionKind } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import { writeChanges } from '../records/changes.js'
 import { canonicalJsonValue, type JsonValue } from '../records/json.js'
@@ -88,7 +88,7 @@ async function suppressContacts(
         sourceRecordId: recordId,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
       },
       update: {
         reason: 'erasure',
@@ -96,7 +96,7 @@ async function suppressContacts(
         sourceRecordId: recordId,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
       },
     })
     counts.set(contact.kind, (counts.get(contact.kind) ?? 0) + 1)

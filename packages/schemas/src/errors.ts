@@ -19,6 +19,7 @@ export const ErrorCode = {
   TENANT_REPARENTING: 'TENANT_REPARENTING', ORIGIN_REJECTED: 'ORIGIN_REJECTED',
   VISIBILITY_REJECTED: 'VISIBILITY_REJECTED', ERASED: 'ERASED',
   LIMIT_EXCEEDED: 'LIMIT_EXCEEDED', INTERNAL: 'INTERNAL',
+  TENANT_NOT_FOUND: 'TENANT_NOT_FOUND',
 } as const
 // APPEND-ONLY: codes are never renamed or removed (R8). Consumers may treat
 // unknown codes as fatal-and-surface.

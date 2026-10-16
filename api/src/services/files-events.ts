@@ -7,6 +7,7 @@ import {
   FileObjectDetail,
   ServiceError,
   type ActorContext,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 import { loadSchema } from '@deepcrm/schema-engine'
 
@@ -107,7 +108,7 @@ async function audit(
 ): Promise<void> {
   await deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId,
-    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: onBehalfOfUserId(ctx),
     action, resourceType, resourceId, outcome: 'success', reason: null,
     metadata: metadata(ctx), requestId: ctx.requestId, ipAddress: null, userAgent: null,
   })
@@ -203,7 +204,7 @@ export async function registerFile(
       ...tenantWhere(ctx.tenant), provider: input.provider, providerKey: input.providerKey,
       filename: input.filename, mimeType: input.mimeType, sizeBytes: parseSize(input.sizeBytes),
       checksumSha256: input.checksumSha256 ?? null, metadata: metadataValue,
-      createdByType: ctx.actor.type, createdById: ctx.actor.id, onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      createdByType: ctx.actor.type, createdById: ctx.actor.id, onBehalfOf: onBehalfOfUserId(ctx),
     } })
     await audit(deps, tx, ctx, 'crm_file_register', 'file', file.id)
     return { file: presentFile(file) }

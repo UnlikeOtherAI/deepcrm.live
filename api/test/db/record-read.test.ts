@@ -1,6 +1,6 @@
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
 import { applyTemplate, createProjectionLinkWriter, FakeEmbedder, keyHash } from '@deepcrm/schema-engine'
-import { ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, ErrorCode, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -63,7 +63,7 @@ async function fixture(): Promise<Fixture> {
   await db.$transaction((tx) => applyTemplate(tx, tenant, {
     type: ctx.actor.type,
     id: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
     requestId: ctx.requestId,
   }, 'system'))
   const caseType = await db.objectType.create({ data: {

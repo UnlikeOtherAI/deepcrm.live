@@ -7,6 +7,7 @@ import {
 import {
   APPROVAL_REQUIRED_ROLE_META_KEY, ApprovalContent, ErrorCode, ServiceError,
   type ActorContext, type InputRequests, type InputResponses, type RequestStatePayload,
+  requireOnBehalfOf, type OnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -77,12 +78,12 @@ function newToken(): string {
 type ApproverRole = 'admin' | 'owner'
 
 /** An owner satisfies an admin-required approval; an admin never satisfies an owner-required one. */
-export function roleSatisfies(required: ApproverRole, actual: ActorContext['onBehalfOf']['role']): boolean {
+export function roleSatisfies(required: ApproverRole, actual: OnBehalfOf['role']): boolean {
   return actual === 'owner' || (required === 'admin' && actual === 'admin')
 }
 
 /** The `required_role` values `actual` satisfies, for the approval row predicates. */
-function satisfiedRoles(actual: ActorContext['onBehalfOf']['role']): ApproverRole[] {
+function satisfiedRoles(actual: OnBehalfOf['role']): ApproverRole[] {
   return (['admin', 'owner'] as const).filter((required) => roleSatisfies(required, actual))
 }
 
@@ -126,7 +127,7 @@ function invalidApproval(detail: string): never {
   })
 }
 function satisfiedRoleList(ctx: ActorContext): Prisma.Sql {
-  const roles = satisfiedRoles(ctx.onBehalfOf.role)
+  const roles = satisfiedRoles(requireOnBehalfOf(ctx).role)
   if (roles.length === 0) invalidApproval('approval_not_pending')
   return Prisma.join(roles)
 }
@@ -145,7 +146,7 @@ function approvalAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
     action,
     resourceType: 'approval',
     resourceId,
@@ -190,7 +191,7 @@ export async function requireApproval(
           argumentsSnapshot: snapshot,
           requesterType: ctx.actor.type,
           requesterId: ctx.actor.id,
-          onBehalfOf: ctx.onBehalfOf.uoaUserId,
+          onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
           reason: input.reason ?? 'approval_required',
           requiredRole: role,
           continuationTokenHash: tokenHash(token),
@@ -203,7 +204,7 @@ export async function requireApproval(
       const [teamPending, requesterPending] = await Promise.all([
         tx.approvalRequest.count({ where: pendingWhere }),
         tx.approvalRequest.count({
-          where: { ...pendingWhere, onBehalfOf: ctx.onBehalfOf.uoaUserId },
+          where: { ...pendingWhere, onBehalfOf: requireOnBehalfOf(ctx).uoaUserId },
         }),
       ])
       if (teamPending >= MAX_TEAM_PENDING || requesterPending >= MAX_REQUESTER_PENDING) {
@@ -222,7 +223,7 @@ export async function requireApproval(
           argumentsSnapshot: snapshot,
           requesterType: ctx.actor.type,
           requesterId: ctx.actor.id,
-          onBehalfOf: ctx.onBehalfOf.uoaUserId,
+          onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
           reason: input.reason ?? 'approval_required',
           requiredRole: role,
           continuationTokenHash: tokenHash(token),
@@ -241,7 +242,7 @@ export async function requireApproval(
     inputRequests: challengeSchema(messageText, role),
     requestStatePayload: {
       app: ctx.app,
-      uoaUserId: ctx.onBehalfOf.uoaUserId,
+      uoaUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: input.tool,
       argumentsHash,
       impact: messageText,
@@ -276,7 +277,7 @@ async function rejectApproval(
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       UPDATE approval_requests
       SET status = 'rejected'::"ApprovalStatus",
-          resolver_uoa_user_id = ${ctx.onBehalfOf.uoaUserId},
+          resolver_uoa_user_id = ${requireOnBehalfOf(ctx).uoaUserId},
           resolved_at = ${ctx.now}, resolution_note = ${note ?? null}
       WHERE organization_id = ${ctx.tenant.organizationId}::uuid
         AND team_id = ${ctx.tenant.teamId}::uuid
@@ -285,7 +286,7 @@ async function rejectApproval(
         AND arguments_hash = ${input.requestStatePayload.argumentsHash}
         AND continuation_token_hash = ${tokenHash(approvalToken)}
         AND required_role IN (${satisfiedRoleList(ctx)})
-        AND on_behalf_of <> ${ctx.onBehalfOf.uoaUserId}
+        AND on_behalf_of <> ${requireOnBehalfOf(ctx).uoaUserId}
         AND status = 'pending'::"ApprovalStatus" AND expires_at > ${ctx.now}
       RETURNING id
     `
@@ -311,10 +312,10 @@ export async function prepareApproval(
   if (!content.data.approved) {
     return rejectApproval(deps, ctx, input, approvalId, approvalToken, content.data.note)
   }
-  if (ctx.onBehalfOf.role !== 'admin' && ctx.onBehalfOf.role !== 'owner') {
+  if (requireOnBehalfOf(ctx).role !== 'admin' && requireOnBehalfOf(ctx).role !== 'owner') {
     invalidApproval('approver_must_be_admin_or_owner')
   }
-  if (ctx.onBehalfOf.uoaUserId === input.requestStatePayload.uoaUserId) {
+  if (requireOnBehalfOf(ctx).uoaUserId === input.requestStatePayload.uoaUserId) {
     invalidApproval('approver_must_differ')
   }
   const row = await deps.db.approvalRequest.findFirst({
@@ -324,7 +325,7 @@ export async function prepareApproval(
       action: input.tool,
       argumentsHash: input.requestStatePayload.argumentsHash,
       continuationTokenHash: tokenHash(approvalToken),
-      requiredRole: { in: satisfiedRoles(ctx.onBehalfOf.role) },
+      requiredRole: { in: satisfiedRoles(requireOnBehalfOf(ctx).role) },
       onBehalfOf: input.requestStatePayload.uoaUserId,
       status: 'pending',
       expiresAt: { gt: ctx.now },
@@ -357,7 +358,7 @@ export async function consumeApproval(
   const rows = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE approval_requests
     SET status = 'consumed'::"ApprovalStatus",
-        resolver_uoa_user_id = ${ctx.onBehalfOf.uoaUserId},
+        resolver_uoa_user_id = ${requireOnBehalfOf(ctx).uoaUserId},
         resolved_at = ${ctx.now}, resolution_note = ${input.note ?? null}
     WHERE organization_id = ${ctx.tenant.organizationId}::uuid
       AND team_id = ${ctx.tenant.teamId}::uuid
@@ -366,7 +367,7 @@ export async function consumeApproval(
       AND arguments_hash = ${input.argumentsHash}
       AND continuation_token_hash = ${tokenHash(input.approvalToken)}
       AND required_role IN (${satisfiedRoleList(ctx)})
-      AND on_behalf_of <> ${ctx.onBehalfOf.uoaUserId}
+      AND on_behalf_of <> ${requireOnBehalfOf(ctx).uoaUserId}
       AND status = 'pending'::"ApprovalStatus" AND expires_at > ${ctx.now}
     RETURNING id
   `

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Principal } from '@deepcrm/schemas'
+import type { DelegatedPrincipal } from '@deepcrm/schemas'
 import {
   SignJWT,
   createLocalJWKSet,
@@ -139,8 +139,9 @@ async function callAuth(
   }, authOptions())
 }
 
-function authenticated(result: AuthenticationResult): Principal {
+function authenticated(result: AuthenticationResult): DelegatedPrincipal {
   if (!result.ok) throw new Error(`Expected authentication success, received ${result.reason}`)
+  if (result.principal.kind !== 'delegated') throw new Error('Expected a delegated principal')
   return result.principal
 }
 
@@ -156,6 +157,7 @@ describe('authenticate', () => {
     const principal = authenticated(await callAuth(delegation, await signContext()))
 
     expect(principal).toEqual({
+      kind: 'delegated',
       app: 'nessie',
       uoaUserId: 'usr_uoa',
       uoaOrgId: 'org_uoa',

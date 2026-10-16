@@ -1,5 +1,5 @@
 import { tenantWhere, type Db, type TenantRef, type writeAudit } from '@deepcrm/db'
-import { ErrorCode, Filter, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, Filter, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import { queryRecords, type QueryCursorState } from '../query/index.js'
 import { loadSchema } from '../schema/load.js'
@@ -95,7 +95,7 @@ async function writeMembership(
       teamId: tenant.teamId,
       actorType: ctx.actor.type,
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: onBehalfOfUserId(ctx),
       action: 'crm_dynamic_list_refresh',
       resourceType: 'list',
       resourceId: listId,

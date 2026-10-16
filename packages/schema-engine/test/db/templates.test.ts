@@ -70,7 +70,7 @@ describe('templates', () => {
     })
     const standard = await db.$transaction((tx) => applyTemplate(tx, value, actor(), 'standard_crm'))
     expect(standard.added).toEqual({
-      objectTypes: 3, attributes: 29, relationTypes: 3, pipelines: 0, matchingRules: 5,
+      objectTypes: 3, attributes: 32, relationTypes: 3, pipelines: 0, matchingRules: 5,
     })
     const [objects, attributes, relations, rules, team, audits] = await Promise.all([
       db.objectType.findMany({ where: { organizationId: value.organizationId, teamId: value.teamId } }),

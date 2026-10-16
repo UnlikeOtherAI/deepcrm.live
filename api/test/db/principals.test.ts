@@ -1,5 +1,5 @@
 import { createDb, dropTenant, seedTenant } from '@deepcrm/db'
-import type { ActorContext, Principal } from '@deepcrm/schemas'
+import type { ActorContext, DelegatedPrincipal } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import {
@@ -30,8 +30,9 @@ function ctx(tenant: Tenant): ActorContext {
   }
 }
 
-function principal(): Principal {
+function principal(): DelegatedPrincipal {
   return {
+    kind: 'delegated',
     app: 'nessie',
     uoaUserId: 'usr_seen',
     uoaOrgId: 'org_uoa',

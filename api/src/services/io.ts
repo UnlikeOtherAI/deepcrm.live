@@ -17,6 +17,7 @@ import {
   type ActorContext,
   type FeedChangeKindValue,
   type FeedChangeValue,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -221,13 +222,14 @@ async function visibleRecords(
   ids: readonly string[],
 ): Promise<FeedRecord[]> {
   if (ids.length === 0) return []
+  const { uoaUserId } = requireOnBehalfOf(ctx)
   const rows = await deps.db.record.findMany({
     where: {
       ...tenantWhere(ctx.tenant), id: { in: [...new Set(ids)] },
       OR: [
         { visibility: 'team' },
-        { createdOnBehalfOf: ctx.onBehalfOf.uoaUserId },
-        { visibility: 'users', visibilityGrants: { some: { uoaUserId: ctx.onBehalfOf.uoaUserId } } },
+        { createdOnBehalfOf: uoaUserId },
+        { visibility: 'users', visibilityGrants: { some: { uoaUserId } } },
       ],
     },
     select: {

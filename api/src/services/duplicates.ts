@@ -7,6 +7,7 @@ import {
   FindDuplicatesPayload,
   ServiceError,
   type ActorContext,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -24,7 +25,7 @@ function actorContext(ctx: ActorContext) {
     app: ctx.app,
     actChain: ctx.actChain,
     actor: ctx.actor,
-    onBehalfOf: ctx.onBehalfOf,
+    onBehalfOf: requireOnBehalfOf(ctx),
     provenance: ctx.provenance,
     requestId: ctx.requestId,
   }

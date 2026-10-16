@@ -15,7 +15,7 @@ import {
   type RecordTx,
   type ResolvedLinkOperation,
 } from '@deepcrm/schema-engine'
-import { AttributeSpec, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, AttributeSpec, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
 import {
@@ -80,7 +80,7 @@ async function writeDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: descriptor.tool,
     resourceType: 'link',
     resourceId: descriptor.resourceId,
@@ -266,7 +266,7 @@ async function runWrite(
       teamId: ctx.tenant.teamId,
       actorType: ctx.actor.type,
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: onBehalfOfUserId(ctx),
       action: descriptor.tool,
       resourceType: 'link',
       resourceId: result.link.id,

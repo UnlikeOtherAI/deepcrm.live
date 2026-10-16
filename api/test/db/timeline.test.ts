@@ -8,6 +8,7 @@ import { addNote, logActivity } from '../../src/services/activity.js'
 import { createTask } from '../../src/services/tasks.js'
 import { recordTimeline } from '../../src/services/timeline.js'
 import { linkContext, linkDeps } from './link-fixture.js'
+import { requireOnBehalfOf } from '@deepcrm/schemas'
 
 const databaseUrl = process.env.DATABASE_URL
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for timeline service tests')
@@ -23,7 +24,7 @@ async function fixture() {
   const actor = {
     type: ctx.actor.type,
     id: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
     requestId: ctx.requestId,
   }
   await db.$transaction(async (tx) => {

@@ -1,5 +1,5 @@
 import { tenantWhere } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
 
 import { computeDisplayName } from './display-name.js'
 import { createChanges, diffChanges, type ChangeIntent, writeChanges } from './changes.js'
@@ -64,6 +64,13 @@ export type CreateRecordInput = {
 export type UpdateRecordInput = {
   recordId: string; data: Record<string, unknown>; links?: readonly InlineLinkInput[];
   inlineLinkAuthorizer?: InlineLinkAuthorizer; expectedVersion?: number; reason?: string
+  /**
+   * `waived` only for a write of the three system consent attributes
+   * (schema-engine §4d′): they carry their own provenance in
+   * `marketing_consent_source`, so the team's `require_origin` does not
+   * apply. Rejected origins still do.
+   */
+  originRequirement?: 'waived'
 } & RecordMetadata
 export type AssertRecordInput = CreateRecordInput & { matchAttribute: string; expectedVersion?: number }
 
@@ -169,14 +176,14 @@ async function prepareCreate(
   tx: RecordTx, ctx: ActorContext, schema: LoadedSchema, input: CreateRecordInput, linkWriter: LinkWriter,
 ): Promise<PreparedCreate> {
   const objectType = object(schema, input.objectType)
-  await enforceWriteGuard(tx, ctx, input, null)
+  await enforceWriteGuard(tx, ctx, input, null, true)
   const validated = validateRecordData(schema, objectType, {}, input.data, 'create')
   const validatedData = data(validated.data)
   const displayName = computeDisplayName(schema, objectType, validatedData)
   const record = await tx.record.create({
     data: {
       ...tenantWhere(ctx.tenant), objectTypeId: objectType.id, data: validatedData, displayName,
-      visibility: requestedVisibility(input) ?? 'team', createdOnBehalfOf: ctx.onBehalfOf.uoaUserId,
+      visibility: requestedVisibility(input) ?? 'team', createdOnBehalfOf: onBehalfOfUserId(ctx),
       origin: input.origin ?? null, ownerType: input.owner?.type ?? null, ownerId: input.owner?.id ?? null,
       createdByType: ctx.actor.type, createdById: ctx.actor.id,
     },
@@ -226,7 +233,7 @@ async function updateRecordInternal(
   version(record, input.expectedVersion)
   const objectType = schema.objectTypesById.get(record.objectTypeId)
   if (objectType === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Schema metadata is inconsistent')
-  await enforceWriteGuard(tx, ctx, input, record)
+  await enforceWriteGuard(tx, ctx, input, record, input.originRequirement !== 'waived')
   const before = data(record.data)
   const validated = validateRecordData(schema, objectType, before, input.data, 'update')
   const validatedData = data(validated.data)

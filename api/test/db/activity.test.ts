@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import { addNote, logActivity, type LogActivityInput } from '../../src/services/activity.js'
 import { linkContext, linkDeps } from './link-fixture.js'
+import { requireOnBehalfOf } from '@deepcrm/schemas'
 
 const databaseUrl = process.env.DATABASE_URL
 if (databaseUrl === undefined) throw new Error('DATABASE_URL is required for activity service tests')
@@ -29,7 +30,7 @@ describe('activity and note service', () => {
     const actor = {
       type: ctx.actor.type,
       id: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
       requestId: ctx.requestId,
     }
     await db.$transaction(async (tx) => {

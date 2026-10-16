@@ -23,6 +23,7 @@ import {
   ErrorCode,
   ServiceError,
   type ActorContext,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 import type { AppDeps } from '../../deps.js'
 import { listLists, listViews } from '../../services/lists.js'
@@ -95,7 +96,7 @@ function freshConfirmation(
     },
   }, {
     app: ctx.app,
-    uoaUserId: ctx.onBehalfOf.uoaUserId,
+    uoaUserId: requireOnBehalfOf(ctx).uoaUserId,
     tool,
     argumentsHash: argumentsHash(args),
     impact,

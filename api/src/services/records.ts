@@ -19,7 +19,7 @@ import {
   type RecordWriteResult,
   type UpdateRecordInput,
 } from '@deepcrm/schema-engine'
-import { Candidate, ErrorCode, RecordOut as RecordOutSchema, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, onBehalfOfUserId, Candidate, ErrorCode, RecordOut as RecordOutSchema, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { AppDeps } from '../deps.js'
 import type { ApprovalConsumption } from './approvals.js'
 import { type PolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
@@ -115,7 +115,7 @@ function argumentHash(args: Record<string, unknown>): string {
   }
 }
 function idempotencyLock(ctx: ActorContext, tool: string, key: string): string {
-  return [ctx.tenant.teamId, ctx.onBehalfOf.uoaUserId, tool, key].join(':')
+  return [ctx.tenant.teamId, requireOnBehalfOf(ctx).uoaUserId, tool, key].join(':')
 }
 async function reserve(
   tx: RecordServiceTx, ctx: ActorContext, descriptor: WriteDescriptor, hash: string,
@@ -131,7 +131,7 @@ async function reserve(
   const existing = await tx.idempotencyReplay.findFirst({
     where: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: descriptor.tool,
       key,
     },
@@ -148,7 +148,7 @@ async function reserve(
   const created = await tx.idempotencyReplay.create({
     data: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: descriptor.tool,
       key,
       argumentsHash: hash,
@@ -209,7 +209,7 @@ async function runWrite(
         teamId: ctx.tenant.teamId,
         actorType: ctx.actor.type,
         actorId: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
         action: descriptor.tool,
         resourceType: 'record',
         resourceId: result.record.id,

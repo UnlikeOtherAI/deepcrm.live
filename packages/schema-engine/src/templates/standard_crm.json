@@ -185,6 +185,76 @@
             "type": "timestamp_system",
             "source": "last_activity_at"
           }
+        },
+        {
+          "slug": "marketing_consent",
+          "name": "Marketing consent",
+          "description": "Whether this person agreed to marketing email: not_confirmed (never confirmed), confirmed (they confirmed, or a colleague recorded consent they hold) or declined (they asked not to be written to; their email is then suppressed). Read with crm_consent_get and set with crm_consent_set.",
+          "type": "select",
+          "is_indexed": true,
+          "is_system": true,
+          "sensitivity": "internal",
+          "default_value": "not_confirmed",
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "not_confirmed",
+                "label": "Not confirmed"
+              },
+              {
+                "id": "confirmed",
+                "label": "Confirmed"
+              },
+              {
+                "id": "declined",
+                "label": "Declined"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "marketing_consent_at",
+          "name": "Marketing consent changed",
+          "description": "When the person last gave, confirmed or withdrew marketing consent. Set by crm_consent_set; an older time never replaces a newer one.",
+          "type": "datetime",
+          "is_system": true
+        },
+        {
+          "slug": "marketing_consent_source",
+          "name": "Marketing consent source",
+          "description": "Where the current marketing consent came from: signup_form, contact_form, unsubscribe, resubscribe, import or manual. Set by crm_consent_set.",
+          "type": "select",
+          "is_system": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "signup_form",
+                "label": "Signup form"
+              },
+              {
+                "id": "contact_form",
+                "label": "Contact form"
+              },
+              {
+                "id": "unsubscribe",
+                "label": "Unsubscribe"
+              },
+              {
+                "id": "resubscribe",
+                "label": "Resubscribe"
+              },
+              {
+                "id": "import",
+                "label": "Import"
+              },
+              {
+                "id": "manual",
+                "label": "Manual"
+              }
+            ]
+          }
         }
       ]
     },

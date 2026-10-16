@@ -184,6 +184,10 @@ function evaluatePolicy(
   rules: readonly PolicyRuleWithBindings[],
   request: PolicyRequest,
 ): PolicyDecision {
+  // Policy decides for a person. A call made for nobody (a subject-attested
+  // call) holds no rule here; the tool it may run decides its own reach.
+  const onBehalfOf = ctx.onBehalfOf
+  if (onBehalfOf === null) return { allowed: false, requiresApproval: false }
   const scoped = rules.filter((rule) => (
     rule.resourceType === request.resourceType
     && rule.action === request.action
@@ -191,8 +195,8 @@ function evaluatePolicy(
     && conditionsMatch(rule.conditions, request.sensitivity)
   ))
   const humanIds = new Set([
-    `human:${ctx.onBehalfOf.uoaUserId}`,
-    ...(ctx.onBehalfOf.role === null ? [] : [`role:${ctx.onBehalfOf.role}`]),
+    `human:${onBehalfOf.uoaUserId}`,
+    ...(onBehalfOf.role === null ? [] : [`role:${onBehalfOf.role}`]),
   ])
   const humanRules = scoped.filter((rule) => rule.bindings.some(
     (binding) => humanIds.has(`${binding.actorType}:${binding.actorId}`),

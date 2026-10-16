@@ -6,7 +6,7 @@ import {
   type SuppressionReason,
 } from '@deepcrm/db'
 import { suppressionHash } from '@deepcrm/schema-engine'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
 import type { ApprovalConsumption } from './approvals.js'
@@ -91,7 +91,7 @@ async function audit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action,
     resourceType: 'suppression',
     resourceId: null,
@@ -132,7 +132,7 @@ async function deniedAudit(deps: AppDeps, ctx: ActorContext): Promise<void> {
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'crm_write_guard_set',
     resourceType: 'team',
     resourceId: ctx.tenant.teamId,
@@ -162,7 +162,7 @@ export async function setWriteGuard(
   ctx: ActorContext,
   input: WriteGuardInput,
 ): Promise<WriteGuardOutput> {
-  if (ctx.onBehalfOf.role !== 'owner') {
+  if (ctx.onBehalfOf?.role !== 'owner') {
     await deniedAudit(deps, ctx)
     throw new ServiceError(ErrorCode.POLICY_DENIED, 'Write guard requires an owner')
   }
@@ -192,7 +192,7 @@ export async function setWriteGuard(
       teamId: ctx.tenant.teamId,
       actorType: ctx.actor.type,
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: onBehalfOfUserId(ctx),
       action: 'crm_write_guard_set',
       resourceType: 'team',
       resourceId: ctx.tenant.teamId,
@@ -247,7 +247,7 @@ export async function addSuppression(
         note: null,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
       },
       update: {
         reason: input.reason,
@@ -256,7 +256,7 @@ export async function addSuppression(
         note: null,
         createdByType: ctx.actor.type,
         createdById: ctx.actor.id,
-        onBehalfOf: ctx.onBehalfOf.uoaUserId,
+        onBehalfOf: onBehalfOfUserId(ctx),
       },
     })
     await audit(deps, tx, ctx, 'crm_suppression_add', 'success', {

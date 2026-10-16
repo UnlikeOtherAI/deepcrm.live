@@ -14,6 +14,7 @@ export async function enforceWriteGuard(
   ctx: ActorContext,
   input: RecordMetadataInput,
   current: CurrentRecord | null,
+  originRequired: boolean,
 ): Promise<void> {
   const guard = await tx.team.findUnique({
     where: { id: ctx.tenant.teamId },
@@ -22,6 +23,7 @@ export async function enforceWriteGuard(
   if (guard === null) throw new ServiceError(ErrorCode.TENANT_MISMATCH, 'Tenant does not match actor context')
   validateWriteGuard(guard, {
     app: ctx.app,
+    originRequired,
     origin: input.origin,
     currentOrigin: current?.origin ?? null,
     visibility: requestedVisibility(input),

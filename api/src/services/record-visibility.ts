@@ -1,19 +1,17 @@
 import { tenantWhere, type Db, type Prisma } from '@deepcrm/db'
-import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 export type VisibleRecord = { id: string; objectTypeId: string }
 export type ResolvedVisibleRecord = { record: VisibleRecord; redirectedFrom?: string }
 
 function visibleWhere(ctx: ActorContext): Prisma.RecordWhereInput {
+  const { uoaUserId } = requireOnBehalfOf(ctx)
   return {
     ...tenantWhere(ctx.tenant),
     OR: [
       { visibility: 'team' },
-      { createdOnBehalfOf: ctx.onBehalfOf.uoaUserId },
-      {
-        visibility: 'users',
-        visibilityGrants: { some: { uoaUserId: ctx.onBehalfOf.uoaUserId } },
-      },
+      { createdOnBehalfOf: uoaUserId },
+      { visibility: 'users', visibilityGrants: { some: { uoaUserId } } },
     ],
   }
 }

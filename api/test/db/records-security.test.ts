@@ -2,7 +2,7 @@ import {
   createDb, dropTenant, seedTenant, writeAudit, type PolicyAction, type PolicyResourceType,
 } from '@deepcrm/db'
 import { FakeEmbedder, type LinkWriter } from '@deepcrm/schema-engine'
-import { parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { requireOnBehalfOf, parseSecretBox, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import type { AppDeps } from '../../src/deps.js'
@@ -155,7 +155,7 @@ describe('record service security boundaries', () => {
       objectType: 'person', data: { name: 'Blocked' }, origin: 'blocked',
     })).rejects.toMatchObject({ code: 'ORIGIN_REJECTED', details: { origin: 'blocked' } })
     await expect(createRecord(deps, ctx, {
-      objectType: 'person', data: { name: 'Users' }, origin: 'manual', visibleTo: [ctx.onBehalfOf.uoaUserId],
+      objectType: 'person', data: { name: 'Users' }, origin: 'manual', visibleTo: [requireOnBehalfOf(ctx).uoaUserId],
     })).rejects.toMatchObject({ code: 'VISIBILITY_REJECTED' })
 
     const created = await createRecord(deps, ctx, {
@@ -198,7 +198,7 @@ describe('record service security boundaries', () => {
 
     await db.record.update({ where: { id: created.record.id }, data: { visibility: 'users' } })
     await db.recordVisibilityGrant.create({
-      data: { recordId: created.record.id, uoaUserId: caller.onBehalfOf.uoaUserId },
+      data: { recordId: created.record.id, uoaUserId: requireOnBehalfOf(caller).uoaUserId },
     })
     await expect(updateRecord(deps, caller, {
       recordId: created.record.id, data: { name: 'Visible' },

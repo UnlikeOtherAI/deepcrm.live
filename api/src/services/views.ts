@@ -5,7 +5,7 @@ import {
   type LoadedSchema,
   type LoadedView,
 } from '@deepcrm/schema-engine'
-import { ErrorCode, Filter, ServiceError, Sort, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, ErrorCode, Filter, ServiceError, Sort, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
 import { loadPolicyEvaluator, type PolicyRequest, type PolicyScopeRef } from './policy.js'
@@ -59,7 +59,7 @@ async function audit(
 ): Promise<void> {
   await deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId,
-    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: onBehalfOfUserId(ctx),
     action: tool, resourceType: 'view', resourceId, outcome, reason: null,
     metadata: { app: ctx.app, actChain: ctx.actChain, provenance: ctx.provenance },
     requestId: ctx.requestId, ipAddress: null, userAgent: null,

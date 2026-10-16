@@ -5,6 +5,7 @@ import {
   type Actor,
   type ActorContext,
   type Filter,
+  onBehalfOfUserId,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -119,7 +120,7 @@ async function writeListDeniedAudit(
     teamId: ctx.tenant.teamId,
     actorType: ctx.actor.type,
     actorId: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: onBehalfOfUserId(ctx),
     action: 'crm_tasks_list',
     resourceType: 'record',
     resourceId: recordId,

@@ -3,7 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { CreateTaskResultSchema, GetTaskPayloadResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createDb, dropTenant, seedTenant, writeAudit } from '@deepcrm/db'
 import { applyTemplate, FakeEmbedder, loadSchema } from '@deepcrm/schema-engine'
-import { FindDuplicatesResult } from '@deepcrm/schemas'
+import { requireOnBehalfOf, FindDuplicatesResult } from '@deepcrm/schemas'
 import { startWorker } from '@deepcrm/worker'
 import { createHandlers } from '@deepcrm/worker/dist/jobs/registry.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -35,7 +35,7 @@ beforeAll(async () => {
   const actor = {
     type: ctx.actor.type,
     id: ctx.actor.id,
-    onBehalfOf: ctx.onBehalfOf.uoaUserId,
+    onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
     requestId: ctx.requestId,
   }
   await db.$transaction(async (tx) => {
@@ -52,7 +52,7 @@ beforeAll(async () => {
       data: { name, domains: [`${name.toLowerCase().replaceAll(' ', '-')}.test`] },
       displayName: name,
       visibility: 'team',
-      createdOnBehalfOf: ctx.onBehalfOf.uoaUserId,
+      createdOnBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
       createdByType: 'human',
       createdById: ctx.actor.id,
     } })

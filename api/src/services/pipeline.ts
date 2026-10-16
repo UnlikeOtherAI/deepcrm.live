@@ -22,6 +22,7 @@ import {
   Slug,
   type ActorContext,
   type Filter,
+  requireOnBehalfOf,
 } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
@@ -85,7 +86,7 @@ function argumentHash(args: Record<string, unknown>): string {
 }
 
 function idempotencyLock(ctx: ActorContext, tool: string, key: string): string {
-  return [ctx.tenant.teamId, ctx.onBehalfOf.uoaUserId, tool, key].join(':')
+  return [ctx.tenant.teamId, requireOnBehalfOf(ctx).uoaUserId, tool, key].join(':')
 }
 
 function stageSetReplay(value: unknown): StageSetResult {
@@ -108,7 +109,7 @@ async function reserveStageSet(
   const existing = await tx.idempotencyReplay.findFirst({
     where: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: 'crm_pipeline_stage_set',
       key,
     },
@@ -125,7 +126,7 @@ async function reserveStageSet(
   const created = await tx.idempotencyReplay.create({
     data: {
       ...tenantWhere(ctx.tenant),
-      principalUserId: ctx.onBehalfOf.uoaUserId,
+      principalUserId: requireOnBehalfOf(ctx).uoaUserId,
       tool: 'crm_pipeline_stage_set',
       key,
       argumentsHash: argsHash,

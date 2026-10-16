@@ -4,7 +4,7 @@ import {
   Prisma, tenantWhere, writeAudit, type Db, type TenantRef,
 } from '@deepcrm/db'
 import {
-  ErrorCode, Filter as FilterSchema, ServiceError, type ActorContext, type Filter,
+  ErrorCode, Filter as FilterSchema, onBehalfOfUserId, ServiceError, type ActorContext, type Filter,
 } from '@deepcrm/schemas'
 
 import { getAttributeType } from '../attribute-types/index.js'
@@ -487,7 +487,7 @@ export async function refreshDerivedFromSources(
       teamId: tenant.teamId,
       actorType: ctx.actor.type,
       actorId: ctx.actor.id,
-      onBehalfOf: ctx.onBehalfOf.uoaUserId,
+      onBehalfOf: onBehalfOfUserId(ctx),
       action: 'derived.refresh',
       resourceType: 'derived_attribute',
       resourceId: null,

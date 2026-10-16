@@ -12,12 +12,17 @@ export type VisibilityRecord = {
   visibilityGrants: readonly { uoaUserId: string }[]
 }
 
+// Visibility and policy are decided for a person. A call made for nobody (a
+// subject-attested call, auth-and-tenancy §1) sees no record through these
+// gates; the one tool it may run decides its own reach.
 export function canSee(ctx: ActorContext, record: VisibilityRecord): boolean {
+  const onBehalfOf = ctx.onBehalfOf
+  if (onBehalfOf === null) return false
   return record.visibility === 'team'
-    || record.createdOnBehalfOf === ctx.onBehalfOf.uoaUserId
+    || record.createdOnBehalfOf === onBehalfOf.uoaUserId
     || (
       record.visibility === 'users'
-      && record.visibilityGrants.some((grant) => grant.uoaUserId === ctx.onBehalfOf.uoaUserId)
+      && record.visibilityGrants.some((grant) => grant.uoaUserId === onBehalfOf.uoaUserId)
     )
 }
 
@@ -28,6 +33,7 @@ function policyPredicate(
   resourceType: 'record' | 'attribute',
   sensitivity: LoadedAttribute['sensitivity'] | undefined,
 ): Prisma.Sql {
+  if (ctx.onBehalfOf === null) return Prisma.sql`false`
   const userId = ctx.onBehalfOf.uoaUserId
   const role = ctx.onBehalfOf.role
   // An agent is decided from its exact binding or its app's wildcard, as in
@@ -109,6 +115,7 @@ function assertTenant(tenant: TenantRef, ctx: ActorContext): void {
 
 export function rowAccess(tenant: TenantRef, ctx: ActorContext, objectType: LoadedObjectType): Prisma.Sql {
   assertTenant(tenant, ctx)
+  if (ctx.onBehalfOf === null) return Prisma.sql`false`
   const userId = ctx.onBehalfOf.uoaUserId
   return Prisma.sql`r.organization_id = ${tenant.organizationId}::uuid
     AND r.team_id = ${tenant.teamId}::uuid AND r.object_type_id = ${objectType.id}::uuid
