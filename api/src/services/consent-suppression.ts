@@ -23,7 +23,7 @@ export async function applyConsentSuppression(
   ctx: ActorContext,
   email: string,
   state: ConsentState,
-  recordId: string,
+  recordId: string | null,
 ): Promise<ConsentSuppressionChange> {
   const keyHash = suppressionHash('email', email)
   const tenant = { organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId }

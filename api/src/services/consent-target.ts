@@ -10,7 +10,7 @@ import {
   type LoadedObjectType,
   type LoadedSchema,
 } from '@deepcrm/schema-engine'
-import { ErrorCode, onBehalfOfUserId, ServiceError, type ActorContext } from '@deepcrm/schemas'
+import { ErrorCode, isSubjectActor, onBehalfOfUserId, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { AppDeps } from '../deps.js'
 
@@ -45,12 +45,17 @@ function invalidObjectType(message: string): ServiceError {
   })
 }
 
-function selectObjectType(schema: LoadedSchema, slug: string | undefined): LoadedObjectType {
+// A subject's own act reaches only a person-kind type, named or not; a
+// person may name any type with one unique email attribute.
+function selectObjectType(schema: LoadedSchema, slug: string | undefined, subject: boolean): LoadedObjectType {
   if (slug !== undefined) {
     const named = schema.objectTypesBySlug.get(slug)
     if (named === undefined) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type', { slug })
     if (uniqueEmailAttributes(named).length !== 1) {
       throw invalidObjectType('the object type needs exactly one unique email attribute')
+    }
+    if (subject && !isPersonKind(named)) {
+      throw invalidObjectType('a subject-attested call names a type whose primary is a personal_name')
     }
     return named
   }
@@ -96,7 +101,7 @@ export async function resolveConsentTarget(
   objectTypeSlug: string | undefined,
 ): Promise<ConsentTarget> {
   const schema = await loadSchema(deps.db, ctx.tenant)
-  const objectType = selectObjectType(schema, objectTypeSlug)
+  const objectType = selectObjectType(schema, objectTypeSlug, isSubjectActor(ctx))
   if (hasConsentAttributes(new Set(objectType.attributes.map((item) => item.slug)))) {
     return target(schema, objectType)
   }

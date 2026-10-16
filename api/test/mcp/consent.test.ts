@@ -71,7 +71,7 @@ beforeAll(async () => {
     await seedDefaultPolicies(tx, tenant)
     await applyTemplate(tx, tenant, { type: 'system', id: 'consent-mcp-test', onBehalfOf: null, requestId: 'seed' },
       'standard_crm')
-  })
+  }, { timeout: 60_000 })
 })
 
 afterAll(async () => {

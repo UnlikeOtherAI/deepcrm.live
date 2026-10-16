@@ -33,23 +33,33 @@ function refused(path: string, message: string): ServiceError {
  * The data of a person created by a consent write: the caller's `create.data`
  * with the email and the consent attributes set. Consent is set by `state`,
  * `source` and `at` alone; a given email attribute must hold the email. A
- * subject's own act names facts about the subject, never links to other
- * records or people.
+ * subject's own act creates a person from two facts only — the
+ * `personal_name` primary and the one email the consent is for.
  */
 export function createConsentData(act: ConsentAct, data: Record<string, unknown>): Record<string, unknown> {
   const { target } = act
   for (const slug of [target.state.slug, target.at.slug, target.source.slug]) {
     if (Object.hasOwn(data, slug)) refusedSlug(slug)
   }
-  if (act.caller === 'subject') {
-    for (const attribute of target.objectType.attributes) {
-      const reference = attribute.type === 'record_reference' || attribute.type === 'actor_reference'
-      if (reference && Object.hasOwn(data, attribute.slug)) {
-        throw refused(attribute.slug, 'a subject-attested record names no other records or people')
-      }
+  if (act.caller === 'subject') subjectFacts(act, data)
+  return { ...data, [target.email.slug]: emailValue(act, data[target.email.slug]), ...consentPatch(target, act) }
+}
+
+function subjectFacts(act: ConsentAct, data: Record<string, unknown>): void {
+  const { objectType, email } = act.target
+  const name = objectType.attributes.find((attribute) => attribute.id === objectType.primaryAttributeId)
+  for (const slug of Object.keys(data)) {
+    if (slug !== email.slug && slug !== name?.slug) {
+      throw refused(slug, 'a subject-attested person holds only the name and the email')
     }
   }
-  return { ...data, [target.email.slug]: emailValue(act, data[target.email.slug]), ...consentPatch(target, act) }
+  const given = data[email.slug]
+  if (given === undefined) return
+  const values: unknown[] = Array.isArray(given) ? given : [given]
+  const [only, extra] = values
+  if (extra !== undefined || !sameEmail(act, only)) {
+    throw refused(email.slug, 'a subject-attested person holds only the email the consent is for')
+  }
 }
 
 function refusedSlug(slug: string): never {

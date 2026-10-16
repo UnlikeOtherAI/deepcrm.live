@@ -19,6 +19,8 @@ export type WriteGuard = {
 
 export type WriteGuardInput = {
   app: string
+  /** false only for a consent-attribute write (§4d′): `require_origin` then does not apply. */
+  originRequired: boolean
   origin: string | undefined
   currentOrigin: string | null
   visibility: GuardVisibility | undefined
@@ -38,7 +40,7 @@ function fail(issues: ValidationIssue[]): never {
 
 export function validateWriteGuard(guard: WriteGuard, input: WriteGuardInput): void {
   const origin = input.origin ?? input.currentOrigin
-  if (origin === null && guard.requireOrigin) {
+  if (origin === null && guard.requireOrigin && input.originRequired) {
     throw new ServiceError(ErrorCode.ORIGIN_REJECTED, 'Origin is required', { origin: null })
   }
   if (origin !== null && guard.rejectedOrigins.includes(origin)) {

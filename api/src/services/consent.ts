@@ -44,6 +44,8 @@ import {
 } from './record-write-authorization.js'
 
 const TOOL = 'crm_consent_set'
+// An act cannot be dated later than now: a future `at` would freeze the state.
+const FUTURE_SKEW_MS = 60_000
 type ConsentTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'list' | 'suppressionEntry' | 'record'>
 type StoredConsent = { state: ConsentState | null; at: string | null; source: ConsentSource | null }
 type SetPlan = {
@@ -152,15 +154,21 @@ async function storeReplay(
   if (updated.count !== 1) throw new ServiceError(ErrorCode.INTERNAL, 'Idempotency result was not stored')
 }
 
-async function authorizeEdit(deps: AppDeps, ctx: ActorContext, plan: SetPlan, recordId: string): Promise<void> {
-  if (plan.caller === 'subject') return
+// A person or agent reaches only a record they may see; an invisible match
+// reads exactly like no match (no existence oracle), and a `create` against
+// it meets the unique key as a redacted DUPLICATE_FOUND.
+async function authorizeEdit(
+  deps: AppDeps, ctx: ActorContext, plan: SetPlan, recordId: string,
+): Promise<'visible' | 'invisible'> {
+  if (plan.caller === 'subject') return 'visible'
   const visible = await findVisibleRecord(deps.db, ctx, recordId)
-  if (visible === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  if (visible === null) return 'invisible'
   const scopes = recordScopes(ctx, visible)
   await authorizeRecordWrite(deps, ctx, { tool: TOOL, reason: plan.input.reason, resourceId: recordId }, [
     recordPolicy('edit', scopes),
     ...attributePolicies(plan.target.schema, plan.target.objectType.id, consentPatch(plan.target, plan), scopes),
   ])
+  return 'visible'
 }
 
 async function authorizeCreate(
@@ -175,6 +183,48 @@ async function authorizeCreate(
   await validateActorReferences(deps.db, ctx, plan.target.schema, { objectType: plan.target.objectType.slug, data })
 }
 
+type ConsentOutcome = {
+  kind: 'written' | 'kept' | 'no_record'
+  recordId: string | null
+  created: boolean
+  previous: ConsentState | null
+}
+
+async function auditConsent(
+  deps: AppDeps, tx: ConsentTx, ctx: ActorContext, plan: SetPlan,
+  outcome: ConsentOutcome, suppression: ConsentSuppressionChange,
+): Promise<void> {
+  await deps.writeAudit(tx, {
+    organizationId: ctx.tenant.organizationId,
+    teamId: ctx.tenant.teamId,
+    actorType: ctx.actor.type,
+    actorId: ctx.actor.id,
+    onBehalfOf: onBehalfOfUserId(ctx),
+    action: TOOL,
+    resourceType: 'record',
+    resourceId: outcome.recordId,
+    outcome: 'success',
+    reason: plan.input.reason ?? null,
+    metadata: {
+      ...recordAuditMetadata(ctx),
+      consent: outcome.kind, state: plan.input.state, previousState: outcome.previous,
+      source: plan.input.source, at: plan.at, created: outcome.created, suppression,
+    },
+    requestId: ctx.requestId,
+    ipAddress: null,
+    userAgent: null,
+  })
+}
+
+// An objection holds whatever order the acts arrive in: `declined` is always
+// suppressed, even when the record keeps a newer state or there is no record.
+async function suppressDecline(
+  tx: ConsentTx, ctx: ActorContext, plan: SetPlan, recordId: string | null,
+): Promise<ConsentSuppressionChange> {
+  if (plan.input.state !== 'declined') return 'none'
+  return applyConsentSuppression(tx, ctx, plan.email.value, 'declined', recordId)
+}
+
 async function finishWrite(
   deps: AppDeps, tx: ConsentTx, ctx: ActorContext, plan: SetPlan,
   written: RecordWriteResult, previous: ConsentState | null,
@@ -184,26 +234,7 @@ async function finishWrite(
     ? await applyConsentSuppression(tx, ctx, plan.email.value, plan.input.state, recordId)
     : 'none'
   if (written.changed) await enqueueRecordMutationEffects(tx, ctx, written.sequences, written.touchedRecordIds)
-  await deps.writeAudit(tx, {
-    organizationId: ctx.tenant.organizationId,
-    teamId: ctx.tenant.teamId,
-    actorType: ctx.actor.type,
-    actorId: ctx.actor.id,
-    onBehalfOf: onBehalfOfUserId(ctx),
-    action: TOOL,
-    resourceType: 'record',
-    resourceId: recordId,
-    outcome: 'success',
-    reason: plan.input.reason ?? null,
-    metadata: {
-      ...recordAuditMetadata(ctx),
-      state: plan.input.state, previousState: previous, source: plan.input.source,
-      created: written.created, suppression,
-    },
-    requestId: ctx.requestId,
-    ipAddress: null,
-    userAgent: null,
-  })
+  await auditConsent(deps, tx, ctx, plan, { kind: 'written', recordId, created: written.created, previous }, suppression)
   return {
     record_id: recordId,
     created: written.created,
@@ -217,20 +248,23 @@ async function finishWrite(
 async function writeMatched(
   deps: AppDeps, tx: ConsentTx, ctx: ActorContext, plan: SetPlan, recordId: string,
 ): Promise<CrmConsentSetOutput> {
-  await authorizeEdit(deps, ctx, plan, recordId)
+  if (await authorizeEdit(deps, ctx, plan, recordId) === 'invisible') return writeUnmatched(deps, tx, ctx, plan)
   const row = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: recordId }, select: { data: true } })
   if (row === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const stored = storedConsent(plan.target, row.data)
   const kept = stored.state !== null
     && (!supersedes(stored, plan.at) || unverifiedOverDeclined(plan, stored))
   if (kept && stored.state !== null) {
+    const suppression = await suppressDecline(tx, ctx, plan, recordId)
+    await auditConsent(deps, tx, ctx, plan, { kind: 'kept', recordId, created: false, previous: stored.state },
+      suppression)
     return {
       record_id: recordId, created: false, state: stored.state, previous_state: stored.state,
       at: stored.at ?? plan.at, suppressed: await emailSuppressed(tx, ctx, plan.email.value),
     }
   }
   const written = await engineUpdateRecord(tx, ctx, plan.target.schema, {
-    recordId, data: consentPatch(plan.target, plan), reason: plan.input.reason,
+    recordId, data: consentPatch(plan.target, plan), reason: plan.input.reason, originRequirement: 'waived',
   }, deps.linkWriter)
   return finishWrite(deps, tx, ctx, plan, written, stored.state)
 }
@@ -240,6 +274,9 @@ async function writeUnmatched(
 ): Promise<CrmConsentSetOutput> {
   const create = plan.input.create
   if (create === undefined) {
+    const suppression = await suppressDecline(tx, ctx, plan, null)
+    await auditConsent(deps, tx, ctx, plan, { kind: 'no_record', recordId: null, created: false, previous: null },
+      suppression)
     return {
       record_id: null, created: false, state: plan.input.state, previous_state: null, at: plan.at,
       suppressed: await emailSuppressed(tx, ctx, plan.email.value),
@@ -247,8 +284,11 @@ async function writeUnmatched(
   }
   const data = createConsentData(plan, create.data ?? {})
   await authorizeCreate(deps, ctx, plan, data)
+  // A subject's own act declares where the person came from, so a team that
+  // requires an origin still takes it; a colleague's create declares none.
+  const origin = plan.caller === 'subject' ? { origin: ctx.actor.id } : {}
   const written = await engineCreateRecord(tx, ctx, plan.target.schema, {
-    objectType: plan.target.objectType.slug, data, reason: plan.input.reason,
+    objectType: plan.target.objectType.slug, data, reason: plan.input.reason, ...origin,
   }, deps.linkWriter)
   return finishWrite(deps, tx, ctx, plan, written, null)
 }
@@ -290,12 +330,14 @@ export async function setConsent(
       issues: [{ path: '/reason', message: 'say where the consent came from when a person records confirmed' }],
     })
   }
-  const target = await resolveConsentTarget(deps, ctx, input.object_type)
-  const plan: SetPlan = {
-    input, caller, target,
-    email: normalizedEmail(target, input.email),
-    at: new Date(input.at ?? ctx.now.toISOString()).toISOString(),
+  const at = new Date(input.at ?? ctx.now.toISOString())
+  if (at.getTime() > ctx.now.getTime() + FUTURE_SKEW_MS) {
+    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Consent time is in the future', {
+      issues: [{ path: '/at', message: 'must not be later than now (60 seconds of clock skew allowed)' }],
+    })
   }
+  const target = await resolveConsentTarget(deps, ctx, input.object_type)
+  const plan: SetPlan = { input, caller, target, email: normalizedEmail(target, input.email), at: at.toISOString() }
   return consentBoundary(deps, ctx, () => deps.db.$transaction(async (tx) => {
     const reservation = await reserve(tx, ctx, input)
     if (reservation.kind === 'replay') return reservation.result
