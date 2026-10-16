@@ -733,6 +733,22 @@ export const CrmWriteGuardSet = { in: z.object({
   out: z.object({ rejected_origins: z.array(z.string()), require_origin: z.boolean(),
     team_visibility_only_apps: z.array(z.string()) }) }
 
+// ── compliance: marketing consent (schema-engine §4d′; tools-consent.ts) ─────
+export const ConsentState = z.enum(['not_confirmed','confirmed','declined'])
+export const ConsentSource = z.enum(['signup_form','contact_form','unsubscribe','resubscribe','import','manual'])
+export const CrmConsentSet = { in: z.object({ email: z.string().min(1).max(320), state: ConsentState,
+  source: ConsentSource, at: IsoDateTime.optional().describe('default now; written only when later than the stored at'),
+  object_type: Slug.optional().describe('default: the one personal_name-primary type with a unique email'),
+  create: z.object({ data: z.record(z.unknown()).optional() }).strict().optional()
+    .describe('create the person when absent; omitted ⇒ no match writes nothing'),
+  reason: z.string().min(1).max(500).optional().describe('required when a person records confirmed'),
+  idempotency_key: IdempotencyKey }),
+  out: z.object({ record_id: Uuid.nullable(), created: z.boolean(), state: ConsentState,
+    previous_state: ConsentState.nullable(), at: IsoDateTime, suppressed: z.boolean() }) }
+export const CrmConsentGet = { in: z.object({ email: z.string().min(1).max(320), object_type: Slug.optional() }),
+  out: z.object({ record_id: Uuid.nullable(), state: ConsentState.nullable(), at: IsoDateTime.nullable(),
+    source: ConsentSource.nullable(), suppressed: z.boolean() }) }
+
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),
   format: z.enum(['jsonl','csv']), attributes: z.array(Slug).optional(), reason: Reason, idempotency_key: IdempotencyKey })
@@ -824,6 +840,7 @@ export const ErrorCode = {
   TENANT_REPARENTING: 'TENANT_REPARENTING', ORIGIN_REJECTED: 'ORIGIN_REJECTED',
   VISIBILITY_REJECTED: 'VISIBILITY_REJECTED', ERASED: 'ERASED',
   LIMIT_EXCEEDED: 'LIMIT_EXCEEDED', INTERNAL: 'INTERNAL',
+  TENANT_NOT_FOUND: 'TENANT_NOT_FOUND',
 } as const
 // APPEND-ONLY: codes are never renamed or removed (R8). Consumers may treat
 // unknown codes as fatal-and-surface.

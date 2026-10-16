@@ -30,6 +30,7 @@ import { registerIoTools } from './tools/io.js'
 import { registerSearchTools } from './tools/search.js'
 import { registerQualityTools } from './tools/quality.js'
 import { registerComplianceTools } from './tools/compliance.js'
+import { registerConsentTools } from './tools/consent.js'
 import {
   configureToolRuntime, logToolEntry, restrictToolRuntime, type ToolExposure,
 } from './tools/register.js'
@@ -173,6 +174,7 @@ export function buildMcpServer(
   registerSearchTools(server, ctx, deps)
   registerQualityTools(server, ctx, deps)
   registerComplianceTools(server, ctx, deps)
+  registerConsentTools(server, ctx, deps)
   // A subject-attested call runs its one tool and reads nothing else: no
   // resources, prompts or task methods are served to it.
   if (exposure.kind === 'all') {

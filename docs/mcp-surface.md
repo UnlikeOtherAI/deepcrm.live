@@ -200,11 +200,13 @@ inside the caller's tenant.
 | `crm_data_quality` | Check data quality | `search-quality` | `standard` | Find visible records with missing required values, stale activity, required-relation orphans, or duplicate values on unique attributes. Each bucket includes a reusable crm_records_query filter. | `{ object_type?: string, stale_days?: integer }` | `{ missing_required, stale, orphans, collisions }` each `{ count, items: [{record, detail}] (≤100), query_filter }` |
 <!-- tools:end -->
 
-### 7a. Compliance: erasure, suppression, write guard
+### 7a. Compliance: erasure, suppression, consent, write guard
 
 <!-- tools:start:7a -->
 | Tool | Title | Group | Access | Description | Input | Output |
 |---|---|---|---|---|---|---|
+| `crm_consent_set` | Set marketing consent | `compliance` | `standard` | Record a person's marketing consent by email: not_confirmed, confirmed or declined. declined also suppresses the email; other states lift its opt-out. Only a later at is written; create makes the person when absent. A person needs reason for confirmed; an agent may set declined only. | `{ email: string, state: "not_confirmed" \| "confirmed" \| "declined", source: "signup_form" \| "contact_form" \| "unsubscribe" \| "resubscribe" \| "import" \| "manual", at?: string, object_type?: string, create?: object, reason?: string, idempotency_key?: string }` | `{ record_id: string \| null, created: boolean, state, previous_state: state \| null, at, suppressed: boolean }` |
+| `crm_consent_get` | Read marketing consent | `compliance` | `standard` | Read a person's marketing consent by email: state, when, where it came from, and whether the email is suppressed for email. record_id and state are null when no visible person holds the email. | `{ email: string, object_type?: string }` | `{ record_id: string \| null, state: state \| null, at: string \| null, source: source \| null, suppressed: boolean }` |
 | `crm_record_erase` | Erase record | `compliance` | `explicit` | Right-to-erasure operation. Suppresses contact facts first, scrubs record, link data, list entry data, historical values, search, keys, and grants, emits record.erased, and leaves a permanent ERASED tombstone. Owner approval-gated and irreversible. | `{ id: string, reason: "gdpr_request" \| "retention_policy" \| "legal_order" \| "other", suppress?: boolean }` | `{ erased: true, suppressed: [{kind, count}] }` |
 | `crm_suppression_add` | Add suppression | `compliance` | `standard` | Add a hashed suppression entry. Use for objections, erasure, bounces, and manual channel holds. Values are normalized in memory and never stored raw. | `{ kind: "email" \| "phone" \| "domain" \| "company_number" \| "postal", value: string, channel?: "all" \| "email" \| "phone_call" \| "sms" \| "post", reason: "objection" \| "erasure" \| "bounce" \| "manual", sub_reason?: string, expires_at?: string }` | `{ added: true }` |
 | `crm_suppression_check` | Check suppression | `compliance` | `standard` | Call before outbound contact on the exact channel. all entries and unexpired channel entries suppress; expired entries return suppressed false. | `{ entries: array }` | `{ results: [{kind, suppressed, reason?, sub_reason?}] }` |
@@ -247,7 +249,7 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 Every tool carries its group and access class in `tools/list` (§0.1); the table and list below are regenerated from the registrations by `pnpm docs:mcp`, and `api/test/mcp/surface.test.ts` pins the per-group counts, the explicit set, and that every tool has a unique title of at most 40 characters. A group's id never changes when its label does. The explicit set is the destructive and structural tools; every read a granted mutator needs to resolve its ids is standard.
 
 <!-- tools:summary:start -->
-75 tools in 8 groups, 28 explicit and 47 standard.
+77 tools in 8 groups, 28 explicit and 49 standard.
 
 | Order | Group | Label | Tools | Explicit |
 |---|---|---|---|---|
@@ -257,7 +259,7 @@ Every tool carries its group and access class in `tools/list` (§0.1); the table
 | 4 | `lists-views` | Lists and views | 9 | 0 |
 | 5 | `activity` | Activities, tasks and pipelines | 14 | 3 |
 | 6 | `search-quality` | Search, quality and merge | 5 | 2 |
-| 7 | `compliance` | Compliance | 6 | 3 |
+| 7 | `compliance` | Compliance | 8 | 3 |
 | 8 | `io` | Files, exports, changes and webhooks | 8 | 3 |
 
 Explicit: `crm_object_type_define`, `crm_object_type_update`, `crm_object_type_archive`, `crm_attribute_define`, `crm_attribute_update`, `crm_derived_attribute_define`, `crm_derived_attribute_update`, `crm_attribute_archive`, `crm_attribute_group_define`, `crm_attribute_group_reorder`, `crm_attribute_group_archive`, `crm_relation_type_define`, `crm_relation_type_update`, `crm_relation_type_archive`, `crm_matching_rule_set`, `crm_template_apply`, `crm_record_delete`, `crm_pipeline_define`, `crm_pipeline_update`, `crm_export`, `crm_event_type_define`, `crm_webhook_set`, `crm_webhook_delete`, `crm_merge_records`, `crm_unmerge`, `crm_suppression_remove`, `crm_record_erase`, `crm_write_guard_set`.

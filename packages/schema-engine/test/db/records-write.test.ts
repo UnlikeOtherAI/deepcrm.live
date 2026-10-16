@@ -62,10 +62,10 @@ describe('record write engine', () => {
       orderBy: { seq: 'asc' },
     })
     expect(changes.map((change) => `${change.kind}:${change.attributeSlug}`))
-      .toEqual(['create:null', 'set:emails', 'set:name'])
+      .toEqual(['create:null', 'set:emails', 'set:marketing_consent', 'set:name'])
     expect(changes.every((change) => change.resultingVersion === 1)).toBe(true)
     expect(changes.every((change) => change.reason === 'import')).toBe(true)
-    expect(changes.map((change) => Number(change.seq))).toEqual([1, 2, 3])
+    expect(changes.map((change) => Number(change.seq))).toEqual([1, 2, 3, 4])
   })
 
   it('updates with optimistic versioning and does not write normalized no-ops', async () => {
@@ -85,7 +85,7 @@ describe('record write engine', () => {
     }, noLinks))
     expect(updated.record.version).toBe(2)
     expect(updated.changes.map((change) => change.attributeSlug)).toEqual(['name'])
-    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(4)
+    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(5)
   })
 
   it('enforces unique keys and releases them on delete while restore detects conflict', async () => {
@@ -163,7 +163,7 @@ describe('record write engine', () => {
     expect(result.touchedRecordIds).toEqual([company.record.id, result.record.id].sort())
     expect(await db.recordChange.count({
       where: { organizationId: tenant.organizationId, teamId: tenant.teamId, recordId: result.record.id },
-    })).toBe(3)
+    })).toBe(4)
   })
 
   it('passes the canonical delete snapshot to LinkWriter restore', async () => {
