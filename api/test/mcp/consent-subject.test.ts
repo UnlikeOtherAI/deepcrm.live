@@ -169,6 +169,22 @@ describe('a subject-attested consent call through the real inbound auth', () => 
     expect(got.structuredContent).toMatchObject({ state: 'not_confirmed', source: 'signup_form' })
   })
 
+  it('serves a stateless client its initialize, notification and one call under one context', async () => {
+    const args = { ...signup, email: 'stateless-client@example.com' }
+    const context = subjectContext({ tool: 'crm_consent_set', args })
+    const initialized = await envelope(await post(context, {
+      jsonrpc: '2.0', id: 0, method: 'initialize',
+      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'nessie-worker', version: '1' } },
+    }))
+    expect(initialized).toMatchObject({ serverInfo: { name: 'deepcrm' } })
+    const notified = await post(context, { jsonrpc: '2.0', method: 'notifications/initialized' })
+    expect(notified.status).toBeLessThan(300)
+    const written = await envelope(await post(context, toolCall('crm_consent_set', args)))
+    expect(written.isError).not.toBe(true)
+    expect(written.structuredContent).toMatchObject({ created: true, state: 'not_confirmed' })
+    expect((await post(context, toolCall('crm_consent_set', args))).status).toBe(401)
+  })
+
   it('lists only the attested tool and refuses any other call, tool or batch', async () => {
     const listed = await envelope(await post(
       subjectContext({ tool: 'crm_consent_get', args: {} }), { jsonrpc: '2.0', id: 2, method: 'tools/list' },
