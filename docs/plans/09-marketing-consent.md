@@ -14,6 +14,8 @@ Outcome: marketing consent is a state of the person — three system attributes 
 - `api/src/services/consent*.ts`, `api/src/mcp/tools/consent.ts`; `api/src/plugins/mcp-http.ts` + `mcp-refusal.ts` (subject flow, typed tenant refusals); `api/src/services/tenancy.ts` (existing-tenant lookup), `context.ts`, `principals.ts` (replay seen-set for `crm_consent_set`); `api/src/mcp/server.ts` + `tools/register.ts` (a subject server runs only its attested tool); every `onBehalfOf` consumer.
 - Tests: `packages/mcp-inbound/src/subject-context.test.ts`; `api/test/db/consent.test.ts`; `api/test/mcp/consent.test.ts`; `api/test/mcp/consent-subject.test.ts`; `api/test/mcp/surface.test.ts` (77 tools, compliance 8).
 
+**No downgrade by a form entry:** a subject's `not_confirmed` writes only on a person with no consent state yet; it never replaces a stored `confirmed` or `declined` (a stranger typing a confirmed person's address into a signup or contact form must not stop their newsletters), and over `not_confirmed` it is a no-op answered with the stored state and audited `kept`. Covered by `api/test/db/consent.test.ts` ("never lets a signup or contact form downgrade a stored act", "writes a subject not_confirmed on a person with no consent yet, then keeps it").
+
 **Ops:** add `"subjectTools": ["crm_consent_set", "crm_consent_get"]` to the `nessie` entry of `DEEPCRM_APPS` and restart the API. No migration.
 
 **Acceptance:** with `DATABASE_URL` exported (docs/testing.md):

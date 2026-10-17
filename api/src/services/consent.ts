@@ -82,11 +82,14 @@ function supersedes(stored: StoredConsent, at: string): boolean {
   return Date.parse(at) > Date.parse(stored.at)
 }
 
-// A subject's `not_confirmed` is an unverified act (anyone can type an address
-// into a form): it never replaces `declined` and never lifts an opt-out. Only a
-// confirmed act, or a person's decision, does.
-function unverifiedOverDeclined(plan: SetPlan, stored: StoredConsent): boolean {
-  return plan.caller === 'subject' && plan.input.state === 'not_confirmed' && stored.state === 'declined'
+// A subject's `not_confirmed` is an unverified act: anyone can type an
+// address into a public form, and writing in or signing up again is never the
+// person withdrawing consent. It writes only where no consent is stored yet,
+// never over a stored act (`confirmed` or `declined`), and never lifts an
+// opt-out. A confirmed act (the link press), an unsubscribe, or a person's
+// decision keep the newer-`at` rule.
+function unverifiedOverStored(plan: SetPlan, stored: StoredConsent): boolean {
+  return plan.caller === 'subject' && plan.input.state === 'not_confirmed' && stored.state !== null
 }
 
 function liftsOptOut(plan: SetPlan): boolean {
@@ -253,7 +256,7 @@ async function writeMatched(
   if (row === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const stored = storedConsent(plan.target, row.data)
   const kept = stored.state !== null
-    && (!supersedes(stored, plan.at) || unverifiedOverDeclined(plan, stored))
+    && (!supersedes(stored, plan.at) || unverifiedOverStored(plan, stored))
   if (kept && stored.state !== null) {
     const suppression = await suppressDecline(tx, ctx, plan, recordId)
     await auditConsent(deps, tx, ctx, plan, { kind: 'kept', recordId, created: false, previous: stored.state },

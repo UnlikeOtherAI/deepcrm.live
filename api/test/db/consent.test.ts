@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { AppDeps } from '../../src/deps.js'
 import { addSuppression } from '../../src/services/compliance.js'
 import { getConsent, setConsent } from '../../src/services/consent.js'
+import { createRecord } from '../../src/services/records.js'
 import { createHistoryCursorCodec } from '../../src/services/history-cursor.js'
 import { seedDefaultPolicies } from '../../src/services/policy.js'
 import { createQueryCursorCodec } from '../../src/services/query-cursor.js'
@@ -237,6 +238,56 @@ describe('marketing consent service', () => {
     expect(signup).toMatchObject({ state: 'declined', previous_state: 'declined', suppressed: true })
     const confirmed = await setConsent(deps, ctx, set({ state: 'confirmed', source: 'signup_form', at: '2026-10-16T09:31:00Z' }))
     expect(confirmed).toMatchObject({ state: 'confirmed', previous_state: 'declined', suppressed: false })
+  })
+
+  it('never lets a signup or contact form downgrade a stored act', async () => {
+    const target = await tenant()
+    const ctx = subject(target)
+    await setConsent(deps, ctx, set({ state: 'confirmed', source: 'signup_form', at: '2026-10-16T09:00:00Z', create }))
+    const contact = await setConsent(deps, ctx, set({
+      state: 'not_confirmed', source: 'contact_form', at: '2026-10-16T10:00:00Z', create,
+    }))
+    expect(contact).toMatchObject({
+      created: false, state: 'confirmed', previous_state: 'confirmed', at: '2026-10-16T09:00:00.000Z',
+    })
+    await setConsent(deps, ctx, set({ state: 'declined', source: 'unsubscribe', at: '2026-10-16T10:30:00Z' }))
+    const signup = await setConsent(deps, ctx, set({
+      state: 'not_confirmed', source: 'signup_form', at: '2026-10-16T11:00:00Z',
+    }))
+    expect(signup).toMatchObject({ state: 'declined', previous_state: 'declined', suppressed: true })
+    const again = await setConsent(deps, ctx, set({ state: 'not_confirmed', source: 'signup_form', at: '2026-10-16T11:30:00Z' }))
+    expect(again.state).toBe('declined')
+    const record = await db.record.findFirstOrThrow({ where: { ...target, id: contact.record_id ?? '' } })
+    expect(record.data).toMatchObject({
+      marketing_consent: 'declined', marketing_consent_at: '2026-10-16T10:30:00.000Z',
+      marketing_consent_source: 'unsubscribe',
+    })
+    const audits = await db.auditLog.findMany({
+      where: { ...target, action: 'crm_consent_set' }, orderBy: { createdAt: 'asc' }, select: { metadata: true },
+    })
+    expect(audits.map((row) => (row.metadata as { consent?: string } | null)?.consent))
+      .toEqual(['written', 'kept', 'written', 'kept', 'kept'])
+  })
+
+  it('writes a subject not_confirmed on a person with no consent yet, then keeps it', async () => {
+    const target = await tenant({ consentAttributes: false })
+    const created = await createRecord(deps, person(target), {
+      objectType: 'person', data: { name: { full: 'Ada Lovelace' }, emails: ['ada@example.com'] },
+    })
+    const first = await setConsent(deps, subject(target), set({
+      state: 'not_confirmed', source: 'contact_form', at: '2026-10-16T09:00:00Z',
+    }))
+    expect(first).toMatchObject({
+      record_id: created.record.id, created: false, state: 'not_confirmed', previous_state: null,
+      at: '2026-10-16T09:00:00.000Z',
+    })
+    const repeat = await setConsent(deps, subject(target), set({
+      state: 'not_confirmed', source: 'signup_form', at: '2026-10-16T09:30:00Z',
+    }))
+    expect(repeat).toMatchObject({ state: 'not_confirmed', previous_state: 'not_confirmed', at: '2026-10-16T09:00:00.000Z' })
+    await expect(getConsent(deps, person(target), { email: 'ada@example.com' })).resolves.toMatchObject({
+      state: 'not_confirmed', source: 'contact_form',
+    })
   })
 
   it('defines the consent attributes on a tenant that lacks them, once', async () => {
