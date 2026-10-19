@@ -1,10 +1,8 @@
-import { eraseRecord, loadSchema } from '@deepcrm/schema-engine'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { submitIntake } from '../../src/services/intake.js'
 import { decideProposal } from '../../src/services/proposal-decide.js'
 import { listProposals } from '../../src/services/proposals.js'
-import { MAX_PENDING_PER_RECORD } from '../../src/services/proposal-store.js'
 import { createRecord } from '../../src/services/records.js'
 import { withFirstSource } from '../../src/services/record-source.js'
 import { intakeFixture } from './intake-fixture.js'
@@ -142,26 +140,6 @@ describe('record proposals', () => {
       name: { full: 'Three' }, emails: ['new@example.com'], phones: ['+442071838750'],
       first_source_kind: 'contact_form', first_source_id: 'form_spring',
     })
-  })
-
-  it('refuses a submission that would pass the per-record cap and erases proposals with their record', async () => {
-    const target = await tenant()
-    const id = await amended(target)
-    const schema = await loadSchema(db, target)
-    const objectTypeId = schema.objectTypesBySlug.get('person')?.id ?? ''
-    await db.recordProposal.createMany({
-      data: Array.from({ length: MAX_PENDING_PER_RECORD - 1 }, (_, index) => ({
-        ...target, kind: 'amendment' as const, objectTypeId, recordId: id, attributeSlug: 'title',
-        proposed: `Title ${index}`, proposedHash: `hash-${index}`, sourceKind: 'contact_form', sourceId: 'f',
-        sourceName: 'F', requesterType: 'system' as const, requesterId: 'subject:nessie', requestId: 'seed',
-      })),
-    })
-    await db.record.updateMany({ where: { ...target, id }, data: { data: { name: { full: 'Ada Lovelace' }, emails: ['ada@example.com'], title: 'Countess' } } })
-    await expect(caught(submitIntake(deps, subject(target), submission({
-      email: 'ada@example.com', data: { name: { full: 'Someone Else' }, title: 'Engineer' },
-    })))).resolves.toMatchObject({ code: 'LIMIT_EXCEEDED', details: { limit: MAX_PENDING_PER_RECORD, scope: 'record' } })
-    await db.$transaction((tx) => eraseRecord(tx, person(target), schema, { id, reason: 'gdpr_request', suppress: false }))
-    expect(await db.recordProposal.count({ where: target })).toBe(0)
   })
 
   it('records the first source on a person a colleague creates with a named source', async () => {

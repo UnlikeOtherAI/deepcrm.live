@@ -208,6 +208,9 @@ enum PolicyResourceType {
   webhook
   approval
   suppression
+  // The state of a record's emails and phones (crm_contact_point_set,
+  // schema-engine §4d‴): reach, unreach, confirm, replace_others, restore.
+  contact_point
 }
 
 enum PolicyAction {
@@ -235,6 +238,16 @@ enum ApprovalStatus {
   rejected
   expired
   consumed
+}
+
+// Where a record proposal stands (schema-engine §4d″): pending in its window,
+// superseded by newer submissions past a window (still decidable until
+// retention removes it), or decided.
+enum ProposalStatus {
+  pending
+  approved
+  rejected
+  superseded
 }
 
 // What a record proposal asks a person to decide (schema-engine §4d″).
@@ -1214,26 +1227,48 @@ model IdempotencyReplay {
 // with (a real change: a non-empty value that differs from a non-empty stored
 // one), or a `match` whose email and phone point at more than one person.
 // Listed by crm_proposals_list and decided by crm_proposal_decide, as the
-// deciding person; the subject that proposed it never reads it back.
-// Raw SQL: CHECK (kind = 'amendment') = (record_id IS NOT NULL AND attribute_slug IS NOT NULL),
-//   CHECK status IN ('pending', 'approved', 'rejected') — proposals never expire or are consumed.
+// deciding person; the subject that proposed it never reads it back. A
+// submission is never refused for other proposals: an identical one (same
+// queue and proposed_hash) collapses into the open row, and past a pending
+// window (5 per queue_key, 1 000 per team) the lowest submitted_seq are
+// superseded. Writers hold the team's link-topology lock, so one open row
+// per identity and the windows hold exactly.
+// Raw SQL: CHECK (kind = 'amendment') = (record_id IS NOT NULL AND attribute_slug IS NOT NULL);
+//   INDEX record_proposals_open_identity_idx (organization_id, team_id, queue_key, proposed_hash)
+//     WHERE status IN ('pending', 'superseded');
+//   INDEX record_proposals_pending_queue_idx (organization_id, team_id, queue_key, submitted_seq)
+//     WHERE status = 'pending';
+//   INDEX record_proposals_pending_seq_idx (organization_id, team_id, submitted_seq) WHERE status = 'pending';
+//   INDEX record_proposals_superseded_idx (resolved_at) WHERE status = 'superseded'.
 model RecordProposal {
   id                String         @id @default(uuid()) @db.Uuid
   organizationId    String         @map("organization_id") @db.Uuid
   teamId            String         @map("team_id") @db.Uuid
   kind              ProposalKind
-  status            ApprovalStatus @default(pending)
+  status            ProposalStatus @default(pending)
   objectTypeId      String         @map("object_type_id") @db.Uuid
   recordId          String?        @map("record_id") @db.Uuid
   attributeSlug     String?        @map("attribute_slug")
+  // The pending window it competes in: `amendment:<record_id>:<attribute_slug>`,
+  // or `match:<sha-256 of "<email>\n<phone>">` (normalised, empty when absent).
+  queueKey          String         @map("queue_key")
   // amendment: the validated value an approval writes (for a multi attribute,
-  // the items it adds); match: the validated submission.
+  // the items it adds); match: the validated submission (the latest one's
+  // activity time, once identical submissions collapsed).
   proposed          Json
-  // sha-256 of the canonical `proposed`: one pending amendment per record,
-  // attribute and value.
+  // What makes two proposals identical within a queue: sha-256 of the
+  // attribute and value (amendment), or of the submission without its source
+  // and activity time (match).
   proposedHash      String         @map("proposed_hash")
   // match: [{ record_id, matched_on: ["email" | "phone"] }]; amendment: [].
   candidates        Json           @default("[]")
+  // How many identical submissions this proposal stands for.
+  submissions       Int            @default(1)
+  // The latest identical submission: its time and place in submission order
+  // (from a sequence, so the newest of a window is the highest).
+  lastSubmittedAt   DateTime       @default(now()) @map("last_submitted_at")
+  submittedSeq      BigInt         @default(autoincrement()) @map("submitted_seq")
+  // The latest identical submission's source and requester.
   sourceKind        String         @map("source_kind")
   sourceId          String         @map("source_id")
   sourceName        String         @map("source_name")
@@ -1241,6 +1276,8 @@ model RecordProposal {
   requesterId       String         @map("requester_id")
   requestId         String         @map("request_id")
   resolverUoaUserId String?        @map("resolver_uoa_user_id")
+  // When it left pending: decided, or superseded (retention deletes a
+  // superseded row DEEPCRM_RETENTION_DAYS after this).
   resolvedAt        DateTime?      @map("resolved_at")
   resolvedRecordId  String?        @map("resolved_record_id") @db.Uuid
   createdAt         DateTime       @default(now()) @map("created_at")

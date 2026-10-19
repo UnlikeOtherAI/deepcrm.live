@@ -208,7 +208,8 @@ async function consentOnHolder(
 }
 
 export type PairResult = {
-  filled: string[]; added: string[]; amendments: number; consent: ConsentOutcome; suppression: ConsentSuppressionChange
+  filled: string[]; added: string[]; amendments: number; superseded: number
+  consent: ConsentOutcome; suppression: ConsentSuppressionChange
 }
 
 /**
@@ -216,9 +217,9 @@ export type PairResult = {
  * resolver chose): empty fields are filled and new emails, phones and other
  * multi items are added beside the stored ones straight away, in one change
  * that names the source; a real change to a single-valued field becomes a
- * pending amendment; consent
- * lands only when this person held the email before, and the activity and
- * note are logged on them.
+ * pending amendment (never refused: past a window the oldest pending ones are
+ * superseded); consent lands only when this person held the email before,
+ * and the activity and note are logged on them.
  */
 export async function pairWithRecord(
   writer: IntakeWriter, recordId: string, submission: Submission, log: IntakeLog,
@@ -248,12 +249,13 @@ export async function pairWithRecord(
   }
   const suppression = consent === null ? 'none'
     : await settleConsentSuppression(tx, ctx, consent.act, consent.heldBefore ? recordId : null, held?.consent === 'written')
-  const amendments = await proposeAmendments(tx, ctx, writer.proposal, recordId, changes.amendments)
+  const proposals = await proposeAmendments(tx, ctx, writer.proposal, recordId, changes.amendments)
   await logSubmission(writer, recordId, log, trail)
   return {
     filled: changes.fills.map((fill) => fill.attribute.slug).sort(),
     added: changes.additions.map((addition) => addition.attribute.slug).sort(),
-    amendments,
+    amendments: proposals.placed,
+    superseded: proposals.superseded,
     consent: consent === null ? 'none' : held?.consent ?? 'no_record',
     suppression,
   }

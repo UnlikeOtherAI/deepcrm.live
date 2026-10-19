@@ -50,7 +50,7 @@ afterAll(async () => {
 })
 
 describe('daily retention', () => {
-  it('prunes expired files, deleted records, and replay rows, then schedules tomorrow', async () => {
+  it('prunes expired files, deleted records, replay rows and superseded proposals, then schedules tomorrow', async () => {
     const objectType = await db.objectType.create({ data: {
       organizationId,
       teamId,
@@ -126,6 +126,21 @@ describe('daily retention', () => {
       continuationTokenHash: `retention-${crypto.randomUUID()}`,
       expiresAt: new Date(now.getTime() - 31 * dayMs),
     } })
+    // A superseded proposal stays for the retention window after it was superseded; nothing else is pruned.
+    const proposal = (status: 'pending' | 'superseded' | 'rejected', resolvedDaysAgo: number | null, index: number) => ({
+      organizationId, teamId, kind: 'amendment' as const, status, objectTypeId: objectType.id, recordId: tombstone.id,
+      attributeSlug: 'title', queueKey: `amendment:${tombstone.id}:title`, proposed: `Title ${index}`,
+      proposedHash: `retention-${index}`, lastSubmittedAt: new Date(now.getTime() - 40 * dayMs),
+      resolvedAt: resolvedDaysAgo === null ? null : new Date(now.getTime() - resolvedDaysAgo * dayMs),
+      sourceKind: 'contact_form', sourceId: 'form', sourceName: 'Form', requesterType: 'system' as const,
+      requesterId: 'subject:nessie', requestId: `retention-${index}`,
+    })
+    const [expiredProposal, freshProposal, pendingProposal, rejectedProposal] = await Promise.all([
+      db.recordProposal.create({ data: proposal('superseded', 31, 1) }),
+      db.recordProposal.create({ data: proposal('superseded', 1, 2) }),
+      db.recordProposal.create({ data: proposal('pending', null, 3) }),
+      db.recordProposal.create({ data: proposal('rejected', 31, 4) }),
+    ])
     const controller = new AbortController()
     const worker = startWorker(
       { db, clock: () => now, ids: () => crypto.randomUUID(), writeAudit },
@@ -149,6 +164,10 @@ describe('daily retention', () => {
     expect(await db.approvalRequest.findFirst({
       where: { id: expiredApproval.id, organizationId, teamId },
     })).toBeNull()
+    const proposals = await db.recordProposal.findMany({ where: { organizationId, teamId }, select: { id: true } })
+    expect(proposals.map((row) => row.id).sort())
+      .toEqual([freshProposal.id, pendingProposal.id, rejectedProposal.id].sort())
+    expect(proposals.map((row) => row.id)).not.toContain(expiredProposal.id)
     const nextVisibleAt = new Date(now.getTime() + dayMs)
     const nextKey = `retention:${nextVisibleAt.toISOString().slice(0, 10)}`
     const next = await db.queueJob.findUnique({ where: { idempotencyKey: nextKey } })

@@ -1,141 +1,110 @@
-import { execFile as execFileCallback } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { readdir } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
-
-import { createDb, policyDefaults, seedTenant, type Db, type TenantRef } from '@deepcrm/db'
+import {
+  createDb, policyDefaults, Prisma, seedTenant,
+  type Db, type PolicyAction, type PolicyEffect, type PolicyResourceType, type TenantRef,
+} from '@deepcrm/db'
+import type { ActorContext } from '@deepcrm/schemas'
 import { describe, expect, it } from 'vitest'
 
-import { seedDefaultPolicies } from '../../src/services/policy.js'
+import { checkPolicy, seedDefaultPolicies } from '../../src/services/policy.js'
+import { deployAfter, deployBefore, migrationTestTimeout, runMigration, withDatabase } from './migration-fixture.js'
 
-// Migration 20260929120000_nessie_agent_policy_bindings on a team provisioned
-// before policy-defaults.json gained its agent:nessie:* rows: the team ends
-// with exactly the rows a fresh seed writes, so seedDefaultPolicies reports no
-// drift, and its policy_version moves once however often the migration runs.
+// The operator migrations that bring teams provisioned from an older
+// policy-defaults.json up to the current one: each team ends with exactly the
+// rows a fresh seed writes, so seedDefaultPolicies reports no drift, and its
+// policy_version moves once per migration that gave it rows, however often
+// the migration runs.
+//   20260929120000_nessie_agent_policy_bindings — the agent:nessie:* allows.
+//   20261019150100_contact_point_policy_rules — contact_point.edit for every role and for agent:nessie:*.
 
-const execFile = promisify(execFileCallback)
 const url = process.env.DATABASE_URL
 if (url === undefined) throw new Error('DATABASE_URL is required for the policy seed migration test')
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const dbDir = resolve(repoRoot, 'packages/db')
-const migrationsDir = resolve(dbDir, 'prisma/migrations')
-const schemaPath = resolve(dbDir, 'prisma/schema.prisma')
-const prismaCli = resolve(dirname(createRequire(resolve(dbDir, 'package.json')).resolve('prisma/package.json')),
-  'build/index.js')
-const migrationName = '20260929120000_nessie_agent_policy_bindings'
-const migrationTestTimeout = 240_000
+const NESSIE_MIGRATION = '20260929120000_nessie_agent_policy_bindings'
+const CONTACT_POINT_MIGRATION = '20261019150100_contact_point_policy_rules'
 const NESSIE_WILDCARD = 'agent:nessie:*'
 
-function databaseUrl(base: string, name: string): string {
-  const parsed = new URL(base)
-  parsed.pathname = `/${name}`
-  return parsed.toString()
-}
+type DefaultRule = (typeof policyDefaults.rules)[number]
 
-function quotedDatabase(name: string): string {
-  if (!/^deepcrm_w1_[0-9a-f]{32}$/u.test(name)) throw new Error('Unsafe database name')
-  return `"${name}"`
-}
+const isNessie = (rule: DefaultRule) => rule.bindings.some(
+  ([actorType, actorId]) => actorType === 'agent' && actorId === NESSIE_WILDCARD,
+)
+const isContactPoint = (rule: DefaultRule) => rule.resource_type === 'contact_point'
+const nessieRules = policyDefaults.rules.filter(isNessie)
+const contactPointRules = policyDefaults.rules.filter(isContactPoint)
 
-async function withDatabase(base: string, callback: (database: string) => Promise<void>): Promise<void> {
-  const name = `deepcrm_w1_${randomUUID().replaceAll('-', '')}`
-  const admin = createDb(databaseUrl(base, 'postgres'))
-  try {
-    await admin.$executeRawUnsafe(`CREATE DATABASE ${quotedDatabase(name)}`)
-    await callback(databaseUrl(base, name))
-  } finally {
-    await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS ${quotedDatabase(name)} WITH (FORCE)`)
-    await admin.$disconnect()
-  }
-}
-
-async function executeFile(database: string, file: string): Promise<void> {
-  try {
-    // The CLI's own entry under node: no shell, so the same call works on every platform.
-    await execFile(process.execPath, [prismaCli, 'db', 'execute', '--schema', schemaPath, '--file', file], {
-      cwd: dbDir,
-      env: { ...process.env, DATABASE_URL: database, DIRECT_DATABASE_URL: database },
-      maxBuffer: 4 * 1024 * 1024,
-    })
-  } catch (error) {
-    const output = typeof error === 'object' && error !== null && 'stderr' in error ? String(error.stderr) : ''
-    throw new Error(`prisma db execute failed for ${file}\n${output.replaceAll(database, '[DATABASE_URL]')}`, {
-      cause: error,
-    })
-  }
-}
-
-async function deployBeforeMigration(database: string): Promise<void> {
-  const names = (await readdir(migrationsDir, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name < migrationName)
-    .map((entry) => entry.name)
-    .sort()
-  for (const name of names) await executeFile(database, resolve(migrationsDir, name, 'migration.sql'))
-}
-
-async function runMigration(database: string): Promise<void> {
-  await executeFile(database, resolve(migrationsDir, migrationName, 'migration.sql'))
-}
-
-/** A team provisioned from the pre-migration JSON: the seed minus its agent:nessie:* rows. */
-async function legacyTeam(db: Db): Promise<TenantRef> {
+/** A team provisioned from an older JSON: the current seed without the rules later migrations add. */
+async function legacyTeam(db: Db, rules: readonly DefaultRule[]): Promise<TenantRef> {
   const seeded = await seedTenant(db)
   const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
-  await db.$transaction((tx) => seedDefaultPolicies(tx, tenant))
-  await db.policyRule.deleteMany({ where: {
-    ...tenant, bindings: { some: { actorType: 'agent', actorId: NESSIE_WILDCARD } },
-  } })
+  for (const rule of rules) {
+    await db.policyRule.create({ data: {
+      ...tenant, scope: 'team', scopeId: tenant.teamId,
+      resourceType: rule.resource_type as PolicyResourceType,
+      action: rule.action as PolicyAction,
+      effect: rule.effect as PolicyEffect,
+      priority: rule.priority,
+      requiresApproval: 'requires_approval' in rule && rule.requires_approval === true,
+      conditions: 'conditions' in rule ? rule.conditions : Prisma.DbNull,
+      createdById: 'system',
+      bindings: { create: rule.bindings.map(([actorType, actorId]) => {
+        if (actorType === undefined || actorId === undefined) throw new Error('policy-defaults.json binding is malformed')
+        return { actorType, actorId }
+      }) },
+    } })
+  }
   await db.team.update({ where: { id: tenant.teamId }, data: { policyVersion: 1 } })
   return tenant
 }
 
 async function teamState(db: Db, tenant: TenantRef) {
-  const [rules, nessie, team] = await Promise.all([
+  const [rules, nessie, contactPoint, team] = await Promise.all([
     db.policyRule.count({ where: tenant }),
     db.policyRule.count({ where: {
       ...tenant, bindings: { some: { actorType: 'agent', actorId: NESSIE_WILDCARD } },
     } }),
+    // As text: before 20261019150000 the enum has no contact_point value to compare with.
+    db.$queryRaw<Array<{ count: bigint }>>`
+      SELECT count(*)::bigint AS count FROM policy_rules
+      WHERE organization_id = ${tenant.organizationId}::uuid AND team_id = ${tenant.teamId}::uuid
+        AND resource_type::text = 'contact_point'
+    `,
     db.team.findUniqueOrThrow({ where: { id: tenant.teamId }, select: { policyVersion: true } }),
   ])
-  return { rules, nessie, policyVersion: team.policyVersion }
+  return { rules, nessie, contactPoint: Number(contactPoint[0]?.count), policyVersion: team.policyVersion }
 }
 
-const nessieRules = policyDefaults.rules.filter((rule) => rule.bindings.some(
-  ([actorType, actorId]) => actorType === 'agent' && actorId === NESSIE_WILDCARD,
-))
+function nessieAgent(tenant: TenantRef, role: 'member' | 'admin'): ActorContext {
+  return {
+    tenant, app: 'nessie', actChain: [], actor: { type: 'agent', id: 'agent_clients' },
+    onBehalfOf: { uoaUserId: 'uoa_member', role }, provenance: null, requestId: crypto.randomUUID(), now: new Date(),
+  }
+}
 
-describe('nessie agent policy bindings migration', () => {
-  it('seeds the wildcard into existing seeded teams without drift and re-runs as a no-op', async () => {
-    expect(nessieRules).toHaveLength(26)
+const contactPointEdit = (tenant: TenantRef) => ({
+  resourceType: 'contact_point' as const, action: 'edit' as const, sensitivity: 'confidential' as const,
+  scopes: [{ scope: 'team' as const, id: tenant.teamId }],
+})
+
+describe('policy seed migrations', () => {
+  it('seeds the nessie wildcard into existing seeded teams without drift and re-runs as a no-op', async () => {
+    expect(nessieRules).toHaveLength(27)
+    expect(nessieRules.filter((rule) => !isContactPoint(rule))).toHaveLength(26)
     await withDatabase(url, async (database) => {
-      await deployBeforeMigration(database)
+      await deployBefore(database, NESSIE_MIGRATION)
       const db = createDb(database)
       try {
-        const first = await legacyTeam(db)
-        const second = await legacyTeam(db)
+        const before = policyDefaults.rules.filter((rule) => !isNessie(rule) && !isContactPoint(rule))
+        const first = await legacyTeam(db, before)
+        const second = await legacyTeam(db, before)
         const unseededTeam = await seedTenant(db)
         const unseeded = { organizationId: unseededTeam.organizationId, teamId: unseededTeam.teamId }
-        const legacyRules = policyDefaults.rules.length - nessieRules.length
-        expect(await teamState(db, first)).toEqual({ rules: legacyRules, nessie: 0, policyVersion: 1 })
+        expect(await teamState(db, first)).toEqual({ rules: before.length, nessie: 0, contactPoint: 0, policyVersion: 1 })
 
-        await runMigration(database)
-        for (const team of [first, second]) {
-          expect(await teamState(db, team)).toEqual({
-            rules: policyDefaults.rules.length, nessie: 26, policyVersion: 2,
-          })
-          await expect(db.$transaction((tx) => seedDefaultPolicies(tx, team))).resolves.toEqual({ seeded: false })
-        }
-        expect(await teamState(db, unseeded)).toEqual({ rules: 0, nessie: 0, policyVersion: 0 })
-
-        await runMigration(database)
-        for (const team of [first, second]) {
-          expect(await teamState(db, team)).toEqual({
-            rules: policyDefaults.rules.length, nessie: 26, policyVersion: 2,
-          })
-        }
+        const afterNessie = { rules: before.length + 26, nessie: 26, contactPoint: 0, policyVersion: 2 }
+        await runMigration(database, NESSIE_MIGRATION)
+        for (const team of [first, second]) expect(await teamState(db, team)).toEqual(afterNessie)
+        expect(await teamState(db, unseeded)).toEqual({ rules: 0, nessie: 0, contactPoint: 0, policyVersion: 0 })
+        await runMigration(database, NESSIE_MIGRATION)
+        for (const team of [first, second]) expect(await teamState(db, team)).toEqual(afterNessie)
         const bindings = await db.$queryRaw<Array<{ count: bigint }>>`
           SELECT count(*)::bigint AS count FROM policy_bindings b
           JOIN policy_rules r ON r.id = b.policy_rule_id
@@ -143,6 +112,58 @@ describe('nessie agent policy bindings migration', () => {
             AND b.actor_type = 'agent' AND b.actor_id = ${NESSIE_WILDCARD}
         `
         expect(bindings[0]?.count).toBe(26n)
+
+        // The later migrations bring the same teams to today's defaults.
+        await deployAfter(database, NESSIE_MIGRATION)
+        for (const team of [first, second]) {
+          expect(await teamState(db, team)).toEqual({
+            rules: policyDefaults.rules.length, nessie: 27, contactPoint: 2, policyVersion: 3,
+          })
+          await expect(db.$transaction((tx) => seedDefaultPolicies(tx, team))).resolves.toEqual({ seeded: false })
+        }
+        expect(await teamState(db, unseeded)).toEqual({ rules: 0, nessie: 0, contactPoint: 0, policyVersion: 0 })
+      } finally {
+        await db.$disconnect()
+      }
+    })
+  }, migrationTestTimeout)
+
+  it('grants contact_point.edit to every role and the nessie wildcard on existing seeded teams', async () => {
+    expect(contactPointRules.map((rule) => [rule.effect, rule.bindings.map(([type, id]) => `${type}:${id}`).sort()]))
+      .toEqual([['allow', ['role:admin', 'role:member', 'role:owner']], ['allow', [`agent:${NESSIE_WILDCARD}`]]])
+    await withDatabase(url, async (database) => {
+      await deployBefore(database, CONTACT_POINT_MIGRATION)
+      const db = createDb(database)
+      try {
+        const before = policyDefaults.rules.filter((rule) => !isContactPoint(rule))
+        const legacy = await legacyTeam(db, before)
+        const currentTeam = await seedTenant(db)
+        const current = { organizationId: currentTeam.organizationId, teamId: currentTeam.teamId }
+        await db.$transaction((tx) => seedDefaultPolicies(tx, current))
+        const unseededTeam = await seedTenant(db)
+        const unseeded = { organizationId: unseededTeam.organizationId, teamId: unseededTeam.teamId }
+        // Before: the human side falls back to allow for edit, but the agent side never falls back.
+        await expect(checkPolicy(db, nessieAgent(legacy, 'member'), contactPointEdit(legacy)))
+          .resolves.toEqual({ allowed: false, requiresApproval: false })
+
+        await runMigration(database, CONTACT_POINT_MIGRATION)
+        const migrated = { rules: policyDefaults.rules.length, nessie: 27, contactPoint: 2, policyVersion: 2 }
+        expect(await teamState(db, legacy)).toEqual(migrated)
+        await expect(db.$transaction((tx) => seedDefaultPolicies(tx, legacy))).resolves.toEqual({ seeded: false })
+        expect(await teamState(db, current)).toEqual({ ...migrated, policyVersion: 0 })
+        expect(await teamState(db, unseeded)).toEqual({ rules: 0, nessie: 0, contactPoint: 0, policyVersion: 0 })
+        for (const role of ['member', 'admin'] as const) {
+          await expect(checkPolicy(db, nessieAgent(legacy, role), contactPointEdit(legacy)))
+            .resolves.toEqual({ allowed: true, requiresApproval: false })
+        }
+        // Nothing else moved: a member still may not edit a confidential attribute.
+        await expect(checkPolicy(db, nessieAgent(legacy, 'member'), {
+          ...contactPointEdit(legacy), resourceType: 'attribute',
+        })).resolves.toEqual({ allowed: false, requiresApproval: false })
+
+        await runMigration(database, CONTACT_POINT_MIGRATION)
+        expect(await teamState(db, legacy)).toEqual(migrated)
+        expect(await teamState(db, current)).toEqual({ ...migrated, policyVersion: 0 })
       } finally {
         await db.$disconnect()
       }

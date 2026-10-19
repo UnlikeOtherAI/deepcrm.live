@@ -33,8 +33,10 @@ const TRANSACTION = { timeout: 30_000 }
 
 type ProposalRow = Prisma.RecordProposalGetPayload<Record<string, never>>
 
-function notPending(): ServiceError {
-  return new ServiceError(ErrorCode.NOT_FOUND, 'Pending proposal not found')
+// Pending and superseded proposals are open: a newer submission pushing one
+// out of its window never takes the decision away from a person.
+function notOpen(): ServiceError {
+  return new ServiceError(ErrorCode.NOT_FOUND, 'Open proposal not found')
 }
 
 function sourceOf(row: ProposalRow): SourceRef {
@@ -42,7 +44,7 @@ function sourceOf(row: ProposalRow): SourceRef {
 }
 
 /**
- * Settles a pending proposal in the caller's transaction, as the deciding
+ * Settles an open proposal in the caller's transaction, as the deciding
  * person, with its audit row; a proposal another decision settled first is
  * `NOT_FOUND`, and the whole transaction rolls back.
  */
@@ -53,12 +55,12 @@ async function settle(
   const resolver = requireOnBehalfOf(ctx).uoaUserId
   const updated = await tx.$executeRaw`
     UPDATE record_proposals
-    SET status = ${status}::"ApprovalStatus", resolver_uoa_user_id = ${resolver},
+    SET status = ${status}::"ProposalStatus", resolver_uoa_user_id = ${resolver},
         resolved_at = ${ctx.now}, resolved_record_id = ${recordId}::uuid
     WHERE organization_id = ${ctx.tenant.organizationId}::uuid AND team_id = ${ctx.tenant.teamId}::uuid
-      AND id = ${row.id}::uuid AND status = 'pending'::"ApprovalStatus"
+      AND id = ${row.id}::uuid AND status IN ('pending'::"ProposalStatus", 'superseded'::"ProposalStatus")
   `
-  if (updated !== 1) throw notPending()
+  if (updated !== 1) throw notOpen()
   await deps.writeAudit(tx, {
     organizationId: ctx.tenant.organizationId,
     teamId: ctx.tenant.teamId,
@@ -73,6 +75,7 @@ async function settle(
     metadata: {
       ...recordAuditMetadata(ctx), kind: row.kind, record_id: recordId ?? row.recordId,
       attribute: row.attributeSlug, source: { kind: row.sourceKind, id: row.sourceId, name: row.sourceName },
+      previous_status: row.status, submissions: row.submissions,
     },
     requestId: ctx.requestId,
     ipAddress: null,
@@ -184,9 +187,13 @@ async function approveMatch(
         objectTypeId: target.objectType.id,
       },
     }
-    const recordId = input.record_id === undefined
-      ? (await createPerson(writer, submission, log, null, trail)).recordId
-      : (await pairWithRecord(writer, input.record_id, submission, log, null, trail), input.record_id)
+    const resolved = input.record_id === undefined
+      ? { recordId: (await createPerson(writer, submission, log, null, trail)).recordId, superseded: 0 }
+      : {
+        recordId: input.record_id,
+        superseded: (await pairWithRecord(writer, input.record_id, submission, log, null, trail)).superseded,
+      }
+    const { recordId } = resolved
     if (trail.sequences.length > 0) {
       await enqueueRecordMutationEffects(tx, ctx, trail.sequences, [...new Set(trail.touched)].sort())
     }
@@ -194,7 +201,10 @@ async function approveMatch(
       organizationId: ctx.tenant.organizationId, teamId: ctx.tenant.teamId,
       actorType: ctx.actor.type, actorId: ctx.actor.id, onBehalfOf: requireOnBehalfOf(ctx).uoaUserId,
       action: TOOL, resourceType: 'record', resourceId: recordId, outcome: 'success', reason: input.reason ?? null,
-      metadata: { ...recordAuditMetadata(ctx), proposal: row.id, created: input.record_id === undefined },
+      metadata: {
+        ...recordAuditMetadata(ctx), proposal: row.id, created: input.record_id === undefined,
+        superseded: resolved.superseded,
+      },
       requestId: ctx.requestId, ipAddress: null, userAgent: null,
     })
     await settle(deps, tx, ctx, row, 'approved', recordId, input.reason)
@@ -203,20 +213,20 @@ async function approveMatch(
 }
 
 /**
- * Decides one pending proposal as the calling person (schema-engine §4d″):
- * approving an amendment writes its value; approving a match pairs the
- * submission with `record_id` or creates the person; rejecting writes
- * nothing to the record. Policy, visibility and history are those of the
- * equivalent human writes.
+ * Decides one open proposal — pending, or superseded and not yet removed by
+ * retention — as the calling person (schema-engine §4d″): approving an
+ * amendment writes its value; approving a match pairs the submission with
+ * `record_id` or creates the person; rejecting writes nothing to the record.
+ * Policy, visibility and history are those of the equivalent human writes.
  */
 export async function decideProposal(
   deps: AppDeps, ctx: ActorContext, input: CrmProposalDecideInput,
 ): Promise<CrmProposalDecideOutput> {
   requireOnBehalfOf(ctx)
   const row = await deps.db.recordProposal.findFirst({
-    where: { ...tenantWhere(ctx.tenant), id: input.id, status: 'pending' },
+    where: { ...tenantWhere(ctx.tenant), id: input.id, status: { in: ['pending', 'superseded'] } },
   })
-  if (row === null) throw notPending()
+  if (row === null) throw notOpen()
   if (row.kind === 'amendment' && input.record_id !== undefined) {
     throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Proposal decision is invalid', {
       issues: [{ path: '/record_id', message: 'only approving a match names a record' }],

@@ -69,9 +69,9 @@ async function expectProvisioned(
   ])
 
   expect({ objects, attributes, relations }).toEqual({ objects: 3, attributes: 18, relations: 3 })
-  // 31 human rules (62 role bindings) plus one agent:nessie:* allow per requested pair.
-  expect(rules).toHaveLength(57)
-  expect(rules.reduce((count, rule) => count + rule.bindings.length, 0)).toBe(88)
+  // 32 human rules (65 role bindings) plus one agent:nessie:* allow per requested pair (27).
+  expect(rules).toHaveLength(59)
+  expect(rules.reduce((count, rule) => count + rule.bindings.length, 0)).toBe(92)
   expect(team).toMatchObject({ schemaVersion: 1, policyVersion: 1 })
   expect(audits).toHaveLength(1)
   expect(audits[0]).toMatchObject({

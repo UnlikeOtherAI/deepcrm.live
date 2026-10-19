@@ -22,7 +22,7 @@ export function registerContactPointTools(
   })
   defineTool(server, {
     name: 'crm_contact_point_set', title: 'Update an email or phone', group: 'records', access: 'standard',
-    description: 'Act on one email or phone as yourself: reach (successful contact; confirms it; optional note), unreach (undo), confirm (keep as additional), replace_others (keep it, archive every other active value) or restore an archived one. Returns that attribute\'s state.',
+    description: 'Act on one email or phone as yourself: reach (successful contact; confirms it; optional note), unreach (undo), confirm (keep as additional), replace_others (keep it, archive the other active values) or restore an archived one. Any member who may edit the record may. Returns that attribute\'s state.',
     input: CrmContactPointSet.in.shape,
     handler: async (args) => jsonResult(await setContactPoint(deps, ctx, args)),
   })

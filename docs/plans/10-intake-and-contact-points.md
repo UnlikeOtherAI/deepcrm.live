@@ -31,3 +31,24 @@ pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md
 ```
 
 Every command exits 0.
+
+### T72 — Intake follow-ups: members act on contact points; bounded proposal queues
+
+**Depends on:** T71. **Spec:** `docs/schema-engine.md` §4d″ (Proposals, `crm_proposals_list`, `crm_proposal_decide`) and §4d‴ (who may act on a contact point); `docs/auth-and-tenancy.md` §4 (`contact_point.edit`); `docs/spec/policy-defaults.json`; `docs/spec/nessie-integration.md` §9; `docs/spec/contracts.md` (`ProposalItem`, `CrmProposalsList`, `CrmProposalDecide`). Contract source: the owner's decisions on PR #5 (2026-10-19) — any team member may replace and restore contact points; a flood of public submissions must never block a person's real changes.
+
+**Files:** `packages/db/prisma/schema.prisma` (`PolicyResourceType.contact_point`, `ProposalStatus`, the `record_proposals` queue columns); `packages/db/prisma/migrations/20261019150000_contact_point_policy_resource`, `20261019150100_contact_point_policy_rules`, `20261019160000_proposal_queue`; `packages/db/src/policy-defaults.json` and `docs/spec/policy-defaults.json`; `packages/schemas/src/tools-intake.ts`; `api/src/services/policy.ts`, `contact-points.ts`, `proposal-store.ts`, `proposal-decide.ts`, `proposals.ts`, `intake.ts`, `intake-write.ts`; `api/src/mcp/tools/intake.ts`, `contact-points.ts`; `worker/src/jobs/retention.ts`.
+
+**Ops:** none beyond the deploy's `prisma migrate deploy`: the policy migration gives every seeded team the two `contact_point.edit` rules (one `policy_version` bump), and the queue migration backfills existing proposals and applies the windows.
+
+**Acceptance:** with `DATABASE_URL` exported on a fresh database:
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm build
+pnpm exec turbo run test --concurrency=1
+node scripts/verify-audit-chain.mjs
+pnpm docs:mcp && git diff --exit-code docs/mcp-surface.md
+```
+
+Every command exits 0.

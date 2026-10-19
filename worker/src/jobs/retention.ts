@@ -81,6 +81,8 @@ export function createRetentionHandler(config: RetentionConfig): JobHandler {
       await tx.$executeRaw`DELETE FROM idempotency_replays WHERE created_at < ${replayCutoff}`
       await tx.$executeRaw`DELETE FROM queue_jobs WHERE status = 'completed' AND updated_at < ${completedJobCutoff}`
       await tx.$executeRaw`DELETE FROM approval_requests WHERE expires_at < ${approvalCutoff}`
+      // A proposal newer submissions superseded stays listable and decidable for the soft-delete window.
+      await tx.$executeRaw`DELETE FROM record_proposals WHERE status = 'superseded' AND resolved_at < ${recordCutoff}`
       await scheduleRetention(tx, new Date(now.getTime() + DAY_MS))
     })
   }
