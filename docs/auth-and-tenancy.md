@@ -101,6 +101,7 @@ Tables `policy_rules` and `policy_bindings` as in nessie (`docs/schema-engine.md
 ```
 PolicyScope        team | object_type | record | list        (organization scope deferred — per-team rows cannot express it coherently; review S10.3)
 PolicyResourceType schema | object_type | attribute | record | link | list | view | merge | export | webhook | approval
+                   | suppression | contact_point
 PolicyAction       view | create | edit | delete | restore | link | merge | export | define | admin
 PolicyEffect       allow | deny
 actorType          human | agent | role
@@ -135,8 +136,11 @@ Defaults seeded per team on first resolve, from `docs/spec/policy-defaults.json`
 | webhook.admin | deny | allow (approval — registration replays data outward; review S6.2) |
 | attribute.view where sensitivity=restricted | deny | allow |
 | attribute.edit where sensitivity=confidential | deny | allow |
+| contact_point.edit (any sensitivity) | allow | allow |
 
-and, on the agent side, `agent:nessie:*` holds an unconditioned `allow` for every requested pair (record view/create/edit/link/delete/restore/erase, link view/link, list view/create/edit, view view/create/edit, schema view/define, attribute view/edit, merge, export, webhook admin, suppression view/create/admin, approval admin). New teams receive them from the seed; existing teams received them from migration `20260929120000_nessie_agent_policy_bindings`, which matches the seed exactly and bumps `policy_version` once.
+and, on the agent side, `agent:nessie:*` holds an unconditioned `allow` for every requested pair (record view/create/edit/link/delete/restore/erase, link view/link, list view/create/edit, view view/create/edit, schema view/define, attribute view/edit, merge, export, webhook admin, suppression view/create/admin, approval admin, contact_point edit). New teams receive them from the seed; existing teams received them from migration `20260929120000_nessie_agent_policy_bindings` (and the contact-point rows from `20261019150100_contact_point_policy_rules`), each matching the seed exactly and bumping `policy_version` once.
+
+`contact_point.edit` is what `crm_contact_point_set` asks for, with the attribute's sensitivity, beside `record.edit` and attribute view (schema-engine §4d‴) — never `attribute.edit`. Every role may reach, unreach, confirm, replace and restore a record's emails and phones, a confidential `phones` included, because `replace_others` only archives values the record already holds and `restore` only brings back a value archived on it: neither writes a value of the caller's choosing. Nothing else about confidential attributes changes — a member still may not edit one with `crm_record_update` (or any other write), nor view a restricted one, and attribute view still gates every contact-point action.
 
 "deny (approval)" means the tool returns MRTR `input_required` (spec-shaped elicitation + `requestState`, see `mcp-surface.md` §0.4) instead of a hard denial, creating an `approval_requests` row. Approval mechanics (normative, reviews S3.1–S3.5, C8):
 

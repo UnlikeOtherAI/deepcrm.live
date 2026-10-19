@@ -32,9 +32,7 @@ import { loadPolicyEvaluator, type PolicyEvaluator, type PolicyRequest, type Pol
 import { recordBoundary } from './record-boundary.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
 import { requireVisibleRecord } from './record-visibility.js'
-import {
-  attributePolicies, authorizeRecordWrite, recordAuditMetadata, recordPolicy, recordScopes,
-} from './record-write-authorization.js'
+import { authorizeRecordWrite, recordAuditMetadata, recordPolicy, recordScopes } from './record-write-authorization.js'
 
 const TOOL = 'crm_contact_point_set'
 type ReadDb = Pick<Db, 'recordContactPoint' | 'record'>
@@ -85,6 +83,16 @@ function attributeView(
 
 function attributeRequest(scopes: PolicyScopeRef[], attribute: LoadedAttribute): PolicyRequest {
   return { resourceType: 'attribute', action: 'view', scopes, sensitivity: attribute.sensitivity }
+}
+
+/**
+ * Acting on a contact point is its own permission, not `attribute.edit`:
+ * replace_others only archives values the record holds and restore only
+ * brings back one archived on it, so neither writes a value of the caller's
+ * choosing. The seeded defaults allow it to every role (auth-and-tenancy §4).
+ */
+function contactPointRequest(scopes: PolicyScopeRef[], attribute: LoadedAttribute): PolicyRequest {
+  return { resourceType: 'contact_point', action: 'edit', scopes, sensitivity: attribute.sensitivity }
 }
 
 function allowed(evaluator: PolicyEvaluator, request: PolicyRequest): boolean {
@@ -160,10 +168,11 @@ function contactAttribute(objectType: LoadedObjectType, slug: string): LoadedAtt
 
 /**
  * Changes one email's or phone's state as the calling person, in one
- * transaction with its change rows and audit: reach / unreach / confirm need
- * `record.edit`; replace_others and restore write the attribute, so they
- * also need attribute edit for its sensitivity. Viewing the attribute is
- * required for all. Answers that attribute's state after the change.
+ * transaction with its change rows and audit. Every action needs
+ * `record.edit` on the record, attribute view and `contact_point.edit` for
+ * the attribute's sensitivity — never `attribute.edit`, so a member who may
+ * not edit a confidential attribute may still replace and restore its
+ * values. Answers that attribute's state after the change.
  */
 export async function setContactPoint(
   deps: AppDeps, ctx: ActorContext, input: CrmContactPointSetInput,
@@ -175,11 +184,9 @@ export async function setContactPoint(
   if (objectType === undefined) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const attribute = contactAttribute(objectType, input.attribute)
   const scopes = recordScopes(ctx, visible)
-  const writes = input.action === 'replace_others' || input.action === 'restore'
   const descriptor = { tool: TOOL, reason: input.reason, resourceId: visible.id }
   await authorizeRecordWrite(deps, ctx, descriptor, [
-    recordPolicy('edit', scopes), attributeRequest(scopes, attribute),
-    ...(writes ? attributePolicies(schema, objectType.id, { [attribute.slug]: null }, scopes) : []),
+    recordPolicy('edit', scopes), attributeRequest(scopes, attribute), contactPointRequest(scopes, attribute),
   ])
   const evaluator = await loadPolicyEvaluator(deps.db, ctx, [attributeRequest(scopes, attribute)])
   return recordBoundary(deps.db, deps.ids, ctx, () => deps.db.$transaction(async (tx) => {

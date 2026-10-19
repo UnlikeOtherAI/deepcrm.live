@@ -86,6 +86,7 @@ function parseResourceType(value: unknown): PolicyResourceType {
     case 'webhook':
     case 'approval':
     case 'suppression':
+    case 'contact_point':
       return value
     default:
       throw invalidDefault('resource_type')

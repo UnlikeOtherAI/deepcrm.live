@@ -2,6 +2,7 @@ import { eraseRecord, executeMerge, loadSchema, suppressionHash } from '@deepcrm
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { getContactPoints, setContactPoint } from '../../src/services/contact-points.js'
+import { checkPolicy } from '../../src/services/policy.js'
 import { submitIntake } from '../../src/services/intake.js'
 import { createRecord, updateRecord } from '../../src/services/records.js'
 import { withFirstSource } from '../../src/services/record-source.js'
@@ -104,25 +105,62 @@ describe('contact points', () => {
       .resolves.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  it('replaces every other number at once, keeps them archived and restores one', async () => {
+  it('lets any team member replace every other number at once, keep them archived and restore one', async () => {
     const target = await tenant()
     const created = await createRecord(deps, person(target), {
       objectType: 'person', data: { name: { full: 'Ada' }, phones: [A, B, C] },
     })
     const id = created.record.id
+    // phones is confidential: a member may not edit it, yet may replace and restore its values.
     const member = person(target, 'member', 'uoa_member')
-    await expect(caught(setContactPoint(deps, member, { record_id: id, attribute: 'phones', value: B, action: 'replace_others' })))
-      .resolves.toMatchObject({ code: 'POLICY_DENIED' })
-    const replaced = await setContactPoint(deps, person(target), { record_id: id, attribute: 'phones', value: B, action: 'replace_others' })
+    const replaced = await setContactPoint(deps, member, { record_id: id, attribute: 'phones', value: B, action: 'replace_others' })
     expect(replaced.attribute.values.map((value) => value.value)).toEqual([B])
     expect(replaced.attribute.archived.map((value) => value.value).sort()).toEqual([A, C].sort())
-    expect(replaced.attribute.archived[0]).toMatchObject({ archived: { at: expect.any(String), by: { type: 'human', id: 'uoa_admin' } } })
+    expect(replaced.attribute.archived[0]).toMatchObject({ archived: { at: expect.any(String), by: { type: 'human', id: 'uoa_member' } } })
     expect(await personData(target, id)).toMatchObject({ phones: [B] })
-    const restored = await setContactPoint(deps, person(target), { record_id: id, attribute: 'phones', value: A, action: 'restore' })
+    const restored = await setContactPoint(deps, member, { record_id: id, attribute: 'phones', value: A, action: 'restore' })
     expect(restored.attribute.values.map((value) => value.value)).toEqual([B, A])
     expect(restored.attribute.archived.map((value) => value.value)).toEqual([C])
-    await expect(caught(setContactPoint(deps, person(target), { record_id: id, attribute: 'phones', value: A, action: 'restore' })))
+    expect(await personData(target, id)).toMatchObject({ phones: [B, A] })
+    const written = await db.recordChange.findMany({
+      where: { ...target, recordId: id, attributeSlug: 'phones', actorId: 'uoa_member' }, select: { onBehalfOf: true },
+    })
+    expect(written).toEqual([{ onBehalfOf: 'uoa_member' }, { onBehalfOf: 'uoa_member' }])
+    await expect(caught(setContactPoint(deps, member, { record_id: id, attribute: 'phones', value: A, action: 'restore' })))
       .resolves.toMatchObject({ code: 'NOT_FOUND' })
+    // An admin keeps every action too.
+    await expect(setContactPoint(deps, person(target), { record_id: id, attribute: 'phones', value: C, action: 'restore' }))
+      .resolves.toMatchObject({ attribute: { values: [expect.objectContaining({ value: B }), expect.objectContaining({ value: A }),
+        expect.objectContaining({ value: C })] } })
+  })
+
+  it('still refuses a member every other edit of a confidential attribute', async () => {
+    const target = await tenant()
+    const member = person(target, 'member', 'uoa_member')
+    const ada = await createRecord(deps, person(target), {
+      objectType: 'person', data: { name: { full: 'Ada' }, phones: [A, B] },
+    })
+    const company = await createRecord(deps, person(target), {
+      objectType: 'company', data: { name: 'Analytical Engines', annual_revenue: { amount: '1000', currency: 'GBP' } },
+    })
+    await expect(caught(updateRecord(deps, member, { recordId: ada.record.id, data: { phones: [C] } })))
+      .resolves.toMatchObject({ code: 'POLICY_DENIED', details: { resource: 'attribute', action: 'edit' } })
+    await expect(caught(updateRecord(deps, member, {
+      recordId: company.record.id, data: { annual_revenue: { amount: '9', currency: 'GBP' } },
+    }))).resolves.toMatchObject({ code: 'POLICY_DENIED', details: { resource: 'attribute', action: 'edit' } })
+    // The contact-point permission reaches emails and phones only.
+    await expect(caught(setContactPoint(deps, member, {
+      record_id: company.record.id, attribute: 'annual_revenue', value: '9', action: 'restore',
+    }))).resolves.toMatchObject({ code: 'VALIDATION_FAILED' })
+    const policy = { scopes: [{ scope: 'team' as const, id: target.teamId }] }
+    await expect(checkPolicy(db, member, { ...policy, resourceType: 'attribute', action: 'edit', sensitivity: 'confidential' }))
+      .resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, member, { ...policy, resourceType: 'attribute', action: 'view', sensitivity: 'restricted' }))
+      .resolves.toEqual({ allowed: false, requiresApproval: false })
+    await expect(checkPolicy(db, member, { ...policy, resourceType: 'contact_point', action: 'edit', sensitivity: 'confidential' }))
+      .resolves.toEqual({ allowed: true, requiresApproval: false })
+    expect(await personData(target, ada.record.id)).toMatchObject({ phones: [A, B] })
+    expect(await personData(target, company.record.id)).toMatchObject({ annual_revenue: { amount: '1000', currency: 'GBP' } })
   })
 
   it('matches an archived number to its person but never pairs on it alone, nor writes it back', async () => {

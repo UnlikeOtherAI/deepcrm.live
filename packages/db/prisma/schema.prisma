@@ -208,6 +208,9 @@ enum PolicyResourceType {
   webhook
   approval
   suppression
+  // The state of a record's emails and phones (crm_contact_point_set,
+  // schema-engine §4d‴): reach, unreach, confirm, replace_others, restore.
+  contact_point
 }
 
 enum PolicyAction {

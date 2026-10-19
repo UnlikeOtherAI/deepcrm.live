@@ -420,6 +420,26 @@
       ]
     },
     {
+      "resource_type": "contact_point",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "role",
+          "member"
+        ],
+        [
+          "role",
+          "admin"
+        ],
+        [
+          "role",
+          "owner"
+        ]
+      ]
+    },
+    {
       "resource_type": "record",
       "action": "erase",
       "effect": "deny",
@@ -747,6 +767,18 @@
       ]
     },
     {
+      "resource_type": "contact_point",
+      "action": "edit",
+      "effect": "allow",
+      "priority": 0,
+      "bindings": [
+        [
+          "agent",
+          "agent:nessie:*"
+        ]
+      ]
+    },
+    {
       "resource_type": "merge",
       "action": "merge",
       "effect": "allow",
@@ -832,5 +864,6 @@
     }
   ],
   "agent_inheritance": "An agent acting for a human is evaluated against BOTH sides. The human side is the human's own role and human bindings, with the same no-rule fallback a human gets. The agent side is the rules bound to agent:<app>:<agentId> or to the app wildcard agent:<app>:*. A deny from either side denies, so a per-agent deny beats the wildcard, and an approval requirement from either side applies. Agents hold no standing rights of their own: an app with no agent binding (DeepSignal today) is refused everything. The nessie app is seeded with an unconditioned agent:nessie:* allow for every pair the code requests, so a Nessie agent may do exactly what the person it acts for may do; which tools the agent holds at all is Nessie's grant.",
-  "notes_compliance": "record.erase: owner-only and still approval-gated (a second person confirms; single-owner teams fall back to the same owner confirming through the elicitation — the audit trail is the control). suppression.create is member-open on purpose: recording an objection must never be blocked. suppression.admin (= remove) is owner + approval."
+  "notes_compliance": "record.erase: owner-only and still approval-gated (a second person confirms; single-owner teams fall back to the same owner confirming through the elicitation — the audit trail is the control). suppression.create is member-open on purpose: recording an objection must never be blocked. suppression.admin (= remove) is owner + approval.",
+  "notes_contact_points": "contact_point.edit (crm_contact_point_set: reach, unreach, confirm, replace_others, restore) is open to every role whatever the attribute's sensitivity, separately from attribute.edit: replace_others only archives values the record already holds and restore only brings back a value archived on it, so neither writes a value of the caller's choosing. Viewing the attribute (attribute.view) and record.edit are still required, and attribute.edit on confidential attributes stays admin/owner for every other write."
 }
