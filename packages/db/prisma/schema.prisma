@@ -237,6 +237,12 @@ enum ApprovalStatus {
   consumed
 }
 
+// What a record proposal asks a person to decide (schema-engine §4d″).
+enum ProposalKind {
+  amendment
+  match
+}
+
 enum AuditOutcome {
   success
   denied
@@ -590,6 +596,7 @@ model Record {
   visibilityGrants  RecordVisibilityGrant[]
   listEntries       ListEntry[]
   stageHistory      RecordStageHistory[]
+  proposals         RecordProposal[]
   fileLinks         FileLink[]              @relation("FileRecordLinks")
   subjectEvents     Event[]
 
@@ -1198,4 +1205,46 @@ model IdempotencyReplay {
 
   @@unique([organizationId, teamId, principalUserId, tool, key])
   @@map("idempotency_replays")
+}
+
+// A change a data subject's submission would make that waits for a person
+// (schema-engine §4d″): an `amendment` to one field of the record it paired
+// with (a real change: a non-empty value that differs from a non-empty stored
+// one), or a `match` whose email and phone point at more than one person.
+// Listed by crm_proposals_list and decided by crm_proposal_decide, as the
+// deciding person; the subject that proposed it never reads it back.
+// Raw SQL: CHECK (kind = 'amendment') = (record_id IS NOT NULL AND attribute_slug IS NOT NULL),
+//   CHECK status IN ('pending', 'approved', 'rejected') — proposals never expire or are consumed.
+model RecordProposal {
+  id                String         @id @default(uuid()) @db.Uuid
+  organizationId    String         @map("organization_id") @db.Uuid
+  teamId            String         @map("team_id") @db.Uuid
+  kind              ProposalKind
+  status            ApprovalStatus @default(pending)
+  objectTypeId      String         @map("object_type_id") @db.Uuid
+  recordId          String?        @map("record_id") @db.Uuid
+  attributeSlug     String?        @map("attribute_slug")
+  // amendment: the validated value an approval writes (for a multi attribute,
+  // the items it adds); match: the validated submission.
+  proposed          Json
+  // sha-256 of the canonical `proposed`: one pending amendment per record,
+  // attribute and value.
+  proposedHash      String         @map("proposed_hash")
+  // match: [{ record_id, matched_on: ["email" | "phone"] }]; amendment: [].
+  candidates        Json           @default("[]")
+  sourceKind        String         @map("source_kind")
+  sourceId          String         @map("source_id")
+  sourceName        String         @map("source_name")
+  requesterType     ActorType      @map("requester_type")
+  requesterId       String         @map("requester_id")
+  requestId         String         @map("request_id")
+  resolverUoaUserId String?        @map("resolver_uoa_user_id")
+  resolvedAt        DateTime?      @map("resolved_at")
+  resolvedRecordId  String?        @map("resolved_record_id") @db.Uuid
+  createdAt         DateTime       @default(now()) @map("created_at")
+  record            Record?        @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, status, createdAt])
+  @@index([recordId, status])
+  @@map("record_proposals")
 }

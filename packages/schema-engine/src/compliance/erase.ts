@@ -187,6 +187,15 @@ export async function eraseRecord(
       AND lists.team_id = ${ctx.tenant.teamId}::uuid
       AND list_entries.record_id = ${record.id}::uuid
   `
+  // Proposals hold submitted values: an amendment to this record, a match that
+  // names it as a candidate or was resolved to it, goes with it (schema-engine §4d″).
+  await tx.$executeRaw`
+    DELETE FROM record_proposals
+    WHERE organization_id = ${ctx.tenant.organizationId}::uuid
+      AND team_id = ${ctx.tenant.teamId}::uuid
+      AND (record_id = ${record.id}::uuid OR resolved_record_id = ${record.id}::uuid
+        OR candidates @> ${JSON.stringify([{ record_id: record.id }])}::jsonb)
+  `
   await tx.$executeRaw`
     UPDATE record_changes
     SET old_value = NULL, new_value = NULL, snapshot = NULL

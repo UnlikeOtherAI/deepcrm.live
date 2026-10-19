@@ -24,7 +24,7 @@ Nessie stores the app key as deployment env `DEEPCRM_MCP_APP_KEY` (never per use
 Every tool carries its group and access class in `_meta`; the registration is the list, Nessie stores what the wire says, and a tool without a class is explicit on Nessie's side.
 
 - `_meta["live.deepcrm/group"]` = `{ id, label, order }` — one of the eight groups of `mcp-surface.md` §10 (`schema`, `records`, `links`, `lists-views`, `activity`, `search-quality`, `compliance`, `io`). Ids are stable; Nessie orders groups by `order` and labels them by `label`.
-- `_meta["live.deepcrm/access"]` = `standard` (**ON** by default for team agents: reads, record create/update/assert/restore, links, activities, notes, tasks, lists, views, pipeline stage moves, event ingest, file registration, search, quality reads, suppression add/check/list, consent set/get, change feed, webhook list) or `explicit` (`requiresExplicitGrant` — **OFF** until an owner grants it per agent: merge and unmerge, record delete and erase, suppression removal, `crm_write_guard_set`, export, webhook set/delete, every schema-group tool except `crm_schema_get` and `crm_derived_refresh_status`, and the structural `crm_pipeline_define`, `crm_pipeline_update`, `crm_event_type_define`).
+- `_meta["live.deepcrm/access"]` = `standard` (**ON** by default for team agents: reads, record create/update/assert/restore, links, activities, notes, tasks, lists, views, pipeline stage moves, event ingest, file registration, search, quality reads, suppression add/check/list, consent set/get, proposal list/decide, change feed, webhook list) or `explicit` (`requiresExplicitGrant` — **OFF** until an owner grants it per agent: merge and unmerge, record delete and erase, suppression removal, `crm_write_guard_set`, export, webhook set/delete, every schema-group tool except `crm_schema_get` and `crm_derived_refresh_status`, and the structural `crm_pipeline_define`, `crm_pipeline_update`, `crm_event_type_define`; and `crm_intake_submit`, which only a data subject's own submission may call — every delegated caller is `POLICY_DENIED`, so it stays out of agents' default toolsets).
 
 Every tool also carries `Tool.title`, a unique sentence-case action of at most 40 characters ("Create record", "Query records", "Read workspace model"); Nessie shows it to people ("Using DeepCRM: Create record") and keeps the tool name for the model.
 
@@ -106,3 +106,48 @@ Example: `{"state":"declined","email":"Ada@Example.com"}` hashes the string `{"e
 **A colleague** reads and sets consent on a record page as themselves, through the delegated path: `crm_consent_get`, and `crm_consent_set` with `reason` required for `confirmed`. A Nessie **agent** may set `declined` only; anything else is `POLICY_DENIED`.
 
 Refusals Nessie maps to a blocked signup: `TENANT_NOT_FOUND`, `POLICY_DENIED`, `VALIDATION_FAILED`, `DUPLICATE_FOUND` (another person already holds an email in `create.data`), `SCHEMA_CONFLICT` (the workspace has an incompatible attribute named `marketing_consent*`). A 401 on a subject call means the registry entry lacks `subjectTools`, the context is malformed, or the request was replayed.
+
+## 9. Form and chat submissions (intake), proposals and imports
+
+A Nessie **contact form**, **newsletter signup form** or **website chat widget** submission is the data subject's own act too. Nessie writes it with one subject-attested `crm_intake_submit` (§8's credentials and context, `tool: "crm_intake_submit"`), from its worker, with no colleague's delegation — the website chat stops acting as the widget's CRM identity. Full semantics: schema-engine §4d″.
+
+**Registry entry (the one ops step).** Nessie's `DEEPCRM_APPS` entry gains the third subject tool, then the API restarts; no migration step beyond the deploy's `prisma migrate deploy` (the new `record_proposals` table):
+
+```json
+"subjectTools": ["crm_consent_set", "crm_consent_get", "crm_intake_submit"]
+```
+
+**How Nessie knows the deployed DeepCRM supports it.** A subject-attested `tools/list` with `tool: "crm_intake_submit"` in the context (any `args_sha256`; `initialize`/`tools/list` are served) lists exactly that tool, with the input schema below; before the registry step it is 401 (`subject_not_allowed`), and on a DeepCRM without the feature the delegated `tools/list` has no `crm_intake_submit`, `crm_proposals_list` or `crm_proposal_decide`. Probe once per deploy (the `tools/list` etag is the server build) and keep the old path until both answers are yes.
+
+**The call.**
+
+```json
+{ "source": { "kind": "website_chat", "id": "<widget id>", "name": "nessie.works chat" },
+  "email": "<as typed>", "phone": "<+ and digits, as typed>",
+  "data": { "<name attribute>": { "full": "<name>" }, "<mapped attribute>": "<value>" },
+  "consent": { "state": "not_confirmed", "source": "signup_form", "at": "<when>" },
+  "activity": { "kind": "message", "occurred_at": "<when>", "subject": "Website chat on nessie.works", "body": "<optional>" },
+  "note": { "title": "Website chat terms accepted", "body": "<the terms sentence, URL and time>" },
+  "idempotency_key": "website-chat:<visitor row id>" }
+```
+
+- `source` — `kind` `contact_form` | `signup_form` | `website_chat`; `id` Nessie's stable id of the form or widget (1–128 of `A-Z a-z 0-9 . _ -`); `name` its current display name (1–120 characters, one line). The name is display text; DeepCRM stores it as sent on the person created (`first_source_name`) and on each activity (`source_name`), and never matches on it. A renamed form keeps its id: later activities carry the new name, the person keeps the name it first came through.
+- `email` and/or `phone` (at least one); `data` the other mapped fields by attribute slug — the name (`personal_name`; `{ "full": "<the email>" }` when the form asks none), text, rich text and choice attributes. Empty answers may be sent or left out; they never change anything.
+- `consent` only when the form asserts one: a signup's `not_confirmed`, a ticked contact-form marketing box. A contact form without the box sends **no** `consent` — the epoch `not_confirmed` workaround (`NEWSLETTER_CONSENT_NO_ACT_AT`) is no longer needed. Confirming by the emailed link, unsubscribing and subscribing again stay `crm_consent_set` (§8).
+- `activity` and `note` — what the CRM shows on the person's timeline (the chat's "Website chat on <host>" message and its terms note; a contact form's message). They are written only when the submission is created or paired.
+- `idempotency_key` — per submission (the contact form's submission id, the signup id, the chat visitor row); a retry within 24 h with the same key and arguments answers the first result. Each retry needs a fresh context and `requestId` (consumed once). Nessie's own settled stamp (`crmCapturedAt`, the submission's record step) keeps a run older than 24 h from resubmitting.
+
+**Answers.** `{ "outcome": "created" | "paired" | "pending", "record_id": "<uuid>" | null }` and nothing else: Nessie links the visitor's contact or the submission to `record_id` when created or paired; `pending` has no record yet — the submission waits for a person (below) and Nessie leaves it unlinked. Nessie never tells the submitter which outcome happened. Refusals mapped as §8 (`VALIDATION_FAILED`, `SCHEMA_CONFLICT`, `DUPLICATE_FOUND` → blocked; `TENANT_NOT_FOUND` → no workspace), plus `LIMIT_EXCEEDED` (too many pending proposals for the person or team: retry after people decide them).
+
+**What DeepCRM does with it.** No email/phone match: a new person with every mapped field, the source, the activity and the note. One match — the email and phone point at one person, or one of them at nobody: paired; empty fields are filled, a new email or phone is added beside the stored ones, every write named after the source; a different name or other single-valued value becomes a pending amendment; nothing stored is replaced. Email at one person and phone at another, or a phone several people share: a pending match, nothing paired. Consent keeps §8's semantics and lands only on the person who already held the email. **Residual risk:** anyone can type another person's email and so add their own phone to that person (or fill an empty field); each such write is attributed to `subject:nessie`, names the source, and can be reverted from the record's history.
+
+**Proposals in the Clients "Found in this message" rows.** A signed-in person (delegated, as for any read) lists them with `crm_proposals_list { "status": "pending", "record_id"?: <person>, "source_id"?: <form> }` — oldest first, `next_cursor` to continue — and decides each with `crm_proposal_decide`:
+
+| Row | From the item | Add | × |
+|---|---|---|---|
+| Amendment: "<record.display_name> · <attribute.name>: <current_value> → <proposed_value> · from <source.name>" | `record { id, display_name, version }`, `attribute { slug, name, type, is_multi }`, `proposed_value`, `current_value`, `source { kind, id, name }` (values absent and the slug in `redacted_attributes` when the reader may not see that attribute) | `{ id, decision: "approve", expected_version: record.version }` | `{ id, decision: "reject" }` |
+| Match: "<submitted name> · could be <candidate> or <candidate> · from <source.name>" | `candidates [{ record, matched_on: ["email"\|"phone"] }]`, `submitted { <slug>: value }`, `activity { subject, occurred_at }`, `source` | a candidate chip, or **Someone else…** → `{ id, decision: "approve", record_id }`; **New person** → `{ id, decision: "approve" }` | `{ id, decision: "reject" }` |
+
+The decision is the person's own write — their policy and record visibility apply, the history names them — and answers `{ id, status, record_id }`; a row someone else already decided answers `NOT_FOUND` (refresh the list). `VERSION_CONFLICT` means the record changed since the row was read: re-list and show the new current value. Approving a match pairs it as a 100% match would (its own real changes then appear as new amendment rows) or creates the person.
+
+**Imports.** Nessie's Clients import names its source on every person it creates: `crm_record_create { …, "source": { "kind": "import", "id": "<import id>", "name": "<file or list name>" } }`. A person it finds already in the CRM is not written, so nothing records that pairing.

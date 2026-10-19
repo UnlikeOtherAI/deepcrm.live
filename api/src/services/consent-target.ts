@@ -26,7 +26,7 @@ export type ConsentTarget = {
 
 // The consent attributes are system metadata, defined by the system on the
 // first consent call a tenant makes rather than by the caller.
-const CONSENT_SCHEMA_ACTOR_ID = 'consent'
+export const CONSENT_SCHEMA_ACTOR_ID = 'consent'
 
 function uniqueEmailAttributes(objectType: LoadedObjectType): LoadedAttribute[] {
   return objectType.attributes.filter((attribute) => (
@@ -45,9 +45,14 @@ function invalidObjectType(message: string): ServiceError {
   })
 }
 
-// A subject's own act reaches only a person-kind type, named or not; a
-// person may name any type with one unique email attribute.
-function selectObjectType(schema: LoadedSchema, slug: string | undefined, subject: boolean): LoadedObjectType {
+/**
+ * The type a consent or intake call acts on. A subject's own act reaches only
+ * a person-kind type, named or not; a person may name any type with one
+ * unique email attribute.
+ */
+export function selectConsentObjectType(
+  schema: LoadedSchema, slug: string | undefined, subject: boolean,
+): LoadedObjectType {
   if (slug !== undefined) {
     const named = schema.objectTypesBySlug.get(slug)
     if (named === undefined) throw new ServiceError(ErrorCode.UNKNOWN_OBJECT_TYPE, 'Unknown object type', { slug })
@@ -77,7 +82,8 @@ function attribute(objectType: LoadedObjectType, slug: string): LoadedAttribute 
   return found
 }
 
-function target(schema: LoadedSchema, objectType: LoadedObjectType): ConsentTarget {
+/** The consent attributes of a type that holds them; a missing one is `SCHEMA_CONFLICT`. */
+export function consentTarget(schema: LoadedSchema, objectType: LoadedObjectType): ConsentTarget {
   const [email] = uniqueEmailAttributes(objectType)
   if (email === undefined) throw invalidObjectType('the object type needs exactly one unique email attribute')
   return {
@@ -101,9 +107,9 @@ export async function resolveConsentTarget(
   objectTypeSlug: string | undefined,
 ): Promise<ConsentTarget> {
   const schema = await loadSchema(deps.db, ctx.tenant)
-  const objectType = selectObjectType(schema, objectTypeSlug, isSubjectActor(ctx))
+  const objectType = selectConsentObjectType(schema, objectTypeSlug, isSubjectActor(ctx))
   if (hasConsentAttributes(new Set(objectType.attributes.map((item) => item.slug)))) {
-    return target(schema, objectType)
+    return consentTarget(schema, objectType)
   }
   await deps.db.$transaction((tx) => ensureConsentAttributes(tx, ctx.tenant, {
     type: 'system', id: CONSENT_SCHEMA_ACTOR_ID, onBehalfOf: onBehalfOfUserId(ctx), requestId: ctx.requestId,
@@ -111,7 +117,7 @@ export async function resolveConsentTarget(
   const upgraded = await loadSchema(deps.db, ctx.tenant, { useCache: false })
   const reloaded = upgraded.objectTypesBySlug.get(objectType.slug)
   if (reloaded === undefined) throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Consent object type changed')
-  return target(upgraded, reloaded)
+  return consentTarget(upgraded, reloaded)
 }
 
 /** The email as the attribute's normaliser stores it, and its unique-key hash. */

@@ -255,6 +255,56 @@
               }
             ]
           }
+        },
+        {
+          "slug": "first_source_kind",
+          "name": "First source kind",
+          "description": "What first brought this person in: contact_form, signup_form, website_chat or import. Set once, when crm_intake_submit or a create that names a source makes the record; a later pairing never changes it.",
+          "type": "select",
+          "is_system": true,
+          "config": {
+            "type": "select",
+            "options": [
+              {
+                "id": "contact_form",
+                "label": "Contact form"
+              },
+              {
+                "id": "signup_form",
+                "label": "Signup form"
+              },
+              {
+                "id": "website_chat",
+                "label": "Website chat"
+              },
+              {
+                "id": "import",
+                "label": "Import"
+              }
+            ]
+          }
+        },
+        {
+          "slug": "first_source_id",
+          "name": "First source id",
+          "description": "The product's stable id for the form, chat widget or import that first brought this person in. Compared exactly; set with first_source_kind.",
+          "type": "text",
+          "is_system": true,
+          "config": {
+            "type": "text",
+            "maxLength": 128
+          }
+        },
+        {
+          "slug": "first_source_name",
+          "name": "First source",
+          "description": "Display name of the form, chat widget or import that first brought this person in, as it was named then, e.g. Spring newsletter form. Display text only: never matched or interpreted.",
+          "type": "text",
+          "is_system": true,
+          "config": {
+            "type": "text",
+            "maxLength": 120
+          }
         }
       ]
     },

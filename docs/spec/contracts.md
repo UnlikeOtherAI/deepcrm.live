@@ -534,7 +534,8 @@ const VisibilityArgs = {
     .describe('declared source class of this data (set-once); refused when in the team\'s rejected origins'),
 }
 export const CrmRecordCreate = { in: z.object({ object_type: Slug, data: RecordData,
-  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...VisibilityArgs, ...WriteCommon }),
+  links: z.array(LinkInput).max(50).optional(), owner: Actor.optional(), ...VisibilityArgs,
+  source: SourceRef.optional().describe('stored as the first_source_* attributes (schema-engine §4d″)'), ...WriteCommon }),
   out: z.object({ record: RecordOut, duplicates: z.array(Candidate).optional() }) }
 export const CrmRecordUpdate = { in: z.object({ id: Uuid, data: RecordData.describe('null clears a value'),
   owner: Actor.nullable().optional(), ...VisibilityArgs, expected_version: ExpectedVersion, ...WriteCommon }),
@@ -748,6 +749,42 @@ export const CrmConsentSet = { in: z.object({ email: z.string().min(1).max(320),
 export const CrmConsentGet = { in: z.object({ email: z.string().min(1).max(320), object_type: Slug.optional() }),
   out: z.object({ record_id: Uuid.nullable(), state: ConsentState.nullable(), at: IsoDateTime.nullable(),
     source: ConsentSource.nullable(), suppressed: z.boolean() }) }
+
+// ── intake: a data subject's submission, its source, proposals (schema-engine §4d″; source-ref.ts, tools-intake.ts)
+export const SourceKind = z.enum(['contact_form','signup_form','website_chat','import'])
+export const SubjectSourceKind = z.enum(['contact_form','signup_form','website_chat'])
+export const SourceRef = z.object({ kind: SourceKind,
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u).describe('the product\'s stable id, compared exactly'),
+  name: z.string().trim().min(1).max(120).refine(noControlCharactersOrLineBreaks)
+    .describe('current display name; display text only, never matched') }).strict()
+export const SubjectSourceRef = SourceRef.extend({ kind: SubjectSourceKind }).strict()
+export const CrmIntakeSubmit = { in: z.object({ source: SubjectSourceRef,
+  email: z.string().min(1).max(320).optional(), phone: z.string().min(1).max(64).optional(),
+  data: z.record(Slug, z.unknown()).optional().describe('personal_name, text, rich_text and select attributes'),
+  object_type: Slug.optional(),
+  consent: z.object({ state: ConsentState, source: ConsentSource, at: IsoDateTime.optional() }).strict().optional(),
+  activity: z.object({ kind: z.enum(['message','custom']), occurred_at: IsoDateTime,
+    subject: z.string().trim().min(1).max(300), body: z.string().max(100_000).optional() }).strict(),
+  note: z.object({ title: z.string().max(300).optional(), body: z.string().min(1).max(100_000) }).strict().optional(),
+  idempotency_key: IdempotencyKey }),   // service: email or phone required; consent needs email
+  out: z.object({ outcome: z.enum(['created','paired','pending']), record_id: Uuid.nullable() }) }
+export const ProposalItem = z.object({ id: Uuid, kind: z.enum(['amendment','match']),
+  status: z.enum(['pending','approved','rejected']), created_at: IsoDateTime, source: SourceRef, object_type: Slug,
+  record: RecordSummary.extend({ version: z.number().int() }).nullable(),
+  attribute: z.object({ slug: Slug, name: z.string(), type: z.string(), is_multi: z.boolean() }).nullable(),
+  proposed_value: z.unknown().optional(), current_value: z.unknown().optional(),
+  candidates: z.array(z.object({ record: RecordSummary, matched_on: z.array(z.enum(['email','phone'])) })).optional(),
+  submitted: z.record(Slug, z.unknown()).optional(),
+  activity: z.object({ subject: z.string(), occurred_at: IsoDateTime }).optional(),
+  redacted_attributes: z.array(Slug), resolved_record_id: Uuid.nullable() })
+export const CrmProposalsList = { in: z.object({ status: z.enum(['pending','approved','rejected']).optional(),
+  kind: z.enum(['amendment','match']).optional(), record_id: Uuid.optional(),
+  source_id: z.string().min(1).max(128).optional(), cursor: Cursor, limit: Limit }),
+  out: z.object({ proposals: z.array(ProposalItem), next_cursor: z.string().nullable() }) }
+export const CrmProposalDecide = { in: z.object({ id: Uuid, decision: z.enum(['approve','reject']),
+  record_id: Uuid.optional().describe('approving a match: pair with this person; omitted ⇒ create one'),
+  expected_version: ExpectedVersion, reason: Reason }),
+  out: z.object({ id: Uuid, status: z.enum(['pending','approved','rejected']), record_id: Uuid.nullable() }) }
 
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),

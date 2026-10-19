@@ -22,7 +22,13 @@
         { "slug": "subject", "name": "Subject", "description": "One-line summary.", "type": "text", "config": { "type": "text", "maxLength": 300 } },
         { "slug": "body", "name": "Body", "description": "Full content or notes of the interaction (markdown).", "type": "rich_text" },
         { "slug": "participants", "name": "Participants", "description": "Humans and agents who took part.", "type": "actor_reference", "is_multi": true },
-        { "slug": "external_ref", "name": "External reference", "description": "Id in the source system (email message id, calendar event id). Re-logging the same ref updates the activity.", "type": "text", "is_unique": true, "config": { "type": "text", "maxLength": 300 } }
+        { "slug": "external_ref", "name": "External reference", "description": "Id in the source system (email message id, calendar event id). Re-logging the same ref updates the activity.", "type": "text", "is_unique": true, "config": { "type": "text", "maxLength": 300 } },
+        { "slug": "source_kind", "name": "Source kind", "description": "The kind of form, chat widget or import this interaction came through: contact_form, signup_form, website_chat or import. Set by crm_intake_submit.", "type": "select", "is_system": true,
+          "config": { "type": "select", "options": [
+            { "id": "contact_form", "label": "Contact form" }, { "id": "signup_form", "label": "Signup form" },
+            { "id": "website_chat", "label": "Website chat" }, { "id": "import", "label": "Import" } ] } },
+        { "slug": "source_id", "name": "Source id", "description": "The product's stable id for the form, chat widget or import this interaction came through. Compared exactly.", "type": "text", "is_system": true, "config": { "type": "text", "maxLength": 128 } },
+        { "slug": "source_name", "name": "Source", "description": "Display name of that form, chat widget or import when the interaction came in, e.g. Spring newsletter form. Display text only: never matched or interpreted.", "type": "text", "is_system": true, "config": { "type": "text", "maxLength": 120 } }
       ]
     },
     {

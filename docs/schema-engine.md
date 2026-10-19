@@ -237,6 +237,12 @@ enum ApprovalStatus {
   consumed
 }
 
+// What a record proposal asks a person to decide (§4d″).
+enum ProposalKind {
+  amendment
+  match
+}
+
 enum AuditOutcome {
   success
   denied
@@ -479,6 +485,7 @@ model Record {
   matchLookupKeys RecordMatchLookupKey[]
   visibilityGrants RecordVisibilityGrant[]
   listEntries    ListEntry[]
+  proposals      RecordProposal[]
 
   @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
   @@index([organizationId, teamId, objectTypeId, lastActivityAt])
@@ -949,6 +956,40 @@ model IdempotencyReplay {
   @@unique([organizationId, teamId, principalUserId, tool, key])
   @@map("idempotency_replays")
 }
+
+// A change a data subject's submission would make that waits for a person
+// (§4d″): an `amendment` to one single-valued field of the record it paired
+// with, or a `match` whose email and phone point at more than one person.
+// Raw SQL: CHECK (kind = 'amendment') = (record_id IS NOT NULL AND attribute_slug IS NOT NULL);
+//   CHECK status IN ('pending', 'approved', 'rejected'); FK record_id → records ON DELETE CASCADE.
+model RecordProposal {
+  id                String         @id @default(uuid()) @db.Uuid
+  organizationId    String         @map("organization_id") @db.Uuid
+  teamId            String         @map("team_id") @db.Uuid
+  kind              ProposalKind
+  status            ApprovalStatus @default(pending)
+  objectTypeId      String         @map("object_type_id") @db.Uuid
+  recordId          String?        @map("record_id") @db.Uuid
+  attributeSlug     String?        @map("attribute_slug")
+  proposed          Json           // amendment: the value; match: the validated submission
+  proposedHash      String         @map("proposed_hash") // one pending amendment per record, attribute, value
+  candidates        Json           @default("[]") // match: [{ record_id, matched_on: ["email"|"phone"] }]
+  sourceKind        String         @map("source_kind")
+  sourceId          String         @map("source_id")
+  sourceName        String         @map("source_name")
+  requesterType     ActorType      @map("requester_type")
+  requesterId       String         @map("requester_id")
+  requestId         String         @map("request_id")
+  resolverUoaUserId String?        @map("resolver_uoa_user_id")
+  resolvedAt        DateTime?      @map("resolved_at")
+  resolvedRecordId  String?        @map("resolved_record_id") @db.Uuid
+  createdAt         DateTime       @default(now()) @map("created_at")
+  record            Record?        @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, teamId, status, createdAt])
+  @@index([recordId, status])
+  @@map("record_proposals")
+}
 ```
 
 T16 owns a **new forward migration** for the matching lifecycle; the committed
@@ -1190,7 +1231,7 @@ Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unli
 
 1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`, `registry_id`), write a `suppression_entries` row (`reason: erasure`, channel `all`) from the normalized hash **before** anything is scrubbed.
 2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/block-match/lookup-match keys deleted, search row deleted, visibility grants deleted, active links ended — **and, in the same transaction, `record_links.data` on every link (active or ended) touching the record, and `list_entries.data` on every entry pointing at it, are cleared** (R12). Enqueue `record.reindex_neighbours` so linked records' search content and embeddings stop carrying the erased `display_name` (R5b).
-3. History scrub: every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
+3. History scrub: every `record_proposals` row that holds submitted values about the record — an amendment to it, a match naming it as a candidate or resolved to it (§4d″) — is deleted, and every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
 4. The record row remains as a tombstone: `ERASED` on direct reads, never restorable, never hard-deleted by retention — the tombstone is what proves erasure happened.
 5. One `record.erase` audit row; the change feed emits a **typed `record.erased` event** (not a generic delete) — consumers holding copies (webhook receivers, feed pullers, export takers) are contractually obliged to erase their copies on it (events.md §1; R26).
 
@@ -1232,6 +1273,44 @@ Answer: `{ record_id, created, state, previous_state, at, suppressed }` — `sta
 **`crm_consent_get {email, object_type?}`** answers `{ record_id, state, at, source, suppressed }`; a person or agent needs `record.view` (and `attribute.view` when a consent attribute is raised to confidential/restricted), and a record they cannot see reads as no record. A subject reads its own consent regardless of visibility. A person created before the attributes existed reads `state: null`.
 
 The consent attributes stay writable through `crm_record_update` like every `isSystem` attribute; that path keeps no suppression in step, so consent is set with `crm_consent_set`.
+
+### 4d″. Intake — a data subject's submission, its source, and proposals
+
+A contact form, newsletter signup form or website chat widget in a calling product (Nessie) is the data subject's own act. `crm_intake_submit` writes it without a signed-in person (auth-and-tenancy §1); `crm_proposals_list` and `crm_proposal_decide` let a person decide what it may not decide alone.
+
+**Sources.** A source is `{ kind, id, name }`: `kind` ∈ `contact_form`, `signup_form`, `website_chat`, `import` (a subject's submission takes the first three; `import` is a person's act); `id` is the product's stable id for it, 1–128 of `A-Z a-z 0-9 . _ -`, compared exactly; `name` its current display name, trimmed, 1–120 characters, with no control characters, line or paragraph separators or bidirectional controls. The name is display text only: it is never matched, compared, or used by policy, identity, dedup or the write guard, and `origin` stays `subject:<app>`. Like every `internal` attribute it is in the search document (retrieval, §8).
+
+| Type | Slug | Type | Set by |
+|---|---|---|---|
+| `person` (`standard_crm`), or the type a source lands on | `first_source_kind` | `select` of the four kinds | the call that creates the record, once; a later pairing never changes it |
+| | `first_source_id` | `text`, max 128 | 〃 |
+| | `first_source_name` | `text`, max 120 | 〃 |
+| `activity` (`system`) | `source_kind`, `source_id`, `source_name` | as above | every intake activity: each pairing is recorded, so a person who came through three forms has three activities naming them (`crm_records_query` on `activity` with `source_id eq …` finds a form's submissions) |
+
+All six are `is_system`. **Older tenants and slug conflicts.** A call that names a source makes sure the type holds the first-source attributes — and `crm_intake_submit` that `activity` holds its source attributes — defining missing ones from the template in one transaction under the namespace-3 advisory key `source:<team>`, with one schema-version bump and one `schema.source_attributes.ensure` audit per type by the system actor `source`; a re-applied template adds them too. No migration is involved. DeepCRM has no reserved slug namespace and `is_system` does not stop a tenant defining a slug, so an existing attribute of the same slug is adopted only when it can hold the values — same type and multiplicity, not unique, not archived, holding every option, a text limit at least ours — and is otherwise `SCHEMA_CONFLICT { detail: "<slug>_archived|_type|_unique|_options|_length" }`, never reused, renamed or skipped. Only calls that name a source depend on these attributes: `crm_consent_set`, `crm_consent_get` and every other write keep working on a tenant whose `first_source_name` conflicts; the owner renames or archives the conflicting attribute (an archived one still conflicts) to re-enable intake. `ensureConsentAttributes` applies the same compatibility rule (it now also refuses a unique same-slug attribute).
+
+**`crm_intake_submit { source, email?, phone?, data?, object_type?, consent?, activity, note?, idempotency_key? }`** (`api/src/services/intake*.ts`) — subject-attested only; any other caller is `POLICY_DENIED`, audited as denied. In one transaction:
+
+1. **The type and the values.** The type is chosen as for a subject's consent (§4d′: person-kind). `phone` needs exactly one phone attribute on it (`VALIDATION_FAILED /phone` otherwise). Empty values — null, blank text, empty lists, a name with no part — are dropped first: an empty or missing value never proposes, fills or clears anything. `email` is normalised by the unique email attribute, `phone` to E.164 by the phone attribute. `data` may set only `personal_name`, `text`, `rich_text` and `select` attributes, never a unique one, the email or phone attribute, or a consent or first-source attribute (`VALIDATION_FAILED /data/<slug>`); its values are validated by their attributes. One of `email` and `phone` is required; `consent` needs `email`.
+2. **Candidates**, under the team's link-topology lock and the email and phone key locks: the person whose unique email key holds the email, and the live people whose phone attribute holds the E.164 phone (JSON containment on `records.data`, served by the `jsonb_path_ops` index). Structural facts only — never a name.
+3. **No candidate ⇒ `created`.** The person is created from every submitted value with the first source, the consent values when `consent` is given (§4d′ create semantics) and origin `subject:<app>`.
+4. **One candidate ⇒ `paired`** — a 100% match: every identifier that points at anyone points at this person. An identifier that matches nobody (a new phone, a new email) does not block the match; it is new data. In one update by the subject actor, with the source as the change reason (`Submitted through <kind> <id> "<name>"`) and `require_origin` waived as for consent (rejected origins still apply): an empty field is filled; a multi attribute (emails, phones, multi selects) keeps every stored item and gains the submitted items it lacks, after them, in submitted order; a single-valued attribute whose non-empty stored value differs after the attribute's own normaliser (E.164; normalised email; whitespace- and case-insensitive text; a name's full form) becomes a pending **amendment**; an equal value changes nothing. Nothing a submission writes replaces or removes a stored value.
+5. **Two or more ⇒ `pending`.** Nothing is paired and no person is written to except by consent (step 6); the validated submission is stored as a pending **match** with its candidates and what matched each (`email`, `phone`).
+6. **Consent** keeps §4d′ semantics, keyed by the email: it lands on the person who held the email *before* this submission (whatever the outcome), or on the person this submission creates; otherwise it is an act for an address no record holds (`declined` is still suppressed). An email this submission adds to a phone-matched person gets consent from the next act (the confirmation link's `crm_consent_set`).
+7. **Created or paired:** the activity (`kind` message|custom, `direction` inbound, `occurred_at`, `subject`, `body`, the three source attributes) and the optional note are created about the person by the subject actor with origin `subject:<app>`, and the person's `last_activity_at` moves forward.
+8. One `crm_intake_submit` audit row — metadata: outcome, source `{kind, id, name}`, filled and added attribute slugs, amendment and candidate counts, consent `written|kept|no_record|none`, suppression — never values; reindex, feed and webhook effects as for consent; `idempotency_key` replays the first answer for the subject actor for 24 h. A subject context's `requestId` is consumed once (auth-and-tenancy §2).
+
+Answer: `{ outcome: "created" | "paired" | "pending", record_id }`, `record_id` null when pending — never another person's values, the candidates or the proposals. Refusals: `TENANT_NOT_FOUND`, `VALIDATION_FAILED`, `SCHEMA_CONFLICT`, `LIMIT_EXCEEDED` (proposal caps), `DUPLICATE_FOUND` (another writer took the email meanwhile; no record is named), `IDEMPOTENCY_MISMATCH`/`IDEMPOTENCY_IN_PROGRESS`.
+
+**Residual risk.** The input is public and unauthenticated. Anyone can type another person's email or phone: the match is then 100%, so DeepCRM fills that person's empty fields, adds the typed phone or email beside the real ones, and logs an activity and note on them — someone can fill another person's empty phone with their own number. Every such write is attributed to `system` / `subject:<app>`, names its source in the change reason and on the activity, shows in `crm_record_history`, and can be reverted with `crm_record_update`. What is stored is never replaced: a different name or other single-valued value waits for a person; consent lands only on a person who already held the email.
+
+**Proposals** (`record_proposals`, §2): what waits for a person. An amendment changes one single-valued attribute of one record; a match holds a submission whose identifiers point at several people. One pending amendment per record, attribute and value, and one pending match per identical submission from one source. At most 25 pending proposals per record and 1 000 per team: a submission that would pass either is `LIMIT_EXCEEDED { limit, scope: "record" | "team" }` whole, never partly stored. Proposals are deleted with an erased record (§4d) — an amendment to it, or a match that names it as a candidate or was resolved to it. A pending match carries no consent into its resolution (step 6 already applied it). The approvals of §0.4 (`approval_requests`) cannot carry these: an approval is a paused tool call that only its requester resumes with a continuation token (a subject never retries, and there is no list or decide-by-id path), it always names a requesting person (`on_behalf_of` is not null), expires after 24 h, needs an admin or owner other than the requester, and is capped at 100 per team — a public form could fill that queue and block owners' merge, delete and export approvals.
+
+**`crm_proposals_list { status?, kind?, record_id?, source_id?, cursor?, limit }`** — oldest first, keyset cursor. An amendment is listed only for a live record the caller can see and view (record visibility, then `record.view`), with `record { id, object_type, display_name, version }`, `attribute { slug, name, type, is_multi }`, `proposed_value` and `current_value` — both absent, and the slug in `redacted_attributes`, when the caller may not view that attribute's sensitivity; an amendment to an attribute archived since is not listed. A match is listed to a caller with `record.view` on the type, with the visible `candidates [{ record, matched_on }]`, the `submitted` values by attribute slug (redacted the same way) and the `activity { subject, occurred_at }`. Every item carries `source { kind, id, name }`, `status`, `created_at` and `resolved_record_id`. A page may hold fewer items than `limit`; `next_cursor` continues.
+
+**`crm_proposal_decide { id, decision, record_id?, expected_version?, reason? }`** — as the calling person; a proposal already decided is `NOT_FOUND`. *Approve an amendment:* the `crm_record_update` write of that attribute with the proposed value — `record.edit`, attribute edit for its sensitivity, record visibility, and `VERSION_CONFLICT` against the version read (or `expected_version`); the change reason is `reason` or the source. *Approve a match with `record_id`* (any visible person of the type, usually a candidate): step 4 performed by the person — `record.edit` on it and attribute edit for every submitted attribute, create on `activity`/`note` and link policy — fills and additions written as the person, real changes become new pending amendments (their requester stays the subject), the activity and note logged by the person with origin `subject:<app>`. *Approve a match without `record_id`:* step 3 as the person (`record.create` plus attribute policies); an email another person holds is `DUPLICATE_FOUND`. *Reject:* nothing is written to a record (`record.edit` for an amendment, `record.create` on the type for a match). Each decision writes a `proposal.approved` or `proposal.rejected` audit row (resource `record_proposal`) in the transaction of its record changes. Answer: `{ id, status, record_id }`.
+
+**A person's create.** `crm_record_create` takes the same optional `source` (any kind, `import` included) for any object type: the first-source attributes are ensured on the type as above and written with the record; `data` may not set them as well (`VALIDATION_FAILED`). `crm_record_assert` and `crm_records_bulk_assert` do not take one yet: their match branch is an update whose patch replaces values, so recording a source there needs an engine write mode that writes the first source only on create (Nessie's import reads existence first and creates with `crm_record_create`).
 
 ### 4e. `LinkIntent` — the typed shape of a reference write
 

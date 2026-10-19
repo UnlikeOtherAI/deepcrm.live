@@ -148,16 +148,19 @@ export async function consumeSeenRequestId(
   return consumeRequestId(db, ctx, requestId, tool, argsSha256, new Date(ctx.now.getTime() + REQUEST_REPLAY_TTL_MS))
 }
 
+// The writes a subject may make: a subject context rides on no delegation.
+const SUBJECT_WRITES: ReadonlySet<string> = new Set(['crm_consent_set', 'crm_intake_submit'])
+
 /**
  * Whether this call's request id is consumed once: every destructive call,
- * and a subject-attested consent write — a subject context rides on no
- * delegation, so its signed `requestId` is the only replay bound it has.
+ * and a subject-attested write — a subject context rides on no delegation,
+ * so its signed `requestId` is the only replay bound it has.
  */
 export function isReplayBounded(
   principal: { kind: 'delegated' | 'subject' },
   invocation: { tool: string; replayBounded: boolean },
 ): boolean {
-  return invocation.replayBounded || (principal.kind === 'subject' && invocation.tool === 'crm_consent_set')
+  return invocation.replayBounded || (principal.kind === 'subject' && SUBJECT_WRITES.has(invocation.tool))
 }
 
 /** A subject attestation is consumed under the request id its app signed. */
