@@ -7,7 +7,8 @@ import { startTestServer } from './harness.js'
 const NOT_YET: string[] = []
 
 // The seed classification (docs/spec/nessie-integration.md §3): destructive and
-// structural tools wait for an owner's grant; everything else is on by default.
+// structural tools wait for an owner's grant, and so does crm_intake_submit, which
+// only a data subject's own submission may call; everything else is on by default.
 const EXPLICIT_TOOLS = [
   'crm_object_type_define', 'crm_object_type_update', 'crm_object_type_archive',
   'crm_attribute_define', 'crm_attribute_update', 'crm_attribute_archive',
@@ -19,6 +20,7 @@ const EXPLICIT_TOOLS = [
   'crm_record_erase', 'crm_suppression_remove', 'crm_write_guard_set',
   'crm_export', 'crm_webhook_set', 'crm_webhook_delete',
   'crm_pipeline_define', 'crm_pipeline_update', 'crm_event_type_define',
+  'crm_intake_submit',
 ]
 
 // Every granted mutator ships with the read that resolves its ids.
@@ -29,7 +31,7 @@ const RESOLVING_READS = [
 ]
 
 const GROUP_COUNTS = {
-  schema: 18, records: 12, links: 3, 'lists-views': 9,
+  schema: 18, records: 17, links: 3, 'lists-views': 9,
   activity: 14, 'search-quality': 5, compliance: 8, io: 8,
 }
 
@@ -110,7 +112,7 @@ describe('documented MCP tool surface', () => {
     const tools = (await client.listTools()).tools.map((tool) => ({
       name: tool.name, ...ToolClassMeta.parse(tool._meta),
     }))
-    expect(tools).toHaveLength(77)
+    expect(tools).toHaveLength(82)
 
     for (const tool of tools) {
       const group = tool['live.deepcrm/group']
@@ -127,7 +129,7 @@ describe('documented MCP tool surface', () => {
 
     const explicit = tools.filter((tool) => tool['live.deepcrm/access'] === 'explicit').map((tool) => tool.name)
     expect(sorted(explicit)).toEqual(sorted(EXPLICIT_TOOLS))
-    expect(tools.length - explicit.length).toBe(49)
+    expect(tools.length - explicit.length).toBe(53)
 
     const access = new Map(tools.map((tool) => [tool.name, tool['live.deepcrm/access']]))
     for (const read of RESOLVING_READS) expect(access.get(read), `${read} is a resolving read`).toBe('standard')
@@ -135,7 +137,7 @@ describe('documented MCP tool surface', () => {
 
   it('gives every listed tool a unique, trimmed title of at most 40 characters', async () => {
     const tools = (await client.listTools()).tools
-    expect(tools).toHaveLength(77)
+    expect(tools).toHaveLength(82)
     const titles = new Map<string, string>()
     for (const tool of tools) {
       const title = tool.title ?? ''

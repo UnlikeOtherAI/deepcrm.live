@@ -10,8 +10,6 @@ import {
   type RecordWriteResult,
 } from '@deepcrm/schema-engine'
 import {
-  ConsentSource,
-  ConsentState,
   CrmConsentSet,
   ErrorCode,
   isSubjectActor,
@@ -19,6 +17,7 @@ import {
   requireOnBehalfOf,
   ServiceError,
   type ActorContext,
+  type ConsentState,
   type CrmConsentGetInput,
   type CrmConsentGetOutput,
   type CrmConsentSetInput,
@@ -27,8 +26,11 @@ import {
 
 import type { AppDeps } from '../deps.js'
 import { checkPolicy, type PolicyRequest } from './policy.js'
+import {
+  consentAt, consentWrites, settleConsentSuppression, storedConsent, type ConsentAct,
+} from './consent-act.js'
 import { createConsentData, consentPatch, type ConsentCaller } from './consent-data.js'
-import { applyConsentSuppression, emailSuppressed, type ConsentSuppressionChange } from './consent-suppression.js'
+import { emailSuppressed, type ConsentSuppressionChange } from './consent-suppression.js'
 import { normalizedEmail, resolveConsentTarget, type ConsentTarget } from './consent-target.js'
 import { validateActorReferences } from './principals.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
@@ -44,53 +46,19 @@ import {
 } from './record-write-authorization.js'
 
 const TOOL = 'crm_consent_set'
-// An act cannot be dated later than now: a future `at` would freeze the state.
-const FUTURE_SKEW_MS = 60_000
 type ConsentTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'list' | 'suppressionEntry' | 'record'>
-type StoredConsent = { state: ConsentState | null; at: string | null; source: ConsentSource | null }
 type SetPlan = {
   input: CrmConsentSetInput
   caller: ConsentCaller
   target: ConsentTarget
   email: { value: string; hash: string }
   at: string
+  act: ConsentAct
 }
 
 function callerOf(ctx: ActorContext): ConsentCaller {
   if (isSubjectActor(ctx)) return 'subject'
   return ctx.actor.type === 'agent' ? 'agent' : 'person'
-}
-
-function storedConsent(consent: ConsentTarget, data: unknown): StoredConsent {
-  const values = typeof data === 'object' && data !== null && !Array.isArray(data)
-    ? new Map(Object.entries(data)) : new Map<string, unknown>()
-  const state = ConsentState.safeParse(values.get(consent.state.slug))
-  const at = values.get(consent.at.slug)
-  const source = ConsentSource.safeParse(values.get(consent.source.slug))
-  return {
-    state: state.success ? state.data : null,
-    at: typeof at === 'string' ? at : null,
-    source: source.success ? source.data : null,
-  }
-}
-
-// Only a newer act is written. Consent writes for one address arrive
-// unordered and late, so `at` alone decides: an older or equal `at` never
-// replaces the stored consent, whatever state it carries.
-function supersedes(stored: StoredConsent, at: string): boolean {
-  if (stored.state === null || stored.at === null) return true
-  return Date.parse(at) > Date.parse(stored.at)
-}
-
-// A subject's `not_confirmed` is an unverified act (anyone can type an address
-// into a form): it never replaces `declined` and never lifts an opt-out. Only a
-// confirmed act, or a person's decision, does.
-function unverifiedOverDeclined(plan: SetPlan, stored: StoredConsent): boolean {
-  return plan.caller === 'subject' && plan.input.state === 'not_confirmed' && stored.state === 'declined'
-}
-
-function liftsOptOut(plan: SetPlan): boolean {
-  return !(plan.caller === 'subject' && plan.input.state === 'not_confirmed')
 }
 
 function refuseAgentConfirmation(): ServiceError {
@@ -218,11 +186,10 @@ async function auditConsent(
 
 // An objection holds whatever order the acts arrive in: `declined` is always
 // suppressed, even when the record keeps a newer state or there is no record.
-async function suppressDecline(
+function suppressDecline(
   tx: ConsentTx, ctx: ActorContext, plan: SetPlan, recordId: string | null,
 ): Promise<ConsentSuppressionChange> {
-  if (plan.input.state !== 'declined') return 'none'
-  return applyConsentSuppression(tx, ctx, plan.email.value, 'declined', recordId)
+  return settleConsentSuppression(tx, ctx, plan.act, recordId, false)
 }
 
 async function finishWrite(
@@ -230,9 +197,7 @@ async function finishWrite(
   written: RecordWriteResult, previous: ConsentState | null,
 ): Promise<CrmConsentSetOutput> {
   const recordId = written.record.id
-  const suppression: ConsentSuppressionChange = plan.input.state === 'declined' || liftsOptOut(plan)
-    ? await applyConsentSuppression(tx, ctx, plan.email.value, plan.input.state, recordId)
-    : 'none'
+  const suppression = await settleConsentSuppression(tx, ctx, plan.act, recordId, true)
   if (written.changed) await enqueueRecordMutationEffects(tx, ctx, written.sequences, written.touchedRecordIds)
   await auditConsent(deps, tx, ctx, plan, { kind: 'written', recordId, created: written.created, previous }, suppression)
   return {
@@ -252,8 +217,7 @@ async function writeMatched(
   const row = await tx.record.findFirst({ where: { ...tenantWhere(ctx.tenant), id: recordId }, select: { data: true } })
   if (row === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   const stored = storedConsent(plan.target, row.data)
-  const kept = stored.state !== null
-    && (!supersedes(stored, plan.at) || unverifiedOverDeclined(plan, stored))
+  const kept = stored.state !== null && !consentWrites(plan.act, stored)
   if (kept && stored.state !== null) {
     const suppression = await suppressDecline(tx, ctx, plan, recordId)
     await auditConsent(deps, tx, ctx, plan, { kind: 'kept', recordId, created: false, previous: stored.state },
@@ -330,14 +294,11 @@ export async function setConsent(
       issues: [{ path: '/reason', message: 'say where the consent came from when a person records confirmed' }],
     })
   }
-  const at = new Date(input.at ?? ctx.now.toISOString())
-  if (at.getTime() > ctx.now.getTime() + FUTURE_SKEW_MS) {
-    throw new ServiceError(ErrorCode.VALIDATION_FAILED, 'Consent time is in the future', {
-      issues: [{ path: '/at', message: 'must not be later than now (60 seconds of clock skew allowed)' }],
-    })
-  }
+  const at = consentAt(ctx, input.at, '/at')
   const target = await resolveConsentTarget(deps, ctx, input.object_type)
-  const plan: SetPlan = { input, caller, target, email: normalizedEmail(target, input.email), at: at.toISOString() }
+  const email = normalizedEmail(target, input.email)
+  const act: ConsentAct = { caller, state: input.state, source: input.source, at, email }
+  const plan: SetPlan = { input, caller, target, email, at, act }
   return consentBoundary(deps, ctx, () => deps.db.$transaction(async (tx) => {
     const reservation = await reserve(tx, ctx, input)
     if (reservation.kind === 'replay') return reservation.result

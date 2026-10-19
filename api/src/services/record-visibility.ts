@@ -4,7 +4,8 @@ import { requireOnBehalfOf, ErrorCode, ServiceError, type ActorContext } from '@
 export type VisibleRecord = { id: string; objectTypeId: string }
 export type ResolvedVisibleRecord = { record: VisibleRecord; redirectedFrom?: string }
 
-function visibleWhere(ctx: ActorContext): Prisma.RecordWhereInput {
+/** The record rows the calling person may see (data, not policy): team rows, their own, and granted ones. */
+export function visibleWhere(ctx: ActorContext): Prisma.RecordWhereInput {
   const { uoaUserId } = requireOnBehalfOf(ctx)
   return {
     ...tenantWhere(ctx.tenant),

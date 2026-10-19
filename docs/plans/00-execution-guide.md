@@ -47,5 +47,6 @@ The local Postgres from `docs/testing.md` runs for the whole session, and `DATAB
 | 7 | [07-visibility-and-compliance.md](07-visibility-and-compliance.md) | per-record visibility, suppression/erasure, origin guard, per-app provenance (the DeepSignal asks) |
 | 8 | [08-hubspot-crm-compatibility.md](08-hubspot-crm-compatibility.md) | generic-schema CRM semantics, standard sales/service/commerce packs, and MCP interoperability verification |
 | 9 | [09-marketing-consent.md](09-marketing-consent.md) | marketing consent on the person, the consent tools, and subject-attested calls for the data subject's own act |
+| 10 | [10-intake-and-contact-points.md](10-intake-and-contact-points.md) | form and chat submissions with their source, proposals a person decides, and the state of each email and phone |
 
 When all tasks in a phase are ✅, move the phase file to `docs/done/`.

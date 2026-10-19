@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { Actor, Cursor, ExpectedVersion, IdempotencyKey, IsoDateTime, Limit, Reason, Slug, Uuid } from './primitives.js'
 import { Filter, Sort } from './filter.js'
 import { Candidate } from './matching.js'
+import { SourceRef } from './source-ref.js'
 
 export const Visibility = z.enum(['team', 'users', 'private'])
   .describe('who can see this record; admins do not bypass record visibility')
@@ -49,7 +50,9 @@ const VisibilityArgs = {
 }
 export const CrmRecordCreate = { in: z.object({
   object_type: Slug.describe('object type slug'), data: RecordData, links: z.array(LinkInput).max(50).optional().describe('links created atomically with the record'),
-  owner: Actor.optional().describe('record owner'), ...VisibilityArgs, ...Common,
+  owner: Actor.optional().describe('record owner'), ...VisibilityArgs,
+  source: SourceRef.optional().describe('where the record came from (form, widget or import); stored as its first source'),
+  ...Common,
 }), out: z.object({ record: RecordOut, duplicates: z.array(Candidate).optional() }) }
 export const CrmRecordUpdate = { in: z.object({
   id: Uuid.describe('record id'), data: RecordData.describe('patch; null clears a field'), owner: Actor.nullable().optional().describe('replacement owner or null'),

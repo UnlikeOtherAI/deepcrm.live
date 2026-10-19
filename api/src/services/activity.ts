@@ -1,3 +1,4 @@
+import type { AuditTx } from '@deepcrm/db'
 import {
   ErrorCode,
   ServiceError,
@@ -38,31 +39,37 @@ function aboutLinks(relationType: 'activity_about' | 'note_about', about: readon
   return [...new Set(about)].map((toRecordId) => ({ relationType, toRecordId }))
 }
 
+/**
+ * Moves the live records' `last_activity_at` forward to `occurredAt`, never
+ * back (monotonic), in the caller's transaction; a record that is gone is
+ * `NOT_FOUND`.
+ */
+export async function touchLastActivity(
+  tx: Pick<AuditTx, '$executeRaw'>, ctx: ActorContext, about: readonly string[], occurredAt: Date,
+): Promise<void> {
+  const recordIds = [...new Set(about)]
+  const updated = await tx.$executeRaw`
+    UPDATE records
+    SET last_activity_at = GREATEST(COALESCE(last_activity_at, ${occurredAt}), ${occurredAt})
+    WHERE organization_id = ${ctx.tenant.organizationId}::uuid
+      AND team_id = ${ctx.tenant.teamId}::uuid
+      AND id = ANY(${recordIds}::uuid[])
+      AND deleted_at IS NULL
+      AND merged_into_id IS NULL
+      AND erased_at IS NULL
+  `
+  if (updated !== recordIds.length) {
+    throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+  }
+}
+
 function activityWrite(
   ctx: ActorContext,
   tool: 'crm_activity_log' | 'crm_note_add',
   about: readonly string[],
   occurredAt: Date,
 ): RecordWriteIntegration {
-  const recordIds = [...new Set(about)]
-  return {
-    tool,
-    afterWrite: async (tx) => {
-      const updated = await tx.$executeRaw`
-        UPDATE records
-        SET last_activity_at = GREATEST(COALESCE(last_activity_at, ${occurredAt}), ${occurredAt})
-        WHERE organization_id = ${ctx.tenant.organizationId}::uuid
-          AND team_id = ${ctx.tenant.teamId}::uuid
-          AND id = ANY(${recordIds}::uuid[])
-          AND deleted_at IS NULL
-          AND merged_into_id IS NULL
-          AND erased_at IS NULL
-      `
-      if (updated !== recordIds.length) {
-        throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
-      }
-    },
-  }
+  return { tool, afterWrite: (tx) => touchLastActivity(tx, ctx, about, occurredAt) }
 }
 
 export function logActivity(

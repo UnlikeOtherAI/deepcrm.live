@@ -10,6 +10,7 @@ import { getManyRecords } from '../../services/record-collection.js'
 import { getRecord } from '../../services/record-read.js'
 import { countRecords, queryRecords } from '../../services/record-query.js'
 import { enqueueBulkAssert } from '../../services/bulk-assert.js'
+import { withFirstSource } from '../../services/record-source.js'
 import {
   assertRecord, createRecord, deleteRecord, recordAt, recordHistory, restoreRecord, updateRecord,
 } from '../../services/records.js'
@@ -38,11 +39,13 @@ export function registerRecordTools(
 ): void {
   defineTool(server, {
     name: 'crm_record_create', title: 'Create record', group: 'records', access: 'standard',
-    description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. A refused value returns VALIDATION_FAILED issues naming its type and an expected value.',
+    description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. source names the form, widget or import it came from (stored as first_source_*). Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. Refused values return VALIDATION_FAILED.',
     input: CrmRecordCreate.in.shape,
     handler: async (args) => {
+      const data = args.source === undefined
+        ? args.data : await withFirstSource(deps, ctx, args.object_type, args.data, args.source)
       const result = await createRecord(deps, ctx, {
-        objectType: args.object_type, data: args.data, links: inlineLinks(args.links), owner: args.owner,
+        objectType: args.object_type, data, links: inlineLinks(args.links), owner: args.owner,
         visibility: args.visibility, visibleTo: args.visible_to, origin: args.origin, reason: args.reason,
         idempotencyKey: args.idempotency_key,
       })

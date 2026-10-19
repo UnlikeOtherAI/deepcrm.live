@@ -22,6 +22,8 @@ import { registerResources } from './resources.js'
 import { registerPrompts } from './prompts.js'
 import { registerSchemaTools } from './tools/schema.js'
 import { registerRecordTools } from './tools/records.js'
+import { registerIntakeTools } from './tools/intake.js'
+import { registerContactPointTools } from './tools/contact-points.js'
 import { registerLinkTools } from './tools/links.js'
 import { registerListTools } from './tools/lists.js'
 import { registerActivityTools } from './tools/activity.js'
@@ -166,6 +168,8 @@ export function buildMcpServer(
   bootstrap.disable()
   registerSchemaTools(server, ctx, deps)
   registerRecordTools(server, ctx, deps)
+  registerIntakeTools(server, ctx, deps)
+  registerContactPointTools(server, ctx, deps)
   registerLinkTools(server, ctx, deps)
   registerListTools(server, ctx, deps)
   registerActivityTools(server, ctx, deps)

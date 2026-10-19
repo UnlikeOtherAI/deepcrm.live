@@ -26,3 +26,7 @@ export type {
   MatchingRuleInput, SetMatchingRulesResult,
 } from './matching-rules.js'
 export { applyTemplate, applyTemplateBatch, listTemplates, TemplateSchema, type TemplateAdded } from '../templates/index.js'
+export {
+  ACTIVITY_SOURCE_ATTRIBUTE_SLUGS, ensureSourceAttributes, FIRST_SOURCE_ATTRIBUTE_SLUGS, holdsSourceAttributes,
+  type SourceAttributeSet,
+} from './source-attributes.js'
