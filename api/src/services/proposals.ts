@@ -77,8 +77,10 @@ function common(row: ProposalRow, objectType: LoadedObjectType) {
   return {
     id: row.id,
     kind: row.kind,
-    status: row.status === 'approved' || row.status === 'rejected' ? row.status : 'pending' as const,
+    status: row.status,
     created_at: row.createdAt.toISOString(),
+    submissions: row.submissions,
+    last_submitted_at: row.lastSubmittedAt.toISOString(),
     source: SourceRef.parse({ kind: row.sourceKind, id: row.sourceId, name: row.sourceName }),
     object_type: objectType.slug,
     resolved_record_id: row.resolvedRecordId,
@@ -159,6 +161,7 @@ function policyRequests(ctx: ActorContext): PolicyRequest[] {
  * first: an amendment to a record the caller can see, with the proposed and
  * the current value (absent when the attribute is redacted for them), or an
  * unresolved match with the visible candidates and the submitted values.
+ * Each names its latest source and how many identical submissions it holds.
  */
 export async function listProposals(
   deps: AppDeps, ctx: ActorContext, input: CrmProposalsListInput,

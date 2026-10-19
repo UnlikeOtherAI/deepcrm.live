@@ -768,8 +768,11 @@ export const CrmIntakeSubmit = { in: z.object({ source: SubjectSourceRef,
   note: z.object({ title: z.string().max(300).optional(), body: z.string().min(1).max(100_000) }).strict().optional(),
   idempotency_key: IdempotencyKey }),   // service: email or phone required; consent needs email
   out: z.object({ outcome: z.enum(['created','paired','pending']), record_id: Uuid.nullable() }) }
+export const ProposalStatus = z.enum(['pending','approved','rejected','superseded'])   // superseded: pushed out of a window; still decidable
 export const ProposalItem = z.object({ id: Uuid, kind: z.enum(['amendment','match']),
-  status: z.enum(['pending','approved','rejected']), created_at: IsoDateTime, source: SourceRef, object_type: Slug,
+  status: ProposalStatus, created_at: IsoDateTime,                        // created_at: the first identical submission
+  submissions: z.number().int().min(1), last_submitted_at: IsoDateTime,   // identical submissions collapsed, the latest
+  source: SourceRef, object_type: Slug,                                   // source: the latest identical submission's
   record: RecordSummary.extend({ version: z.number().int() }).nullable(),
   attribute: z.object({ slug: Slug, name: z.string(), type: z.string(), is_multi: z.boolean() }).nullable(),
   proposed_value: z.unknown().optional(), current_value: z.unknown().optional(),
@@ -778,14 +781,14 @@ export const ProposalItem = z.object({ id: Uuid, kind: z.enum(['amendment','matc
   submitted: z.record(Slug, z.unknown()).optional(),
   activity: z.object({ subject: z.string(), occurred_at: IsoDateTime }).optional(),
   redacted_attributes: z.array(Slug), resolved_record_id: Uuid.nullable() })
-export const CrmProposalsList = { in: z.object({ status: z.enum(['pending','approved','rejected']).optional(),
+export const CrmProposalsList = { in: z.object({ status: ProposalStatus.optional(),
   kind: z.enum(['amendment','match']).optional(), record_id: Uuid.optional(),
   source_id: z.string().min(1).max(128).optional(), cursor: Cursor, limit: Limit }),
   out: z.object({ proposals: z.array(ProposalItem), next_cursor: z.string().nullable() }) }
 export const CrmProposalDecide = { in: z.object({ id: Uuid, decision: z.enum(['approve','reject']),
   record_id: Uuid.optional().describe('approving a match: pair with this person; omitted ⇒ create one'),
   expected_version: ExpectedVersion, reason: Reason }),
-  out: z.object({ id: Uuid, status: z.enum(['pending','approved','rejected']), record_id: Uuid.nullable() }) }
+  out: z.object({ id: Uuid, status: z.enum(['approved','rejected']), record_id: Uuid.nullable() }) }   // id: pending or superseded
 
 // ── contact points: the state of each email and phone (schema-engine §4d‴; tools-contact-points.ts)
 const ContactActor = z.object({ type: z.enum(['human','agent','system']), id: z.string() })

@@ -56,7 +56,12 @@ export const CrmIntakeSubmit = {
 }
 
 export const ProposalKind = z.enum(['amendment', 'match'])
-export const ProposalStatus = z.enum(['pending', 'approved', 'rejected'])
+/**
+ * pending: in its window, waiting for a person; superseded: pushed out of a
+ * window by newer submissions, still decidable until retention removes it;
+ * approved / rejected: decided.
+ */
+export const ProposalStatus = z.enum(['pending', 'approved', 'rejected', 'superseded'])
 /** What pointed at a candidate: one of its active values, or a value archived on it (schema-engine §4d‴). */
 export const ProposalMatchedOn = z.enum(['email', 'phone', 'archived_email', 'archived_phone'])
 
@@ -68,7 +73,13 @@ export const ProposalItem = z.object({
   id: Uuid,
   kind: ProposalKind,
   status: ProposalStatus,
+  /** when the first of its identical submissions arrived */
   created_at: IsoDateTime,
+  /** how many identical submissions (same field and value, or same match) it stands for */
+  submissions: z.number().int().min(1),
+  /** when the latest of them arrived */
+  last_submitted_at: IsoDateTime,
+  /** the latest identical submission's source */
   source: SourceRef,
   object_type: Slug,
   /** amendment: the person and its current version; match: null */
@@ -89,7 +100,10 @@ export const ProposalItem = z.object({
 
 export const CrmProposalsList = {
   in: z.object({
-    status: ProposalStatus.optional().describe('only proposals in this state; omitted ⇒ every state'),
+    status: ProposalStatus.optional().describe(
+      'only proposals in this state: pending, superseded (pushed out of a window by newer submissions; still '
+      + 'decidable), approved or rejected; omitted ⇒ every state',
+    ),
     kind: ProposalKind.optional().describe('amendment (a change to one field) or match (an unresolved pairing)'),
     record_id: Uuid.optional().describe('only amendments to this visible record'),
     source_id: z.string().min(1).max(128).optional().describe('only proposals from this source id'),
@@ -101,7 +115,7 @@ export const CrmProposalsList = {
 
 export const CrmProposalDecide = {
   in: z.object({
-    id: Uuid.describe('pending proposal id from crm_proposals_list'),
+    id: Uuid.describe('pending or superseded proposal id from crm_proposals_list'),
     decision: z.enum(['approve', 'reject']).describe('approve writes the change or resolves the match; reject drops it'),
     record_id: Uuid.optional()
       .describe('approving a match: the visible person to pair with; omitted ⇒ create a new person'),
@@ -110,7 +124,7 @@ export const CrmProposalDecide = {
   }),
   out: z.object({
     id: Uuid,
-    status: ProposalStatus,
+    status: z.enum(['approved', 'rejected']),
     record_id: Uuid.nullable(),
   }),
 }

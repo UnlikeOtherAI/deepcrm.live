@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import { canonicalJson, tenantWhere, type Db, type Prisma } from '@deepcrm/db'
+import { canonicalJson, tenantWhere, type AuditTx, type Db, type Prisma } from '@deepcrm/db'
 import { canonicalJsonValue, type JsonValue } from '@deepcrm/schema-engine'
 import { ErrorCode, ServiceError, type ActorContext, type SourceRef } from '@deepcrm/schemas'
 
@@ -9,14 +9,21 @@ import { z } from 'zod'
 import type { PairChange } from './intake-submission.js'
 
 /**
- * Proposals a submission leaves for a person (schema-engine §4d″). Both caps
- * bound what public input can queue: a submission that would pass one is
- * refused with `LIMIT_EXCEEDED` whole, never partly stored.
+ * The pending windows (schema-engine §4d″). Every proposal waits in a queue —
+ * an amendment's is its record and attribute, a match's its email and phone —
+ * and a submission is never refused because of other proposals: an identical
+ * one collapses into the open proposal, and past a window the oldest pending
+ * proposals are superseded, the newest kept. Five per queue: approving an
+ * amendment writes one value, so a reviewer chooses among a few alternatives,
+ * and a flood on one field or one identity holds at most five pending rows
+ * without growing the team's count. A thousand per team: an inbox a team can
+ * still work through, reached only by submissions spread over at least two
+ * hundred queues.
  */
-export const MAX_PENDING_PER_RECORD = 25
-export const MAX_PENDING_PER_TEAM = 1_000
+export const PENDING_PER_QUEUE = 5
+export const PENDING_PER_TEAM = 1_000
 
-type ProposalTx = Pick<Db, 'recordProposal'>
+type ProposalTx = Pick<Db, 'recordProposal'> & Pick<AuditTx, '$executeRaw'>
 
 /** Who proposed, through which source, about which type — the same for every row of one submission. */
 export type ProposalOrigin = {
@@ -25,6 +32,9 @@ export type ProposalOrigin = {
   requestId: string
   objectTypeId: string
 }
+
+/** What a submission did to the proposals: how many it placed (new or collapsed) and how many it superseded. */
+export type ProposalEffect = { placed: number; superseded: number }
 
 export type MatchedOn = 'email' | 'phone' | 'archived_email' | 'archived_phone'
 export type MatchCandidate = { record_id: string; matched_on: MatchedOn[] }
@@ -50,6 +60,17 @@ export const MatchCandidates = z.array(z.object({
   record_id: z.string().uuid(), matched_on: z.array(z.enum(['email', 'phone', 'archived_email', 'archived_phone'])),
 }).strict())
 
+/** One proposal as the store places it. */
+type Proposal = {
+  kind: 'amendment' | 'match'
+  queueKey: string
+  proposedHash: string
+  recordId: string | null
+  attributeSlug: string | null
+  proposed: Prisma.InputJsonValue
+  candidates: Prisma.InputJsonValue
+}
+
 function hash(value: Prisma.InputJsonValue): string {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')
 }
@@ -66,83 +87,146 @@ function json(value: unknown): Prisma.InputJsonValue {
   return converted
 }
 
-function columns(ctx: ActorContext, origin: ProposalOrigin) {
-  return {
-    ...tenantWhere(ctx.tenant),
-    objectTypeId: origin.objectTypeId,
-    sourceKind: origin.source.kind,
-    sourceId: origin.source.id,
-    sourceName: origin.source.name,
-    requesterType: origin.requester.type,
-    requesterId: origin.requester.id,
-    requestId: origin.requestId,
-  }
+/** An amendment's queue: one field of one record. */
+function amendmentQueue(recordId: string, attributeSlug: string): string {
+  return `amendment:${recordId}:${attributeSlug}`
 }
 
-function limitExceeded(limit: number, scope: 'team' | 'record'): ServiceError {
-  return new ServiceError(ErrorCode.LIMIT_EXCEEDED, 'Too many pending proposals', { limit, scope })
-}
-
-async function assertRoom(tx: ProposalTx, ctx: ActorContext, recordId: string | null, adding: number): Promise<void> {
-  if (adding === 0) return
-  const pending = { ...tenantWhere(ctx.tenant), status: 'pending' as const }
-  const team = await tx.recordProposal.count({ where: pending })
-  if (team + adding > MAX_PENDING_PER_TEAM) throw limitExceeded(MAX_PENDING_PER_TEAM, 'team')
-  if (recordId === null) return
-  const record = await tx.recordProposal.count({ where: { ...pending, recordId } })
-  if (record + adding > MAX_PENDING_PER_RECORD) throw limitExceeded(MAX_PENDING_PER_RECORD, 'record')
+/** A match's queue: the normalised email and phone it was found by (migration 20261019160000 computes the same). */
+export function matchQueue(email: string | undefined, phone: string | undefined): string {
+  return `match:${createHash('sha256').update(`${email ?? ''}\n${phone ?? ''}`, 'utf8').digest('hex')}`
 }
 
 /**
- * Stores one pending amendment per real change, skipping a change the record
- * already has pending with the same value. Runs under the record's lock, so
- * the skip and the caps hold. Answers how many were stored.
+ * Collapses a submission into an open proposal: one more submission, the
+ * latest source, requester and stored value, and the newest place in
+ * submission order, pending again. A decision may settle the row meanwhile
+ * (deciding takes no team lock), so the status is checked again here and a
+ * decided row is never reopened. Answers whether it collapsed.
+ */
+async function collapse(
+  tx: ProposalTx, ctx: ActorContext, origin: ProposalOrigin, proposal: Proposal, id: string,
+): Promise<boolean> {
+  const updated = await tx.$executeRaw`
+    UPDATE record_proposals
+    SET status = 'pending'::"ProposalStatus", resolved_at = NULL, submissions = submissions + 1,
+        submitted_seq = nextval(pg_get_serial_sequence('record_proposals', 'submitted_seq')),
+        last_submitted_at = CURRENT_TIMESTAMP, proposed = ${JSON.stringify(proposal.proposed)}::jsonb,
+        candidates = ${JSON.stringify(proposal.candidates)}::jsonb,
+        source_kind = ${origin.source.kind}, source_id = ${origin.source.id}, source_name = ${origin.source.name},
+        requester_type = ${origin.requester.type}::"ActorType", requester_id = ${origin.requester.id},
+        request_id = ${origin.requestId}
+    WHERE organization_id = ${ctx.tenant.organizationId}::uuid AND team_id = ${ctx.tenant.teamId}::uuid
+      AND id = ${id}::uuid AND status IN ('pending'::"ProposalStatus", 'superseded'::"ProposalStatus")
+  `
+  return updated === 1
+}
+
+/**
+ * Places one proposal. An open proposal of the same queue and value —
+ * pending, or superseded and not yet removed by retention — absorbs it;
+ * otherwise a new pending row is written. Callers hold the team's
+ * link-topology lock (intake and match resolution take it), so there is one
+ * open row per identity and the windows below hold exactly.
+ */
+async function place(tx: ProposalTx, ctx: ActorContext, origin: ProposalOrigin, proposal: Proposal): Promise<void> {
+  const open = await tx.recordProposal.findFirst({
+    where: {
+      ...tenantWhere(ctx.tenant), queueKey: proposal.queueKey, proposedHash: proposal.proposedHash,
+      status: { in: ['pending', 'superseded'] },
+    },
+    orderBy: { submittedSeq: 'desc' },
+    select: { id: true },
+  })
+  if (open !== null && await collapse(tx, ctx, origin, proposal, open.id)) return
+  await tx.recordProposal.create({
+    data: {
+      ...tenantWhere(ctx.tenant), objectTypeId: origin.objectTypeId, kind: proposal.kind, recordId: proposal.recordId,
+      attributeSlug: proposal.attributeSlug, queueKey: proposal.queueKey, proposed: proposal.proposed,
+      proposedHash: proposal.proposedHash, candidates: proposal.candidates,
+      sourceKind: origin.source.kind, sourceId: origin.source.id, sourceName: origin.source.name,
+      requesterType: origin.requester.type, requesterId: origin.requester.id, requestId: origin.requestId,
+    },
+    select: { id: true },
+  })
+}
+
+/**
+ * Supersedes the pending proposals past the windows, oldest first: beyond
+ * the newest five of each queue just written to, then beyond the newest
+ * thousand of the team. The rows stay, with their state, until retention.
+ * The outer `status` check is re-read on a row a concurrent decision just
+ * settled, so a decided proposal is never superseded. Answers how many were.
+ */
+async function supersedeOverflow(tx: ProposalTx, ctx: ActorContext, queueKeys: readonly string[]): Promise<number> {
+  const { organizationId, teamId } = ctx.tenant
+  const queues = await tx.$executeRaw`
+    UPDATE record_proposals SET status = 'superseded'::"ProposalStatus", resolved_at = ${ctx.now}
+    WHERE organization_id = ${organizationId}::uuid AND team_id = ${teamId}::uuid
+      AND status = 'pending'::"ProposalStatus" AND id IN (
+      SELECT id FROM (
+        SELECT id, row_number() OVER (PARTITION BY queue_key ORDER BY submitted_seq DESC) AS place
+        FROM record_proposals
+        WHERE organization_id = ${organizationId}::uuid AND team_id = ${teamId}::uuid
+          AND status = 'pending'::"ProposalStatus" AND queue_key = ANY(${[...queueKeys]}::text[])
+      ) AS ranked
+      WHERE place > ${PENDING_PER_QUEUE}
+    )
+  `
+  const team = await tx.$executeRaw`
+    UPDATE record_proposals SET status = 'superseded'::"ProposalStatus", resolved_at = ${ctx.now}
+    WHERE organization_id = ${organizationId}::uuid AND team_id = ${teamId}::uuid
+      AND status = 'pending'::"ProposalStatus" AND id IN (
+      SELECT id FROM record_proposals
+      WHERE organization_id = ${organizationId}::uuid AND team_id = ${teamId}::uuid
+        AND status = 'pending'::"ProposalStatus"
+      ORDER BY submitted_seq DESC
+      OFFSET ${PENDING_PER_TEAM}
+    )
+  `
+  return queues + team
+}
+
+/**
+ * Places one pending amendment per real change — collapsing into an open
+ * amendment of the same record, attribute and value — then supersedes what
+ * overflows the windows. Never refuses.
  */
 export async function proposeAmendments(
   tx: ProposalTx, ctx: ActorContext, origin: ProposalOrigin, recordId: string, amendments: readonly PairChange[],
-): Promise<number> {
-  const rows: Prisma.RecordProposalCreateManyInput[] = []
+): Promise<ProposalEffect> {
+  const placed = new Map<string, string>()
   for (const amendment of amendments) {
+    const slug = amendment.attribute.slug
     const proposed = json(amendment.value)
-    const proposedHash = hash({ attribute: amendment.attribute.slug, value: proposed })
-    const existing = await tx.recordProposal.findFirst({
-      where: { ...tenantWhere(ctx.tenant), recordId, attributeSlug: amendment.attribute.slug, proposedHash, status: 'pending' },
-      select: { id: true },
+    const proposedHash = hash({ attribute: slug, value: proposed })
+    const queueKey = amendmentQueue(recordId, slug)
+    if (placed.get(queueKey) === proposedHash) continue
+    await place(tx, ctx, origin, {
+      kind: 'amendment', queueKey, proposedHash, recordId, attributeSlug: slug, proposed, candidates: [],
     })
-    if (existing !== null || rows.some((row) => row.proposedHash === proposedHash)) continue
-    rows.push({
-      ...columns(ctx, origin), kind: 'amendment', recordId, attributeSlug: amendment.attribute.slug,
-      proposed, proposedHash,
-    })
+    placed.set(queueKey, proposedHash)
   }
-  await assertRoom(tx, ctx, recordId, rows.length)
-  if (rows.length > 0) await tx.recordProposal.createMany({ data: rows })
-  return rows.length
+  if (placed.size === 0) return { placed: 0, superseded: 0 }
+  return { placed: placed.size, superseded: await supersedeOverflow(tx, ctx, [...placed.keys()]) }
 }
 
 /**
- * Stores a pending match — the validated submission and the people its email
- * and phone point at — unless the same submission from the same source is
- * already pending. Answers the proposal id.
+ * Places a pending match — the validated submission and the people its email
+ * and phone point at — collapsing into an open match of the same email,
+ * phone, values, activity text and note, whatever its source or activity
+ * time; then supersedes what overflows the windows. Never refuses.
  */
 export async function proposeMatch(
   tx: ProposalTx, ctx: ActorContext, origin: ProposalOrigin, submission: PendingSubmission,
   candidates: readonly MatchCandidate[],
-): Promise<string> {
-  const proposed = json(submission)
-  const proposedHash = hash({ source: [origin.source.kind, origin.source.id], submission: proposed })
-  const existing = await tx.recordProposal.findFirst({
-    where: { ...tenantWhere(ctx.tenant), kind: 'match', proposedHash, status: 'pending' },
-    select: { id: true },
+): Promise<ProposalEffect> {
+  const { kind, subject, body } = submission.activity
+  const queueKey = matchQueue(submission.email, submission.phone)
+  await place(tx, ctx, origin, {
+    kind: 'match', queueKey, recordId: null, attributeSlug: null,
+    proposedHash: hash(json({ ...submission, activity: { kind, subject, ...(body === undefined ? {} : { body }) } })),
+    proposed: json(submission), candidates: json(candidates),
   })
-  if (existing !== null) return existing.id
-  await assertRoom(tx, ctx, null, 1)
-  const created = await tx.recordProposal.create({
-    data: {
-      ...columns(ctx, origin), kind: 'match', recordId: null, attributeSlug: null,
-      proposed, proposedHash, candidates: json(candidates),
-    },
-    select: { id: true },
-  })
-  return created.id
+  return { placed: 1, superseded: await supersedeOverflow(tx, ctx, [queueKey]) }
 }

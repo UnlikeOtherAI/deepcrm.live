@@ -36,6 +36,7 @@ type Outcome = {
   filled: string[]
   added: string[]
   amendments: number
+  superseded: number
   candidates: number
   consent: ConsentOutcome
   suppression: ConsentSuppressionChange
@@ -119,8 +120,7 @@ async function write(
     const created = await createPerson(writer, submission, intakeLog, act, trail)
     return {
       result: { outcome: 'created', record_id: created.recordId }, filled: [], added: [], amendments: 0,
-      candidates: 0,
-      consent: created.consent, suppression: created.suppression,
+      superseded: 0, candidates: 0, consent: created.consent, suppression: created.suppression,
     }
   }
   if (second === undefined && activelyMatched(only)) {
@@ -128,15 +128,17 @@ async function write(
     const paired = await pairWithRecord(writer, only.record_id, submission, intakeLog, consent, trail)
     return {
       result: { outcome: 'paired', record_id: only.record_id }, filled: paired.filled, added: paired.added,
-      amendments: paired.amendments, candidates: 1, consent: paired.consent, suppression: paired.suppression,
+      amendments: paired.amendments, superseded: paired.superseded, candidates: 1, consent: paired.consent,
+      suppression: paired.suppression,
     }
   }
-  await proposeMatch(tx, ctx, writer.proposal, pendingSubmission(target, submission, intakeLog), candidates)
+  const pending = pendingSubmission(target, submission, intakeLog)
+  const match = await proposeMatch(tx, ctx, writer.proposal, pending, candidates)
   const consent = act === null ? { consent: 'none' as const, suppression: 'none' as const }
     : await consentWithoutPairing(writer, holder, act, trail)
   return {
     result: { outcome: 'pending', record_id: null }, filled: [], added: [], amendments: 0,
-    candidates: candidates.length,
+    superseded: match.superseded, candidates: candidates.length,
     ...consent,
   }
 }
@@ -159,8 +161,8 @@ async function audit(
       ...recordAuditMetadata(ctx),
       outcome: outcome.result.outcome,
       source: { kind: input.source.kind, id: input.source.id, name: input.source.name },
-      filled: outcome.filled, added: outcome.added, amendments: outcome.amendments, candidates: outcome.candidates,
-      consent: outcome.consent, suppression: outcome.suppression,
+      filled: outcome.filled, added: outcome.added, amendments: outcome.amendments, superseded: outcome.superseded,
+      candidates: outcome.candidates, consent: outcome.consent, suppression: outcome.suppression,
     },
     requestId: ctx.requestId,
     ipAddress: null,
@@ -221,7 +223,8 @@ async function commit(
  * Records a data subject's own submission through a form or chat widget
  * (schema-engine §4d″), in one transaction: no match creates the person; a
  * 100% match pairs (fills empty fields, queues real changes as amendments);
- * anything ambiguous is held as a pending match. Answers the outcome only.
+ * anything ambiguous is held as a pending match. Never refused because of
+ * other pending proposals. Answers the outcome only.
  */
 export async function submitIntake(
   deps: AppDeps, ctx: ActorContext, input: CrmIntakeSubmitInput,
