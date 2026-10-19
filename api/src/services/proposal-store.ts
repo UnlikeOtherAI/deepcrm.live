@@ -26,7 +26,8 @@ export type ProposalOrigin = {
   objectTypeId: string
 }
 
-export type MatchCandidate = { record_id: string; matched_on: Array<'email' | 'phone'> }
+export type MatchedOn = 'email' | 'phone' | 'archived_email' | 'archived_phone'
+export type MatchCandidate = { record_id: string; matched_on: MatchedOn[] }
 
 /**
  * What a pending match holds: the normalised email and phone, the validated
@@ -46,7 +47,7 @@ export const PendingSubmission = z.object({
 export type PendingSubmission = z.infer<typeof PendingSubmission>
 
 export const MatchCandidates = z.array(z.object({
-  record_id: z.string().uuid(), matched_on: z.array(z.enum(['email', 'phone'])),
+  record_id: z.string().uuid(), matched_on: z.array(z.enum(['email', 'phone', 'archived_email', 'archived_phone'])),
 }).strict())
 
 function hash(value: Prisma.InputJsonValue): string {

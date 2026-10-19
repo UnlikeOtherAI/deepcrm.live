@@ -2,11 +2,14 @@ import { tenantWhere, type Db } from '@deepcrm/db'
 import type { QueueEnqueueTx } from '@deepcrm/queue'
 import {
   ACTIVITY_SOURCE_ATTRIBUTE_SLUGS,
+  archivedHolders,
   canonicalJsonValue,
+  contactPointRows,
   createRecord as engineCreateRecord,
   FIRST_SOURCE_ATTRIBUTE_SLUGS,
   findUniqueRecord,
   lockRecords,
+  syncContactPoints,
   updateRecord as engineUpdateRecord,
   type InlineLinkAuthorizer,
   type JsonValue,
@@ -24,10 +27,10 @@ import { consentPatch } from './consent-data.js'
 import type { ConsentSuppressionChange } from './consent-suppression.js'
 import { planPairChanges, submittedValues, type Submission } from './intake-submission.js'
 import type { IntakeTarget } from './intake-target.js'
-import { proposeAmendments, type MatchCandidate, type ProposalOrigin } from './proposal-store.js'
+import { proposeAmendments, type MatchCandidate, type MatchedOn, type ProposalOrigin } from './proposal-store.js'
 
 export type IntakeTx = RecordTx & QueueEnqueueTx
-  & Pick<Db, 'webhook' | 'list' | 'suppressionEntry' | 'record' | 'recordProposal' | 'policyRule'>
+  & Pick<Db, 'webhook' | 'list' | 'suppressionEntry' | 'record' | 'recordProposal' | 'policyRule' | 'recordContactPoint'>
 
 /** The inbound activity and optional note a submission logs on its person. */
 export type IntakeLog = {
@@ -75,15 +78,21 @@ function firstSource(source: SourceRef): Record<string, string> {
   }
 }
 
-/** The people the submission's email and phone point at, each found structurally. */
+/**
+ * The people the submission's email and phone point at, each found
+ * structurally: by an active value (the email's unique key, the phone in the
+ * phone attribute) or by a value archived on them — a person with an old
+ * number is still that person.
+ */
 export async function findCandidates(
   tx: IntakeTx, ctx: ActorContext, target: IntakeTarget, submission: Submission,
 ): Promise<MatchCandidate[]> {
-  const found = new Map<string, Set<'email' | 'phone'>>()
-  const add = (id: string, on: 'email' | 'phone') => found.set(id, (found.get(id) ?? new Set()).add(on))
+  const found = new Map<string, Set<MatchedOn>>()
+  const add = (id: string, on: MatchedOn) => found.set(id, (found.get(id) ?? new Set()).add(on))
   if (submission.email !== null) {
     const holder = await findUniqueRecord(tx, ctx.tenant, target.email.id, submission.email.hash)
     if (holder !== null) add(holder, 'email')
+    for (const id of await archivedHolders(tx, ctx.tenant, target.email.id, submission.email.hash)) add(id, 'archived_email')
   }
   if (submission.phone !== null && target.phone !== null) {
     const phone = submission.phone.value
@@ -97,9 +106,15 @@ export async function findCandidates(
       ORDER BY id ASC LIMIT 20
     `
     for (const row of rows) add(row.id, 'phone')
+    for (const id of await archivedHolders(tx, ctx.tenant, target.phone.id, submission.phone.hash)) add(id, 'archived_phone')
   }
   return [...found].sort(([left], [right]) => left.localeCompare(right))
     .map(([recordId, on]) => ({ record_id: recordId, matched_on: [...on].sort() }))
+}
+
+/** Whether a candidate was found by one of its active values, not only by archived ones. */
+export function activelyMatched(candidate: MatchCandidate): boolean {
+  return candidate.matched_on.includes('email') || candidate.matched_on.includes('phone')
 }
 
 /** The record whose email key the submission's email holds, before anything is written. */
@@ -155,6 +170,9 @@ export async function createPerson(
   }, deps.linkWriter)
   record(trail, created)
   const recordId = created.record.id
+  await syncContactPoints(tx, ctx, target.objectType, recordId, { before: {}, after: created.record.data }, {
+    source: writer.source, confirmed: false,
+  })
   const suppression = act === null ? 'none' : await settleConsentSuppression(tx, ctx, act, recordId, true)
   await logSubmission(writer, recordId, log, trail)
   return { recordId, consent: act === null ? 'none' : 'written', suppression }
@@ -209,7 +227,10 @@ export async function pairWithRecord(
   const { deps, tx, ctx, target } = writer
   await lockRecords(tx, ctx.tenant.teamId, [recordId])
   const stored = await liveData(tx, ctx, recordId)
-  const changes = planPairChanges(target, submission, stored)
+  // A value archived on the person stays archived: a submission never undoes a person's decision.
+  const archived = new Set((await contactPointRows(tx, ctx.tenant, recordId))
+    .filter((row) => row.archivedAt !== null).map((row) => `${row.attributeId}:${row.value}`))
+  const changes = planPairChanges(target, submission, stored, archived)
   const held = consent !== null && consent.heldBefore
     ? await consentOnHolder(writer, consent.act, stored) : null
   const patch: Record<string, JsonValue> = { ...(held?.patch ?? {}) }
@@ -221,6 +242,9 @@ export async function pairWithRecord(
       recordId, data: patch, reason: writer.reason, originRequirement: 'waived',
     }, deps.linkWriter)
     record(trail, written)
+    await syncContactPoints(tx, ctx, target.objectType, recordId, { before: stored, after: written.record.data }, {
+      source: writer.source, confirmed: false,
+    })
   }
   const suppression = consent === null ? 'none'
     : await settleConsentSuppression(tx, ctx, consent.act, consent.heldBefore ? recordId : null, held?.consent === 'written')

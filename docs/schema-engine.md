@@ -486,6 +486,7 @@ model Record {
   visibilityGrants RecordVisibilityGrant[]
   listEntries    ListEntry[]
   proposals      RecordProposal[]
+  contactPoints  RecordContactPoint[]
 
   @@index([organizationId, teamId, objectTypeId, updatedAt(sort: Desc)])
   @@index([organizationId, teamId, objectTypeId, lastActivityAt])
@@ -990,6 +991,45 @@ model RecordProposal {
   @@index([recordId, status])
   @@map("record_proposals")
 }
+
+// The state of one email or phone of a record (§4d‴), keyed like
+// record_unique_keys by attribute and normalised-value hash. An active value
+// lives in records.data and here; an archived one only here, still readable.
+// A value with no row has unknown provenance and counts as confirmed.
+// FKs record_id → records and attribute_id → attributes, ON DELETE CASCADE.
+model RecordContactPoint {
+  id                 String     @id @default(uuid()) @db.Uuid
+  organizationId     String     @map("organization_id") @db.Uuid
+  teamId             String     @map("team_id") @db.Uuid
+  recordId           String     @map("record_id") @db.Uuid
+  attributeId        String     @map("attribute_id") @db.Uuid
+  value              String     // normalised; needed once archived
+  valueHash          String     @map("value_hash")
+  confirmed          Boolean
+  addedAt            DateTime?  @map("added_at")
+  addedByType        ActorType? @map("added_by_type")
+  addedById          String?    @map("added_by_id")
+  addedOnBehalfOf    String?    @map("added_on_behalf_of")
+  sourceKind         String?    @map("source_kind")
+  sourceId           String?    @map("source_id")
+  sourceName         String?    @map("source_name")
+  reachedAt          DateTime?  @map("reached_at")
+  reachedByType      ActorType? @map("reached_by_type")
+  reachedById        String?    @map("reached_by_id")
+  reachedOnBehalfOf  String?    @map("reached_on_behalf_of")
+  reachedNote        String?    @map("reached_note")
+  archivedAt         DateTime?  @map("archived_at")
+  archivedByType     ActorType? @map("archived_by_type")
+  archivedById       String?    @map("archived_by_id")
+  archivedOnBehalfOf String?    @map("archived_on_behalf_of")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+  record             Record     @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  attribute          Attribute  @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, attributeId, valueHash])
+  @@index([organizationId, teamId, attributeId, valueHash], map: "record_contact_points_tenant_value_idx")
+  @@map("record_contact_points")
+}
 ```
 
 T16 owns a **new forward migration** for the matching lifecycle; the committed
@@ -1229,9 +1269,9 @@ Soft delete sets `deleted_at`, ends active links per relation `on_delete` (`unli
 
 `crm_record_erase {id, reason, suppress?: boolean = true}` — owner-only by default (policy `record.erase`), audited, and the **one documented exception to change-log immutability**. `reason` is a **closed enum** (`gdpr_request | retention_policy | legal_order | other`) so nothing personal can ride into the audit trail through it; audit `metadata` for erase carries ids and counts only (R26).
 
-1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`, `registry_id`), write a `suppression_entries` row (`reason: erasure`, channel `all`) from the normalized hash **before** anything is scrubbed.
+1. If `suppress` (default): for every contact-shaped attribute value on the record (`email`, `phone`, `domain`, `registry_id`) — and every email or phone archived on it (§4d‴) — write a `suppression_entries` row (`reason: erasure`, channel `all`) from the normalized hash **before** anything is scrubbed.
 2. Scrub: `records.data = {}`, `display_name = '(erased)'`, `erasedAt = now`, unique/block-match/lookup-match keys deleted, search row deleted, visibility grants deleted, active links ended — **and, in the same transaction, `record_links.data` on every link (active or ended) touching the record, and `list_entries.data` on every entry pointing at it, are cleared** (R12). Enqueue `record.reindex_neighbours` so linked records' search content and embeddings stop carrying the erased `display_name` (R5b).
-3. History scrub: every `record_proposals` row that holds submitted values about the record — an amendment to it, a match naming it as a candidate or resolved to it (§4d″) — is deleted, and every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
+3. History scrub: the record's `record_contact_points` rows (active and archived values, §4d‴) are deleted; every `record_proposals` row that holds submitted values about the record — an amendment to it, a match naming it as a candidate or resolved to it (§4d″) — is deleted, and every `record_changes` row for this record has `old_value`, `new_value` and `snapshot` **nulled in place** — rows, kinds, actors, seqs and timestamps remain, so the feed and the audit chain stay intact (the chain hashes audit rows, not change rows).
 4. The record row remains as a tombstone: `ERASED` on direct reads, never restorable, never hard-deleted by retention — the tombstone is what proves erasure happened.
 5. One `record.erase` audit row; the change feed emits a **typed `record.erased` event** (not a generic delete) — consumers holding copies (webhook receivers, feed pullers, export takers) are contractually obliged to erase their copies on it (events.md §1; R26).
 
@@ -1292,17 +1332,17 @@ All six are `is_system`. **Older tenants and slug conflicts.** A call that names
 **`crm_intake_submit { source, email?, phone?, data?, object_type?, consent?, activity, note?, idempotency_key? }`** (`api/src/services/intake*.ts`) — subject-attested only; any other caller is `POLICY_DENIED`, audited as denied. In one transaction:
 
 1. **The type and the values.** The type is chosen as for a subject's consent (§4d′: person-kind). `phone` needs exactly one phone attribute on it (`VALIDATION_FAILED /phone` otherwise). Empty values — null, blank text, empty lists, a name with no part — are dropped first: an empty or missing value never proposes, fills or clears anything. `email` is normalised by the unique email attribute, `phone` to E.164 by the phone attribute. `data` may set only `personal_name`, `text`, `rich_text` and `select` attributes, never a unique one, the email or phone attribute, or a consent or first-source attribute (`VALIDATION_FAILED /data/<slug>`); its values are validated by their attributes. One of `email` and `phone` is required; `consent` needs `email`.
-2. **Candidates**, under the team's link-topology lock and the email and phone key locks: the person whose unique email key holds the email, and the live people whose phone attribute holds the E.164 phone (JSON containment on `records.data`, served by the `jsonb_path_ops` index). Structural facts only — never a name.
+2. **Candidates**, under the team's link-topology lock and the email and phone key locks: the person whose unique email key holds the email, the live people whose phone attribute holds the E.164 phone (JSON containment on `records.data`, served by the `jsonb_path_ops` index), and the people on whom that email or phone is archived (§4d‴; a merged record counts for the record it was merged into) — a person with an old number is still that person. Structural facts only — never a name.
 3. **No candidate ⇒ `created`.** The person is created from every submitted value with the first source, the consent values when `consent` is given (§4d′ create semantics) and origin `subject:<app>`.
-4. **One candidate ⇒ `paired`** — a 100% match: every identifier that points at anyone points at this person. An identifier that matches nobody (a new phone, a new email) does not block the match; it is new data. In one update by the subject actor, with the source as the change reason (`Submitted through <kind> <id> "<name>"`) and `require_origin` waived as for consent (rejected origins still apply): an empty field is filled; a multi attribute (emails, phones, multi selects) keeps every stored item and gains the submitted items it lacks, after them, in submitted order; a single-valued attribute whose non-empty stored value differs after the attribute's own normaliser (E.164; normalised email; whitespace- and case-insensitive text; a name's full form) becomes a pending **amendment**; an equal value changes nothing. Nothing a submission writes replaces or removes a stored value.
-5. **Two or more ⇒ `pending`.** Nothing is paired and no person is written to except by consent (step 6); the validated submission is stored as a pending **match** with its candidates and what matched each (`email`, `phone`).
+4. **One candidate, found by an active value ⇒ `paired`** — a 100% match: every identifier that points at anyone points at this person. An identifier that matches nobody (a new phone, a new email) does not block the match; it is new data. One candidate found only by archived values is `pending` instead (step 5): a person once said that number is no longer current, and numbers are reassigned. In one update by the subject actor, with the source as the change reason (`Submitted through <kind> <id> "<name>"`) and `require_origin` waived as for consent (rejected origins still apply): an empty field is filled; a multi attribute (emails, phones, multi selects) keeps every stored item and gains the submitted items it lacks, after them, in submitted order — a new email or phone arrives unconfirmed, with its source (§4d‴), and a value archived on the person is never written back; a single-valued attribute whose non-empty stored value differs after the attribute's own normaliser (E.164; normalised email; whitespace- and case-insensitive text; a name's full form) becomes a pending **amendment**; an equal value changes nothing. Nothing a submission writes replaces or removes a stored value.
+5. **Two or more, or one found only by archived values ⇒ `pending`.** Nothing is paired and no person is written to except by consent (step 6); the validated submission is stored as a pending **match** with its candidates and what matched each (`email`, `phone`, `archived_email`, `archived_phone`).
 6. **Consent** keeps §4d′ semantics, keyed by the email: it lands on the person who held the email *before* this submission (whatever the outcome), or on the person this submission creates; otherwise it is an act for an address no record holds (`declined` is still suppressed). An email this submission adds to a phone-matched person gets consent from the next act (the confirmation link's `crm_consent_set`).
 7. **Created or paired:** the activity (`kind` message|custom, `direction` inbound, `occurred_at`, `subject`, `body`, the three source attributes) and the optional note are created about the person by the subject actor with origin `subject:<app>`, and the person's `last_activity_at` moves forward.
 8. One `crm_intake_submit` audit row — metadata: outcome, source `{kind, id, name}`, filled and added attribute slugs, amendment and candidate counts, consent `written|kept|no_record|none`, suppression — never values; reindex, feed and webhook effects as for consent; `idempotency_key` replays the first answer for the subject actor for 24 h. A subject context's `requestId` is consumed once (auth-and-tenancy §2).
 
 Answer: `{ outcome: "created" | "paired" | "pending", record_id }`, `record_id` null when pending — never another person's values, the candidates or the proposals. Refusals: `TENANT_NOT_FOUND`, `VALIDATION_FAILED`, `SCHEMA_CONFLICT`, `LIMIT_EXCEEDED` (proposal caps), `DUPLICATE_FOUND` (another writer took the email meanwhile; no record is named), `IDEMPOTENCY_MISMATCH`/`IDEMPOTENCY_IN_PROGRESS`.
 
-**Residual risk.** The input is public and unauthenticated. Anyone can type another person's email or phone: the match is then 100%, so DeepCRM fills that person's empty fields, adds the typed phone or email beside the real ones, and logs an activity and note on them — someone can fill another person's empty phone with their own number. Every such write is attributed to `system` / `subject:<app>`, names its source in the change reason and on the activity, shows in `crm_record_history`, and can be reverted with `crm_record_update`. What is stored is never replaced: a different name or other single-valued value waits for a person; consent lands only on a person who already held the email.
+**Residual risk.** The input is public and unauthenticated. Anyone can type another person's email or phone: the match is then 100%, so DeepCRM fills that person's empty fields, adds the typed phone or email beside the real ones, and logs an activity and note on them — someone can fill another person's empty phone with their own number. Every such write is attributed to `system` / `subject:<app>`, names its source in the change reason and on the activity, shows in `crm_record_history`, and can be reverted with `crm_record_update`; an email or phone it adds is listed by `crm_contact_points_get` as unconfirmed, with its source, until a person confirms, reaches or archives it. What is stored is never replaced: a different name or other single-valued value waits for a person; consent lands only on a person who already held the email.
 
 **Proposals** (`record_proposals`, §2): what waits for a person. An amendment changes one single-valued attribute of one record; a match holds a submission whose identifiers point at several people. One pending amendment per record, attribute and value, and one pending match per identical submission from one source. At most 25 pending proposals per record and 1 000 per team: a submission that would pass either is `LIMIT_EXCEEDED { limit, scope: "record" | "team" }` whole, never partly stored. Proposals are deleted with an erased record (§4d) — an amendment to it, or a match that names it as a candidate or was resolved to it. A pending match carries no consent into its resolution (step 6 already applied it). The approvals of §0.4 (`approval_requests`) cannot carry these: an approval is a paused tool call that only its requester resumes with a continuation token (a subject never retries, and there is no list or decide-by-id path), it always names a requesting person (`on_behalf_of` is not null), expires after 24 h, needs an admin or owner other than the requester, and is capped at 100 per team — a public form could fill that queue and block owners' merge, delete and export approvals.
 
@@ -1311,6 +1351,20 @@ Answer: `{ outcome: "created" | "paired" | "pending", record_id }`, `record_id` 
 **`crm_proposal_decide { id, decision, record_id?, expected_version?, reason? }`** — as the calling person; a proposal already decided is `NOT_FOUND`. *Approve an amendment:* the `crm_record_update` write of that attribute with the proposed value — `record.edit`, attribute edit for its sensitivity, record visibility, and `VERSION_CONFLICT` against the version read (or `expected_version`); the change reason is `reason` or the source. *Approve a match with `record_id`* (any visible person of the type, usually a candidate): step 4 performed by the person — `record.edit` on it and attribute edit for every submitted attribute, create on `activity`/`note` and link policy — fills and additions written as the person, real changes become new pending amendments (their requester stays the subject), the activity and note logged by the person with origin `subject:<app>`. *Approve a match without `record_id`:* step 3 as the person (`record.create` plus attribute policies); an email another person holds is `DUPLICATE_FOUND`. *Reject:* nothing is written to a record (`record.edit` for an amendment, `record.create` on the type for a match). Each decision writes a `proposal.approved` or `proposal.rejected` audit row (resource `record_proposal`) in the transaction of its record changes. Answer: `{ id, status, record_id }`.
 
 **A person's create.** `crm_record_create` takes the same optional `source` (any kind, `import` included) for any object type: the first-source attributes are ensured on the type as above and written with the record; `data` may not set them as well (`VALIDATION_FAILED`). `crm_record_assert` and `crm_records_bulk_assert` do not take one yet: their match branch is an update whose patch replaces values, so recording a source there needs an engine write mode that writes the first source only on create (Nessie's import reads existence first and creates with `crm_record_create`).
+
+### 4d‴. Contact points — the state of each email and phone
+
+A record keeps every email and phone side by side; nothing a submission writes replaces one. Each value of an `email` or `phone` attribute (any type, multi or single) has a state in `record_contact_points` (§2), keyed like the unique keys by attribute and normalised-value hash: where it came from, whether it is confirmed, the last successful contact on it, and — once another value replaced it — when it was archived. Per-value metadata does not fit `records.data` (a plain multi value carries none, and history rows would expose a confidential phone at the attribute's sensitivity), a contact-point record would copy the value outside the attribute that matches, dedups and erases it, and activities cannot hold provenance or the archive; so values stay in the attribute and their state in this table, like `record_stage_history` beside a stage.
+
+**What starts a row.** Every write that adds a value: `crm_intake_submit` and a resolved match (§4d″) — `confirmed: false`, with the submission's source; a person's or agent's `crm_record_create`, `crm_record_update`, `crm_record_assert`, `crm_records_bulk_assert`, an approved amendment or any other write through the record write path — `confirmed: true` (a person entered it), with the record's first source on a create that names one. A value that write removes loses its row unless archived. Values that arrived otherwise (before this table, or by a merge) have no row of their own: they read as confirmed with `added: null`, and a merged-in record's rows describe the values it brought (an unmerge needs no repair). Erasure (§4d) deletes the rows and suppresses archived values with the active ones.
+
+**Archived values.** Archived values are no longer in the attribute: they do not match unique keys, queries, search or dedup. For intake pairing they still identify their person — a person with an old number is still that person — but never pair on their own (§4d″ step 4) and are never written back by a submission; `restore` makes one active again.
+
+**Order.** Multi values keep their stored order (the first is the primary). DeepCRM never reorders on its own: reaching, confirming or archiving a value moves nothing; `restore` appends after the active values; a reader may show reached values first; a person changes the stored order with `crm_record_update`.
+
+**`crm_contact_points_get { record_id }`** answers `{ record { id, object_type, display_name, version }, attributes: [{ slug, name, type, is_multi, values, archived }], redacted_attributes }` for a visible record (`record.view`): `values` are the active values in stored order, `archived` the archived ones, newest first, each `{ value, confirmed, added: { at, by, source } | null, reached: { at, by, note } | null, archived: { at, by } | null }`; `by` is `{ type, id }` (`system`/`subject:<app>` for a submission). An attribute the caller may not view (its sensitivity) is only named in `redacted_attributes`.
+
+**`crm_contact_point_set { record_id, attribute, value, action, note?, expected_version?, reason? }`** — as the calling person, in one transaction with its change rows and one `crm_contact_point_set` audit row; `value` is normalised by the attribute; a change that changes nothing writes nothing and answers the current state. `reach` — a successful contact on an active value: sets `reached { at, by, note }` and confirms it. `unreach` — undoes a mistaken reach (the green tick back to grey); the earlier reach stays in history. `confirm` — keep it as an additional value. These three change state only: one record version and one `set` change row with `attribute_slug` null and `{ system: "contact_point", value: { attribute, key, confirmed, reached_at, reached_by, note, archived_at } }` — the value's key hash, never the value, since system rows are not redacted by sensitivity. `replace_others` — one atomic write: the attribute keeps only this value (confirmed) and every other active value is archived (`archived { at, by }`). `restore` — an archived value becomes active again, after the others (a value another record now holds is `DUPLICATE_FOUND`). These two write the attribute through the record write path (its change rows), plus a system row per value whose state changed. All actions need `record.edit` on the record and attribute view for the attribute's sensitivity; `replace_others` and `restore` also need attribute edit for it (by the default policies a member may not edit a confidential attribute such as `phones`). `NOT_FOUND` for a value the record does not hold (active, or archived for `restore`); `VALIDATION_FAILED` for a `note` without `reach`, a non-contact attribute, or `replace_others`/`restore` on a single-valued one; `VERSION_CONFLICT` against `expected_version`. Answer: `{ record_id, version, attribute }` with that attribute's state after the change.
 
 ### 4e. `LinkIntent` — the typed shape of a reference write
 

@@ -57,7 +57,8 @@ export const CrmIntakeSubmit = {
 
 export const ProposalKind = z.enum(['amendment', 'match'])
 export const ProposalStatus = z.enum(['pending', 'approved', 'rejected'])
-export const ProposalMatchedOn = z.enum(['email', 'phone'])
+/** What pointed at a candidate: one of its active values, or a value archived on it (schema-engine §4d‴). */
+export const ProposalMatchedOn = z.enum(['email', 'phone', 'archived_email', 'archived_phone'])
 
 export const ProposalAttribute = z.object({
   slug: Slug, name: z.string(), type: z.string(), is_multi: z.boolean(),

@@ -31,7 +31,7 @@ const RESOLVING_READS = [
 ]
 
 const GROUP_COUNTS = {
-  schema: 18, records: 15, links: 3, 'lists-views': 9,
+  schema: 18, records: 17, links: 3, 'lists-views': 9,
   activity: 14, 'search-quality': 5, compliance: 8, io: 8,
 }
 
@@ -112,7 +112,7 @@ describe('documented MCP tool surface', () => {
     const tools = (await client.listTools()).tools.map((tool) => ({
       name: tool.name, ...ToolClassMeta.parse(tool._meta),
     }))
-    expect(tools).toHaveLength(80)
+    expect(tools).toHaveLength(82)
 
     for (const tool of tools) {
       const group = tool['live.deepcrm/group']
@@ -129,7 +129,7 @@ describe('documented MCP tool surface', () => {
 
     const explicit = tools.filter((tool) => tool['live.deepcrm/access'] === 'explicit').map((tool) => tool.name)
     expect(sorted(explicit)).toEqual(sorted(EXPLICIT_TOOLS))
-    expect(tools.length - explicit.length).toBe(51)
+    expect(tools.length - explicit.length).toBe(53)
 
     const access = new Map(tools.map((tool) => [tool.name, tool['live.deepcrm/access']]))
     for (const read of RESOLVING_READS) expect(access.get(read), `${read} is a resolving read`).toBe('standard')
@@ -137,7 +137,7 @@ describe('documented MCP tool surface', () => {
 
   it('gives every listed tool a unique, trimmed title of at most 40 characters', async () => {
     const tools = (await client.listTools()).tools
-    expect(tools).toHaveLength(80)
+    expect(tools).toHaveLength(82)
     const titles = new Map<string, string>()
     for (const tool of tools) {
       const title = tool.title ?? ''

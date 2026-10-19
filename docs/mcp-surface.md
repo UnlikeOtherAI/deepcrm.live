@@ -135,9 +135,13 @@ equivalent capability shape.
 | `crm_intake_submit` | Record a form or chat submission | `records` | `explicit` | A data subject's own form or chat submission, subject-attested only. No email/phone match creates the person; one match pairs (fills empty fields, adds new emails/phones beside); else a pending match. Logs the activity and note. Returns outcome and record_id only. | `{ source: object, email?: string, phone?: string, data?: object, object_type?: string, consent?: object, activity: object, note?: object, idempotency_key?: string }` | `{ outcome: "created" \| "paired" \| "pending", record_id: string \| null }` |
 | `crm_proposals_list` | List proposals | `records` | `standard` | List changes a form or chat submission proposed for a person to decide: amendments (one field: proposed and current value) and unresolved matches (candidates and submitted values), each with its source. Decide with crm_proposal_decide. | `{ status?: "pending" \| "approved" \| "rejected", kind?: "amendment" \| "match", record_id?: string, source_id?: string, cursor?: string, limit?: integer }` | `{ proposals: Proposal[], next_cursor }` |
 | `crm_proposal_decide` | Decide proposal | `records` | `standard` | Approve or reject a pending proposal as yourself. Approving an amendment writes its value (expected_version guards it); approving a match pairs it with record_id or creates the person. Rejecting writes nothing. NOT_FOUND once decided. | `{ id: string, decision: "approve" \| "reject", record_id?: string, expected_version?: integer, reason?: string }` | `{ id, status: "approved" \| "rejected", record_id: string \| null }` |
+| `crm_contact_points_get` | Read emails and phones | `records` | `standard` | Read a visible record's emails and phones with their state: active values in stored order, then archived ones; each says when and by whom or through which source it was added, if confirmed, last reached (by whom, note) and archived. Change one with crm_contact_point_set. | `{ record_id: string }` | `{ record: { id, object_type, display_name, version }, attributes: [{ slug, name, type, is_multi, values: ContactPoint[], archived: ContactPoint[] }], redacted_attributes }` |
+| `crm_contact_point_set` | Update an email or phone | `records` | `standard` | Act on one email or phone as yourself: reach (successful contact; confirms it; optional note), unreach (undo), confirm (keep as additional), replace_others (keep it, archive every other active value) or restore an archived one. Returns that attribute's state. | `{ record_id: string, attribute: string, value: string, action: "reach" \| "unreach" \| "confirm" \| "replace_others" \| "restore", note?: string, expected_version?: integer, reason?: string }` | `{ record_id, version, attribute: { slug, name, type, is_multi, values, archived } }` |
 <!-- tools:end -->
 
 `crm_intake_submit` is the data subject's own submission through a form or chat widget: a subject-attested call (auth-and-tenancy §1) only, `POLICY_DENIED` to every delegated caller, and so `explicit`. It pairs by normalised email and E.164 phone only, never replaces a stored value, and answers just the outcome; what it may not decide alone becomes a proposal that a person lists with `crm_proposals_list` and decides with `crm_proposal_decide` as themselves. `crm_record_create` takes the same `source` for a person's own creates and imports. Full semantics: schema-engine §4d″.
+
+Every email and phone carries its own state (schema-engine §4d‴): `crm_contact_points_get` reads a record's values — active ones in stored order, then archived ones — each with `{ value, confirmed, added: { at, by, source } | null, reached: { at, by, note } | null, archived: { at, by } | null }`; `crm_contact_point_set` marks one reached (or undoes it), keeps it as an additional value, replaces every other active value with it (archiving them), or restores an archived one, as the calling person. A submission's addition arrives unconfirmed; a value a person adds is confirmed. Reaching a value never reorders the stored values (the first is the primary); a reader may show reached values first.
 
 ## 4. Link tools
 
@@ -254,12 +258,12 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 Every tool carries its group and access class in `tools/list` (§0.1); the table and list below are regenerated from the registrations by `pnpm docs:mcp`, and `api/test/mcp/surface.test.ts` pins the per-group counts, the explicit set, and that every tool has a unique title of at most 40 characters. A group's id never changes when its label does. The explicit set is the destructive and structural tools, plus `crm_intake_submit`, which no delegated caller may use; every read a granted mutator needs to resolve its ids is standard.
 
 <!-- tools:summary:start -->
-80 tools in 8 groups, 29 explicit and 51 standard.
+82 tools in 8 groups, 29 explicit and 53 standard.
 
 | Order | Group | Label | Tools | Explicit |
 |---|---|---|---|---|
 | 1 | `schema` | Schema | 18 | 16 |
-| 2 | `records` | Records | 15 | 2 |
+| 2 | `records` | Records | 17 | 2 |
 | 3 | `links` | Links | 3 | 0 |
 | 4 | `lists-views` | Lists and views | 9 | 0 |
 | 5 | `activity` | Activities, tasks and pipelines | 14 | 3 |

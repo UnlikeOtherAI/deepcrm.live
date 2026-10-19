@@ -42,6 +42,7 @@ import {
   recordScopes,
   writeRecordDeniedAudit,
 } from './record-write-authorization.js'
+import { recordContactPointWrite } from './contact-point-sync.js'
 import { recordBoundary } from './record-boundary.js'
 import { enqueueRecordMutationEffects } from './record-mutation-effects.js'
 import { validateActorReferences } from './principals.js'
@@ -49,7 +50,7 @@ import { loadDuplicateEvaluator, presentDuplicates, type PresentedDuplicates } f
 import { requireVisibleRecord } from './record-visibility.js'
 import { presentWriteRecord } from './record-write-presenter.js'
 import { standardRecordWrite, type RecordWriteIntegration } from './record-write-integration.js'
-type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule' | 'list'>
+type RecordServiceTx = RecordTx & QueueEnqueueTx & Pick<Db, 'webhook' | 'policyRule' | 'list' | 'recordContactPoint'>
 type CommonWriteInput = { idempotencyKey?: string; reason?: string }
 export type CreateRecordServiceInput = CreateRecordInput & CommonWriteInput
 export type UpdateRecordServiceInput = UpdateRecordInput & CommonWriteInput
@@ -191,6 +192,7 @@ async function runWrite(
         return reservation.result
       }
       const engineResult = await operation(serviceTx)
+      await recordContactPointWrite(serviceTx, ctx, schema, engineResult)
       const duplicates = duplicateEvaluator === null
         ? [] : await presentDuplicates(serviceTx, ctx, duplicateEvaluator, schema, engineResult.duplicates)
       const initial = serviceResult(engineResult, duplicates)

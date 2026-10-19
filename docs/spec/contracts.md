@@ -773,7 +773,8 @@ export const ProposalItem = z.object({ id: Uuid, kind: z.enum(['amendment','matc
   record: RecordSummary.extend({ version: z.number().int() }).nullable(),
   attribute: z.object({ slug: Slug, name: z.string(), type: z.string(), is_multi: z.boolean() }).nullable(),
   proposed_value: z.unknown().optional(), current_value: z.unknown().optional(),
-  candidates: z.array(z.object({ record: RecordSummary, matched_on: z.array(z.enum(['email','phone'])) })).optional(),
+  candidates: z.array(z.object({ record: RecordSummary,
+    matched_on: z.array(z.enum(['email','phone','archived_email','archived_phone'])) })).optional(),
   submitted: z.record(Slug, z.unknown()).optional(),
   activity: z.object({ subject: z.string(), occurred_at: IsoDateTime }).optional(),
   redacted_attributes: z.array(Slug), resolved_record_id: Uuid.nullable() })
@@ -785,6 +786,23 @@ export const CrmProposalDecide = { in: z.object({ id: Uuid, decision: z.enum(['a
   record_id: Uuid.optional().describe('approving a match: pair with this person; omitted ⇒ create one'),
   expected_version: ExpectedVersion, reason: Reason }),
   out: z.object({ id: Uuid, status: z.enum(['pending','approved','rejected']), record_id: Uuid.nullable() }) }
+
+// ── contact points: the state of each email and phone (schema-engine §4d‴; tools-contact-points.ts)
+const ContactActor = z.object({ type: z.enum(['human','agent','system']), id: z.string() })
+export const ContactPointValue = z.object({ value: z.string(), confirmed: z.boolean(),
+  added: z.object({ at: IsoDateTime, by: ContactActor, source: SourceRef.nullable() }).nullable(),
+  reached: z.object({ at: IsoDateTime, by: ContactActor, note: z.string().nullable() }).nullable(),
+  archived: z.object({ at: IsoDateTime, by: ContactActor }).nullable() })
+export const ContactPointAttribute = z.object({ slug: Slug, name: z.string(), type: z.enum(['email','phone']),
+  is_multi: z.boolean(), values: z.array(ContactPointValue), archived: z.array(ContactPointValue) })
+export const CrmContactPointsGet = { in: z.object({ record_id: Uuid }),
+  out: z.object({ record: z.object({ id: Uuid, object_type: Slug, display_name: z.string(), version: z.number().int() }),
+    attributes: z.array(ContactPointAttribute), redacted_attributes: z.array(Slug) }) }
+export const CrmContactPointSet = { in: z.object({ record_id: Uuid, attribute: Slug, value: z.string().min(1).max(320),
+  action: z.enum(['reach','unreach','confirm','replace_others','restore']),
+  note: z.string().trim().min(1).max(2000).optional().describe('with reach only'),
+  expected_version: ExpectedVersion, reason: Reason }),
+  out: z.object({ record_id: Uuid, version: z.number().int(), attribute: ContactPointAttribute }) }
 
 // ── io, feed, webhooks ───────────────────────────────────────────────────────
 export const CrmExport = { in: z.object({ object_type: Slug.optional(), view: Slug.optional(),

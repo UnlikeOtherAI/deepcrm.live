@@ -18,7 +18,7 @@ import type { ConsentSuppressionChange } from './consent-suppression.js'
 import { isEmptyValue, normalizeSubmission, submittedValues, type Submission } from './intake-submission.js'
 import { resolveIntakeTarget, type IntakeTarget } from './intake-target.js'
 import {
-  consentWithoutPairing, createPerson, emailHolder, findCandidates, pairWithRecord, sourceReason,
+  activelyMatched, consentWithoutPairing, createPerson, emailHolder, findCandidates, pairWithRecord, sourceReason,
   type ConsentOutcome, type IntakeLog, type IntakeTrail, type IntakeTx, type IntakeWriter,
 } from './intake-write.js'
 import { proposeMatch, type PendingSubmission } from './proposal-store.js'
@@ -123,7 +123,7 @@ async function write(
       consent: created.consent, suppression: created.suppression,
     }
   }
-  if (second === undefined) {
+  if (second === undefined && activelyMatched(only)) {
     const consent = act === null ? null : { act, heldBefore: holder === only.record_id }
     const paired = await pairWithRecord(writer, only.record_id, submission, intakeLog, consent, trail)
     return {

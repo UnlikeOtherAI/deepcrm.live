@@ -145,9 +145,14 @@ export type PairChanges = {
  */
 export function planPairChanges(
   target: IntakeTarget, submission: Submission, stored: Readonly<Record<string, JsonValue>>,
+  archived: ReadonlySet<string>,
 ): PairChanges {
   const changes: PairChanges = { fills: [], additions: [], amendments: [] }
-  for (const [attribute, value] of submittedValues(target, submission)) {
+  for (const [attribute, submitted] of submittedValues(target, submission)) {
+    // A value archived on the record is held, never written back (schema-engine §4d‴).
+    const kept = values(attribute, submitted).filter((item) => !archived.has(`${attribute.id}:${key(attribute, item)}`))
+    if (kept.length === 0) continue
+    const value: JsonValue = attribute.isMulti ? kept : submitted
     const current = stored[attribute.slug]
     if (current === undefined || isEmptyValue(current)) {
       changes.fills.push({ attribute, value })

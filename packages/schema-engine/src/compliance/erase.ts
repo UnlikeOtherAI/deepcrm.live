@@ -144,6 +144,20 @@ async function enqueueNeighbours(
   })
 }
 
+// An archived email or phone (§4d‴) is still the person's: it is suppressed with the active ones.
+async function archivedContacts(tx: EraseTx, ctx: ActorContext, recordId: string): Promise<Contact[]> {
+  const rows = await tx.$queryRaw<Array<{ type: string; value: string }>>`
+    SELECT a.type::text AS type, cp.value
+    FROM record_contact_points cp JOIN attributes a ON a.id = cp.attribute_id
+    WHERE cp.organization_id = ${ctx.tenant.organizationId}::uuid AND cp.team_id = ${ctx.tenant.teamId}::uuid
+      AND cp.record_id = ${recordId}::uuid AND cp.archived_at IS NOT NULL
+  `
+  return rows.flatMap((row) => {
+    const kind = suppressionKind(row.type)
+    return kind === null ? [] : [{ kind, value: row.value }]
+  })
+}
+
 export async function eraseRecord(
   tx: EraseTx,
   ctx: ActorContext,
@@ -158,7 +172,8 @@ export async function eraseRecord(
     throw new ServiceError(ErrorCode.MERGED, 'Record has been merged', { redirect_to: record.mergedIntoId })
   }
   if (record.erasedAt !== null) throw new ServiceError(ErrorCode.ERASED, 'Record has been erased')
-  const contacts = input.suppress ? contactValues(schema, record) : []
+  const contacts = input.suppress
+    ? [...contactValues(schema, record), ...await archivedContacts(tx, ctx, record.id)] : []
   const suppressed = await suppressContacts(tx, ctx, record.id, contacts)
   const neighbours = await neighbourIds(tx, ctx, record.id)
   await tx.recordUniqueKey.deleteMany({ where: { ...tenantWhere(ctx.tenant), recordId: record.id } })
@@ -186,6 +201,13 @@ export async function eraseRecord(
       AND lists.organization_id = ${ctx.tenant.organizationId}::uuid
       AND lists.team_id = ${ctx.tenant.teamId}::uuid
       AND list_entries.record_id = ${record.id}::uuid
+  `
+  // Contact points hold the record's emails and phones, archived ones too (§4d‴).
+  await tx.$executeRaw`
+    DELETE FROM record_contact_points
+    WHERE organization_id = ${ctx.tenant.organizationId}::uuid
+      AND team_id = ${ctx.tenant.teamId}::uuid
+      AND record_id = ${record.id}::uuid
   `
   // Proposals hold submitted values: an amendment to this record, a match that
   // names it as a candidate or was resolved to it, goes with it (schema-engine §4d″).

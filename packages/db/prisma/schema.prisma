@@ -353,6 +353,7 @@ model Attribute {
   derivationInputs AttributeDerivationDependency[] @relation("DerivationInputAttribute")
   uniqueKeys       RecordUniqueKey[]
 
+  contactPoints    RecordContactPoint[]
   @@unique([objectTypeId, slug])
   @@unique([listId, slug])
   @@unique([groupId, position])
@@ -597,6 +598,7 @@ model Record {
   listEntries       ListEntry[]
   stageHistory      RecordStageHistory[]
   proposals         RecordProposal[]
+  contactPoints     RecordContactPoint[]
   fileLinks         FileLink[]              @relation("FileRecordLinks")
   subjectEvents     Event[]
 
@@ -1247,4 +1249,45 @@ model RecordProposal {
   @@index([organizationId, teamId, status, createdAt])
   @@index([recordId, status])
   @@map("record_proposals")
+}
+
+// The state of one email or phone of a record (schema-engine §4d‴), keyed
+// like record_unique_keys by attribute and normalised-value hash: where it
+// came from, whether it is confirmed, the last successful contact on it, and
+// — once another value replaced it — when it was archived. An active value
+// lives in records.data and here; an archived one only here, still readable.
+// A value with no row has unknown provenance and counts as confirmed.
+model RecordContactPoint {
+  id                 String     @id @default(uuid()) @db.Uuid
+  organizationId     String     @map("organization_id") @db.Uuid
+  teamId             String     @map("team_id") @db.Uuid
+  recordId           String     @map("record_id") @db.Uuid
+  attributeId        String     @map("attribute_id") @db.Uuid
+  // The normalised value: needed once archived, when records.data no longer holds it.
+  value              String
+  valueHash          String     @map("value_hash")
+  confirmed          Boolean
+  addedAt            DateTime?  @map("added_at")
+  addedByType        ActorType? @map("added_by_type")
+  addedById          String?    @map("added_by_id")
+  addedOnBehalfOf    String?    @map("added_on_behalf_of")
+  sourceKind         String?    @map("source_kind")
+  sourceId           String?    @map("source_id")
+  sourceName         String?    @map("source_name")
+  reachedAt          DateTime?  @map("reached_at")
+  reachedByType      ActorType? @map("reached_by_type")
+  reachedById        String?    @map("reached_by_id")
+  reachedOnBehalfOf  String?    @map("reached_on_behalf_of")
+  reachedNote        String?    @map("reached_note")
+  archivedAt         DateTime?  @map("archived_at")
+  archivedByType     ActorType? @map("archived_by_type")
+  archivedById       String?    @map("archived_by_id")
+  archivedOnBehalfOf String?    @map("archived_on_behalf_of")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+  record             Record     @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  attribute          Attribute  @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, attributeId, valueHash])
+  @@index([organizationId, teamId, attributeId, valueHash], map: "record_contact_points_tenant_value_idx")
+  @@map("record_contact_points")
 }
