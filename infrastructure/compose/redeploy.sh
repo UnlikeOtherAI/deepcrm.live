@@ -20,6 +20,7 @@ fi
 # Fail before migrations or bootstrap if the transferred release is missing.
 docker image inspect "$DEEPCRM_IMAGE" > /dev/null
 "${compose[@]}" up -d --no-build postgres
+bash infrastructure/compose/recover-contact-point-migration.sh
 "${compose[@]}" run --rm --pull never api node node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma
 "${compose[@]}" run --rm --pull never api node worker/dist/matching-bootstrap.js "${bootstrap_args[@]}"
 "${compose[@]}" up -d --no-build --pull never
