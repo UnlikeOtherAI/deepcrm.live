@@ -51,6 +51,13 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
   bootstrap. Production runs the compiled equivalent before container startup.
 - After starting/restarting the API verify `GET http://localhost:5656/health` returns `{ "ok": true }`.
 
+## Production images
+
+GitHub Actions builds `Dockerfile.app` for `linux/amd64` at the tested commit,
+transfers `deepcrm-app:<commit SHA>` over SSH, and loads it on the host.
+`redeploy.sh` requires `DEEPCRM_IMAGE` naming that preloaded image; production
+Compose has no build configuration. See [deployment.md](docs/deployment.md).
+
 ## Docs discipline
 
 Behaviour, contract or topology change ⇒ the matching `docs/*.md` changes in the same commit. Finished plan files move to `docs/done/`. A change to the MCP surface updates `docs/mcp-surface.md` **and** the tool's description in code — the description is the spec agents read.

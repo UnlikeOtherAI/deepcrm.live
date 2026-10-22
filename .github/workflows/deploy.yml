@@ -26,6 +26,14 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Build production image on runner
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          docker build --platform linux/amd64 -f Dockerfile.app -t "deepcrm-app:$DEPLOY_SHA" .
+          docker save "deepcrm-app:$DEPLOY_SHA" | gzip > "$RUNNER_TEMP/deepcrm-image.tar.gz"
+
       - name: Install deploy dependencies
         run: |
           sudo apt-get update
@@ -64,14 +72,23 @@ jobs:
             --exclude '.exports/' \
             ./ "$DEPLOY_USER@$DEPLOY_HOST:/srv/deepcrm/"
 
-      - name: Redeploy
+      - name: Load production image
         env:
           DEPLOY_HOST: ${{ secrets.DEEPCRM_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEEPCRM_DEPLOY_USER }}
         run: |
           ssh -i ~/.ssh/deepcrm_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'docker load' < "$RUNNER_TEMP/deepcrm-image.tar.gz"
+
+      - name: Redeploy
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEPLOY_HOST: ${{ secrets.DEEPCRM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEEPCRM_DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deepcrm_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /srv/deepcrm && infrastructure/compose/redeploy.sh'
+            "cd /srv/deepcrm && DEEPCRM_IMAGE=deepcrm-app:$DEPLOY_SHA infrastructure/compose/redeploy.sh"
 
       - name: Verify deployment
         env:

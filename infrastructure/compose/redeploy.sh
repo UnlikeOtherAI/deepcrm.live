@@ -16,11 +16,13 @@ if [[ $# -eq 1 ]]; then
   bootstrap_args+=("${1}")
 fi
 
-"${compose[@]}" build
-"${compose[@]}" up -d postgres
-"${compose[@]}" run --rm api node node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma
-"${compose[@]}" run --rm api node worker/dist/matching-bootstrap.js "${bootstrap_args[@]}"
-"${compose[@]}" up -d
+: "${DEEPCRM_IMAGE:?set DEEPCRM_IMAGE to the preloaded release image}"
+# Fail before migrations or bootstrap if the transferred release is missing.
+docker image inspect "$DEEPCRM_IMAGE" > /dev/null
+"${compose[@]}" up -d --no-build postgres
+"${compose[@]}" run --rm --pull never api node node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma
+"${compose[@]}" run --rm --pull never api node worker/dist/matching-bootstrap.js "${bootstrap_args[@]}"
+"${compose[@]}" up -d --no-build --pull never
 for _ in {1..30}; do
   if "${compose[@]}" exec -T api curl -sf http://localhost:5656/health; then
     exit 0
