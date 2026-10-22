@@ -1,9 +1,6 @@
 services:
   api:
-    image: deepcrm-app:latest
-    build:
-      context: ../..
-      dockerfile: Dockerfile.app
+    image: ${DEEPCRM_IMAGE:?set DEEPCRM_IMAGE to the preloaded release image}
     container_name: deepcrm-api
     restart: unless-stopped
     env_file: ${DEEPCRM_ENV_FILE:-./.env}
@@ -22,7 +19,7 @@ services:
       - db
 
   worker:
-    image: deepcrm-app:latest
+    image: ${DEEPCRM_IMAGE:?set DEEPCRM_IMAGE to the preloaded release image}
     container_name: deepcrm-worker
     restart: unless-stopped
     env_file: ${DEEPCRM_ENV_FILE:-./.env}
