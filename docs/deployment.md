@@ -95,6 +95,20 @@ until the audited atomic swap completes. Index creation on `records`,
 `record_changes`, `record_search` must be `CONCURRENTLY` in raw SQL (lint
 enforced).
 
+The October 19 `contact_point` enum migration previously failed on the shared
+PostgreSQL database because `PolicyResourceType` was owned by `postgres` while
+Prisma connects as `deepcrm`. Before normal migration deployment,
+`recover-contact-point-migration.sh` checks for that exact failed migration,
+verifies its SQL checksum, confirms the enum value is absent, transfers only
+that enum's ownership to `deepcrm` after a compressed backup in
+`/srv/deepcrm/.deploy-backups`, and uses Prisma's `migrate resolve
+--rolled-back` so the unchanged migration can replay. It stops for review if
+the recorded checksum, owner, or enum state differs. The recovery is idempotent
+across a failed deploy retry and never removes migration history. It runs against
+the shared `postgres` container and `deepcrm` database selected by
+`DIRECT_DATABASE_URL`; set `DEEPCRM_MIGRATION_DB_CONTAINER` only if that
+container name changes.
+
 ## Backups
 
 `deepcrm-postgres` is included in the host's nightly `pg_dumpall` job (same as nessie/deepsignal). Audit rows are the compliance record; never truncate `audit_logs`.
