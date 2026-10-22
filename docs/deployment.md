@@ -6,7 +6,7 @@ Self-hosted on the shared Hetzner host (`178.105.82.46`) as Docker containers be
 
 | Container | Image | Command | Networks |
 |---|---|---|---|
-| `deepcrm-api` | `deepcrm-app:latest` (`Dockerfile.app`) | `node api/dist/index.js` with `DEEPCRM_PROCESS_MODE=api` | `edge`, `db` |
+| `deepcrm-api` | `deepcrm-app:<commit SHA>` (`Dockerfile.app`) | `node api/dist/index.js` with `DEEPCRM_PROCESS_MODE=api` | `edge`, `db` |
 | `deepcrm-worker` | same image | `DEEPCRM_PROCESS_MODE=worker` | `db` |
 | `deepcrm-postgres` | `pgvector/pgvector:pg16` | — | `db` |
 
@@ -14,8 +14,8 @@ Dedicated Postgres because the shared instance lacks `vector` (same reason nessi
 
 ## Files
 
-- `infrastructure/compose/docker-compose.prod.yml` — the three services, `env_file: /srv/deepcrm/.env`, healthcheck `wget -qO- http://localhost:5656/health`.
-- `infrastructure/compose/redeploy.sh` — build, run Prisma migrations, run the
+- `infrastructure/compose/docker-compose.prod.yml` — the three services, `env_file: /srv/deepcrm/.env`, healthcheck `curl -f http://localhost:5656/health`.
+- `infrastructure/compose/redeploy.sh` — require a preloaded release image, run Prisma migrations, run the
   compiled T16 matching bootstrap to completion, and only then start the API and
   worker containers. A terminal failed/cancelled bootstrap fails deployment;
   after correcting the cause, an operator explicitly reruns it with
@@ -37,10 +37,17 @@ DNS: Cloudflare, DNS-only `A api.deepcrm.live → 178.105.82.46`. TLS automatic.
 ## GitHub Actions deploy
 
 `.github/workflows/deploy.yml` deploys after the `CI` workflow succeeds on
-`main`. It checks out the exact tested commit, rsyncs the source to
-`/srv/deepcrm`, preserves the host-local `/srv/deepcrm/.env`, runs
-`infrastructure/compose/redeploy.sh`, and verifies
+`main`. It checks out the exact tested commit and builds `Dockerfile.app` on the
+GitHub runner for `linux/amd64`, tagged `deepcrm-app:<commit SHA>`. It rsyncs the source to
+`/srv/deepcrm`, preserves the host-local `/srv/deepcrm/.env`, transfers a gzip
+Docker image archive over the existing SSH connection into `docker load`, runs
+`infrastructure/compose/redeploy.sh` with `DEEPCRM_IMAGE` set to that exact tag, and verifies
 `http://localhost:5656/health` from inside the `deepcrm-api` container.
+
+No registry login or new secrets are required. Runtime secrets stay in the host
+environment file and are never sent to the image build. The deployment checks
+that the release image exists before migrations, and API/worker commands use
+`--pull never`; service startup also uses `--no-build`. Postgres may still pull its upstream image.
 
 Required repository secrets:
 
@@ -71,8 +78,10 @@ App keys: generate with `node scripts/generate-app-key.mjs nessie` → prints th
 1. `rsync -a --exclude node_modules --exclude .git ./ root@178.105.82.46:/srv/deepcrm/`
 2. Create `/srv/deepcrm/.env`.
 3. `docker network inspect edge db` (must exist).
-4. `cd /srv/deepcrm && infrastructure/compose/redeploy.sh`
-5. Verify: `curl -s https://api.deepcrm.live/health` → `{"ok":true,"version":"…","db":"ok"}`; `curl -s https://api.deepcrm.live/.well-known/oauth-protected-resource`.
+4. Build on a separate machine: `docker build --platform linux/amd64 -f Dockerfile.app -t deepcrm-app:<commit SHA> .`.
+5. Transfer the image: `docker save deepcrm-app:<commit SHA> | gzip | ssh root@178.105.82.46 docker load`.
+6. `cd /srv/deepcrm && DEEPCRM_IMAGE=deepcrm-app:<commit SHA> infrastructure/compose/redeploy.sh`
+7. Verify: `curl -s https://api.deepcrm.live/health` → `{"ok":true,"version":"…","db":"ok"}`; `curl -s https://api.deepcrm.live/.well-known/oauth-protected-resource`.
 
 ## Migrations
 
