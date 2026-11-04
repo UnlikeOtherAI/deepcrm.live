@@ -158,7 +158,8 @@ function change(
 async function storeChanges(target: Fixture, rows: PrismaTypes.RecordChangeCreateManyInput[]): Promise<void> {
   await db.$transaction(async (tx) => {
     await tx.recordChange.createMany({ data: rows })
-    await tx.team.update({ where: { id: target.tenant.teamId }, data: { feedSeq: BigInt(rows.length) } })
+    const through = rows.reduce((max, row) => BigInt(row.seq) > max ? BigInt(row.seq) : max, 0n)
+    await tx.team.update({ where: { id: target.tenant.teamId }, data: { feedSeq: through } })
   })
 }
 
@@ -247,5 +248,68 @@ describe('change feed', () => {
     await expect(changesSince(deps, context(target.tenant), {
       cursor: '1', from: 'beginning',
     })).rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
+  })
+
+  it('watches an explicit record, incoming relationships and its schema without widening visibility', async () => {
+    const target = await fixture()
+    const edge = { from_record_id: target.personId, to_record_id: target.companyId, data: {} }
+    await storeChanges(target, [
+      change(target, 1),
+      change(target, 2, { recordId: target.companyId }),
+      change(target, 3, { kind: 'link', attributeSlug: null, relationTypeId: target.relationTypeId,
+        linkId: crypto.randomUUID(), newValue: edge }),
+      change(target, 4, { kind: 'schema_change', recordId: null, attributeSlug: 'company',
+        newValue: { object_type: 'company', schema_version: 2 } }),
+      change(target, 5, { recordId: target.privateId }),
+    ])
+    const result = await changesSince(deps, context(target.tenant), {
+      from: 'beginning', recordIds: [target.companyId],
+    })
+    expect(result.changes.map((item) => item.seq)).toEqual(['2', '3', '4'])
+    expect(result.next_cursor).toBe('5')
+    const hidden = await changesSince(deps, context(target.tenant), {
+      from: 'beginning', recordIds: [target.privateId],
+    })
+    expect(hidden).toEqual({ changes: [], next_cursor: '5', has_more: false })
+    const other = await fixture()
+    expect(await changesSince(deps, context(other.tenant), {
+      from: 'beginning', recordIds: [target.companyId],
+    })).toEqual({ changes: [], next_cursor: '0', has_more: false })
+  })
+
+  it('advances through a quiet or filtered tail and resumes from that committed cursor', async () => {
+    const target = await fixture()
+    await storeChanges(target, [change(target, 1), change(target, 2), change(target, 3)])
+    const quiet = await changesSince(deps, context(target.tenant), {
+      cursor: '0', recordIds: [target.companyId], kinds: ['link'],
+    })
+    expect(quiet).toEqual({ changes: [], next_cursor: '3', has_more: false })
+    await storeChanges(target, [change(target, 4, { recordId: target.companyId })])
+    const resumed = await changesSince(deps, context(target.tenant), {
+      cursor: quiet.next_cursor, recordIds: [target.companyId],
+    })
+    expect(resumed.changes.map((item) => item.seq)).toEqual(['4'])
+    expect(resumed.next_cursor).toBe('4')
+  })
+
+  it('bounds a sparse scan and returns an advancing empty page instead of rescanning forever', async () => {
+    const target = await fixture()
+    await storeChanges(target, Array.from({ length: 5001 }, (_, index) =>
+      change(target, index + 1, { recordId: target.privateId })))
+    const first = await changesSince(deps, context(target.tenant), {
+      from: 'beginning', recordIds: [target.companyId],
+    })
+    expect(first).toEqual({ changes: [], next_cursor: '5000', has_more: true })
+    expect(await changesSince(deps, context(target.tenant), {
+      cursor: first.next_cursor, recordIds: [target.companyId],
+    })).toEqual({ changes: [], next_cursor: '5001', has_more: false })
+  })
+
+  it('rejects malformed and empty record filters before starting a watch', async () => {
+    const target = await fixture()
+    for (const recordIds of [[], ['not-a-record'], Array.from({ length: 101 }, () => target.personId)]) {
+      await expect(changesSince(deps, context(target.tenant), { recordIds }))
+        .rejects.toMatchObject({ code: 'VALIDATION_FAILED' })
+    }
   })
 })

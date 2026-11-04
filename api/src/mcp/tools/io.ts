@@ -56,13 +56,14 @@ export function registerIoTools(
   })
   defineTool(server, {
     name: 'crm_changes_since', title: 'Read change feed', group: 'io', access: 'standard',
-    description: 'Read the visible, policy-redacted team change feed by commit-ordered decimal cursor. Omit cursor to start now; use from=beginning only for retained-history replay.',
+    description: 'Read visible, redacted CRM change events by decimal cursor. Use record_ids for record/relationship watches. Omit cursor to start now; from=beginning replays history. Save next_cursor even for empty pages; drain has_more. Deduplicate replayed event ids.',
     input: CrmChangesSince.in.shape,
     handler: async (args) => {
       const result = await changesSince(deps, ctx, {
         cursor: args.cursor,
         from: args.from,
         objectTypes: args.object_types,
+        recordIds: args.record_ids,
         kinds: args.kinds,
         limit: args.limit,
       })

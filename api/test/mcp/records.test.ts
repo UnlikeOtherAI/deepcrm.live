@@ -78,6 +78,40 @@ beforeAll(async () => {
 afterAll(async () => { await closeServer(); await db.$disconnect() })
 
 describe('record MCP tools', () => {
+  it('starts a record watch and reads saved changes through the discovered MCP tool', async () => {
+    const tool = (await client.listTools()).tools.find((entry) => entry.name === 'crm_changes_since')
+    expect(tool?.inputSchema.properties).toHaveProperty('record_ids')
+    const company = z.object({ record: z.object({ id: z.string().uuid(), version: z.number() }) })
+      .parse(structured(await call('crm_record_create', {
+        object_type: 'company', data: { name: `Watch company ${runKey}` },
+      }))).record
+    const baseline = z.object({ next_cursor: z.string() }).parse(structured(await call('crm_changes_since', {
+      record_ids: [company.id],
+    })))
+    const person = z.object({ record: z.object({ id: z.string().uuid() }) })
+      .parse(structured(await call('crm_record_create', {
+        object_type: 'person', data: { name: { full: `Watch employee ${runKey}` } },
+        links: [{ relation_type: 'person_works_at', to_record_id: company.id }],
+      }))).record
+    structured(await call('crm_record_update', {
+      id: company.id, data: { name: `Updated watch company ${runKey}` },
+    }))
+    const Feed = z.object({ changes: z.array(z.object({ id: z.string(), kind: z.string(),
+      record: z.object({ id: z.string() }).nullable() })), next_cursor: z.string(), has_more: z.boolean() })
+    const page = Feed.parse(structured(await call('crm_changes_since', {
+      cursor: baseline.next_cursor, record_ids: [company.id], limit: 100,
+    })))
+    expect(page.changes.some((event) => event.kind === 'link' && event.record?.id === person.id)).toBe(true)
+    expect(page.changes.some((event) => event.kind === 'set' && event.record?.id === company.id)).toBe(true)
+    expect(page.changes.some((event) => event.kind === 'create' && event.record?.id === person.id)).toBe(false)
+    expect(page.has_more).toBe(false)
+    const quiet = Feed.parse(structured(await call('crm_changes_since', {
+      cursor: page.next_cursor, record_ids: [company.id],
+    })))
+    expect(quiet.changes).toEqual([])
+    expect(quiet.next_cursor).toBe(page.next_cursor)
+  })
+
   it('merges duplicates and resolves a loser id to the survivor', async () => {
     const survivor = structured(await call('crm_record_create', {
       object_type: 'person',
