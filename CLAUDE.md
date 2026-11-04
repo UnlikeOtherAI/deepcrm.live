@@ -60,4 +60,8 @@ Compose has no build configuration. See [deployment.md](docs/deployment.md).
 
 ## Docs discipline
 
+Record watches consume `crm_changes_since` with explicit `record_ids`; save every
+returned cursor, including empty pages, and drain `has_more`. The native event
+and recovery contract is in [events.md](docs/spec/events.md#2-pull--crm_changes_since).
+
 Behaviour, contract or topology change ⇒ the matching `docs/*.md` changes in the same commit. Finished plan files move to `docs/done/`. A change to the MCP surface updates `docs/mcp-surface.md` **and** the tool's description in code — the description is the spec agents read.

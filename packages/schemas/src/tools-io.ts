@@ -81,9 +81,11 @@ export const CrmChangesSince = {
       .describe('explicitly replay retained history; cannot be combined with cursor'),
     object_types: z.array(Slug).max(50).optional()
       .describe('optional object type slugs; no ambient object filter is applied'),
+    record_ids: z.array(Uuid).min(1).max(100).optional()
+      .describe('watch only these records, their relationship changes in either direction, and schema changes affecting their types; visibility and field policy still apply'),
     kinds: z.array(FeedChangeKind).max(10).optional()
       .describe('optional change kinds; schema is the external name for schema changes'),
-    limit: Limit.describe('maximum visible changes to return; defaults to 50, maximum 200'),
+    limit: Limit.describe('maximum visible changes to return; defaults to 50, maximum 200; keep reading while has_more, including empty pages'),
   }),
   out: z.object({
     changes: z.array(FeedChange),

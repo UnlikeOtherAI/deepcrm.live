@@ -815,7 +815,8 @@ export const ExportResult = z.object({ url: z.string().url(), rows: z.number().i
 export const CrmChangesSince = { in: z.object({
   cursor: z.string().optional().describe('decimal seq from a previous page; omit to receive a fresh cursor at now'),
   from: z.literal('beginning').optional().describe('explicit opt-in to replay full retained history'),
-  object_types: z.array(Slug).optional(), kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
+  object_types: z.array(Slug).optional(), record_ids: z.array(Uuid).min(1).max(100).optional(),
+  kinds: z.array(Change.shape.kind).optional(), limit: Limit }),
   out: z.object({ changes: z.array(Change), next_cursor: z.string(), has_more: z.boolean() }) }
 const JsonObject = z.record(z.unknown())
 export const CrmFileRegister = { in: z.object({

@@ -31,7 +31,27 @@ Redaction: every event passes the same `redactForActor` pass as a record read, b
 ## 2. Pull — `crm_changes_since`
 
 - `cursor` = decimal string of the last `seq` seen. **Omitting it returns an empty page with a fresh cursor at now** — replaying full retained history is the explicit opt-in `from: "beginning"` (review M13).
-- Returns up to `limit` events with `seq > cursor`, ascending, filtered by `object_types`/`kinds`; `next_cursor` = last `seq` returned (or the input cursor when empty); `has_more`.
+- Returns up to `limit` events with `seq > cursor`, ascending, filtered by
+  `object_types`, `record_ids` and `kinds`. `record_ids` accepts one to 100 UUIDs;
+  it includes changes to those records, relationship events in either direction,
+  and schema changes for their currently visible object types. Filters intersect.
+  An inaccessible, missing or other-tenant record never expands visibility.
+- Each read captures the committed team sequence and scans at most 5,000 change
+  rows. `next_cursor` advances through fully inspected, irrelevant or hidden rows,
+  including an empty page; a partial matching page stops at its last returned
+  event. `has_more` means another page is required, including after an empty scan
+  budget page. Always persist the cursor and drain `has_more`; never use an empty
+  `changes` array alone to decide that catch-up finished.
+- A record watch starts by omitting `cursor`, saves that baseline, and reads from
+  it subsequently. Retry from the last committed cursor after an outage and
+  deduplicate by event id (or group id for one notification per mutation).
+  Persist notification delivery and cursor advancement together in the consumer.
+  Pausing/resuming and changing criteria are consumer decisions; these reads do
+  not create a subscription or deliver a notification themselves.
+- Significant-change and custom natural-language criteria are evaluated by the
+  consuming agent, outside DeepCRM. Native kinds and relation identifiers support
+  deterministic structural filters. Every read reapplies current record and
+  attribute policy; watches never inherit another subscriber's visibility.
 - Retention: change rows are immutable **except** they cascade when retention hard-deletes a record `DEEPCRM_RETENTION_DAYS` after its soft delete. A cursor therefore never expires, but a consumer lagging more than the retention window can miss the tail of hard-deleted records' histories — documented, accepted (review B41). Consumers store the cursor (Nessie: on the trigger's state).
 
 ## 2a. Behavioural events — `crm_event_*`

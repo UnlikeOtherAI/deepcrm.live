@@ -325,7 +325,7 @@ Approval: when policy marks an action as requiring approval (merge, delete, expo
 
 ### 6.5 Change feed
 
-- `crm_changes_since({cursor, object_types?, kinds?, limit})` — the global tenant change feed from `record_changes` (cursor = the per-team, commit-ordered `seq` — see [events.md](spec/events.md) §1–2), so an agent on a Nessie schedule can "do something about what changed since last run" cheaply.
+- `crm_changes_since({cursor, object_types?, record_ids?, kinds?, limit})` — the global tenant change feed from `record_changes` (cursor = the per-team, commit-ordered `seq` — see [events.md](spec/events.md) §1–2), so an agent on a Nessie schedule can "do something about what changed since last run" cheaply.
 - `crm_webhook_set({url, events[], secret_ref})` — outbound HMAC-signed, delivery-shaped (coalesced per window, retried by the worker) exactly like DeepSignal's insight webhook into Nessie. The Nessie side already knows how to turn a product webhook into a rolling digest message.
 
 ### 6.6 Prompts and resources

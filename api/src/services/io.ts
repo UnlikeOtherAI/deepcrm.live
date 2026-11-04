@@ -14,6 +14,7 @@ import {
   FeedChangeKind,
   ServiceError,
   Slug,
+  Uuid,
   type ActorContext,
   type FeedChangeKindValue,
   type FeedChangeValue,
@@ -24,14 +25,17 @@ import type { AppDeps } from '../deps.js'
 import { loadPolicyEvaluator, type PolicyEvaluator, type PolicyRequest } from './policy.js'
 import { recordBoundary } from './record-boundary.js'
 import { asQueryRecord } from './record-read.js'
+import { changeLinkEndpoints, changeMatchesRecords } from './change-feed-record-filter.js'
 import { buildRedactionMatrix, redactForActor } from './redact.js'
 
 const BATCH_SIZE = 500
+const MAX_BATCHES = 10
 
 export type ChangesSinceInput = {
   cursor?: string
   from?: 'beginning'
   objectTypes?: readonly string[]
+  recordIds?: readonly string[]
   kinds?: readonly FeedChangeKindValue[]
   limit?: number
 }
@@ -44,6 +48,8 @@ export type ChangesSinceResult = {
 
 type NormalizedInput = {
   cursor: bigint
+  head: bigint
+  recordIds?: ReadonlySet<string>
   objectTypeIds?: ReadonlySet<string>
   objectTypeSlugs?: ReadonlySet<string>
   kinds?: readonly ChangeKind[]
@@ -118,19 +124,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function linkEndpoints(value: unknown): readonly string[] {
-  if (!isObject(value)) return []
-  const from = value['from_record_id']
-  const to = value['to_record_id']
-  return [
-    ...(typeof from === 'string' ? [from] : []),
-    ...(typeof to === 'string' ? [to] : []),
-  ]
-}
-
 function relatedRecordId(row: ChangeRow): string | null {
   if (row.recordId === null || (row.kind !== 'link' && row.kind !== 'unlink')) return null
-  const endpoints = linkEndpoints(row.newValue ?? row.oldValue)
+  const endpoints = changeLinkEndpoints(row.newValue ?? row.oldValue)
   if (endpoints.length !== 2) {
     throw new ServiceError(ErrorCode.INTERNAL, 'Stored link change endpoints are invalid')
   }
@@ -206,7 +202,7 @@ function changeValue(
 async function loadBatch(deps: AppDeps, ctx: ActorContext, input: NormalizedInput, after: bigint) {
   return deps.db.recordChange.findMany({
     where: {
-      ...tenantWhere(ctx.tenant), seq: { gt: after },
+      ...tenantWhere(ctx.tenant), seq: { gt: after, lte: input.head },
       ...(input.kinds === undefined ? {} : { kind: { in: [...input.kinds] } }),
     },
     orderBy: { seq: 'asc' },
@@ -333,19 +329,26 @@ async function feed(
     })
   }
   const relations = relationMetadata(relationRows)
+  const watchedRecords = input.recordIds === undefined ? []
+    : await visibleRecords(deps, ctx, [...input.recordIds])
+  const watchedObjectTypes = new Set(watchedRecords.flatMap((record) => {
+    const objectType = schema.objectTypesById.get(record.objectTypeId)
+    return objectType && visibleDecision(evaluator, recordRequest(ctx, record)) ? [objectType.slug] : []
+  }))
   const changes: FeedChangeValue[] = []
   let scanned = input.cursor
   let exhausted = false
-  while (changes.length <= input.limit && !exhausted) {
+  let batches = 0
+  while (changes.length <= input.limit && !exhausted && batches++ < MAX_BATCHES) {
     const rows = await loadBatch(deps, ctx, input, scanned)
-    if (rows.length === 0) break
+    if (rows.length === 0) { exhausted = true; break }
     const last = rows.at(-1)
     if (last === undefined) break
     scanned = last.seq
     exhausted = rows.length < BATCH_SIZE
     const ids = rows.flatMap((row) => [
       ...(row.recordId === null ? [] : [row.recordId]),
-      ...linkEndpoints(row.newValue ?? row.oldValue),
+      ...changeLinkEndpoints(row.newValue ?? row.oldValue),
     ])
     const candidates = await visibleRecords(deps, ctx, ids)
     const admitted = candidates.filter((record) => (
@@ -361,6 +364,7 @@ async function feed(
       const record = row.recordId === null ? undefined : byId.get(row.recordId)
       if (row.recordId !== null && record === undefined) continue
       if (!matchesObjectFilter(row, record, input)) continue
+      if (!changeMatchesRecords(row, input.recordIds, watchedObjectTypes)) continue
       const related = relatedRecordId(row)
       if (related !== null && !byId.has(related)) continue
       changes.push(present(
@@ -373,8 +377,9 @@ async function feed(
   const page = changes.slice(0, input.limit)
   return {
     changes: page,
-    next_cursor: page.at(-1)?.seq ?? input.cursor.toString(),
-    has_more: changes.length > input.limit,
+    next_cursor: changes.length > input.limit ? (page.at(-1)?.seq ?? input.cursor.toString())
+      : (exhausted && input.head > scanned ? input.head : scanned).toString(),
+    has_more: changes.length > input.limit || !exhausted,
   }
 }
 
@@ -394,6 +399,8 @@ async function normalize(
     invalid('/limit', 'Limit must be an integer from 1 to 200')
   }
   const kinds = normalizeKinds(input.kinds)
+  const recordIds = input.recordIds === undefined ? undefined : Uuid.array().min(1).max(100).safeParse(input.recordIds)
+  if (recordIds !== undefined && !recordIds.success) invalid('/record_ids', 'Supply one to 100 record UUIDs')
   let objectTypeIds: ReadonlySet<string> | undefined
   let objectTypeSlugs: ReadonlySet<string> | undefined
   if (input.objectTypes !== undefined) {
@@ -412,16 +419,18 @@ async function normalize(
     objectTypeIds = new Set(selected.map((objectType) => objectType.id))
     objectTypeSlugs = new Set(selected.map((objectType) => objectType.slug))
   }
+  const team = await deps.db.team.findFirst({
+    where: { id: ctx.tenant.teamId, organizationId: ctx.tenant.organizationId },
+    select: { feedSeq: true },
+  })
+  if (team === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
   if (input.cursor === undefined && input.from === undefined) {
-    const team = await deps.db.team.findFirst({
-      where: { id: ctx.tenant.teamId, organizationId: ctx.tenant.organizationId },
-      select: { feedSeq: true },
-    })
-    if (team === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
     return { changes: [], next_cursor: team.feedSeq.toString(), has_more: false }
   }
   return {
     cursor: input.cursor === undefined ? 0n : cursor(input.cursor),
+    head: team.feedSeq,
+    ...(recordIds?.success ? { recordIds: new Set(recordIds.data) } : {}),
     ...(objectTypeIds === undefined ? {} : { objectTypeIds, objectTypeSlugs }),
     ...(kinds === undefined ? {} : { kinds }),
     limit,
