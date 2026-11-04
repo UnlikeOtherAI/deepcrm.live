@@ -21,3 +21,20 @@ credentials are introduced.
 - Existing change-feed pagination and value redaction pass unchanged.
 - Lint, typecheck and the database-backed feed/MCP checks pass. Exercise the
   supported MCP interface and inspect the resulting event ids and cursors.
+
+## Verification
+
+GitHub Actions run 41927468773 (Ubuntu, PostgreSQL 16 with pgvector) passed lint,
+typecheck, the production Docker build and the complete Turbo database/MCP suite.
+The schema-engine property test timed out on the first attempt; rerunning the
+failed job passed. The event code was unchanged between attempts.
+
+The new MCP journey discovers `record_ids` in tools/list, creates a company,
+starts at a fresh cursor, creates an employee and employment link, updates the
+company, then reads its change events. Incoming links and the company update
+are present; the unrelated person-creation event is absent. Reading from the
+returned cursor is quiet. The database feed cases cover private/other-tenant
+filters, redaction, sparse bounded pages, cursor recovery and invalid filters.
+
+This is DeepCRM's headless event surface. The eye control and user/agent
+notifications belong to the Nessie integration and are not claimed here.

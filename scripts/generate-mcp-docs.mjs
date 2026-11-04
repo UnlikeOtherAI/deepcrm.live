@@ -9,13 +9,6 @@ const groupMetaKey = 'live.deepcrm/group'
 const accessMetaKey = 'live.deepcrm/access'
 const summaryPattern = /<!-- tools:summary:start -->\n[\s\S]*?\n<!-- tools:summary:end -->/g
 
-// These two calls use fixed script arguments. Windows starts pnpm's .cmd through cmd.exe.
-function runPnpm(args, options) {
-  return process.platform === 'win32'
-    ? execFileSync('cmd.exe', ['/d', '/s', '/c', `pnpm ${args.map(arg => `"${arg}"`).join(' ')}`], options)
-    : execFileSync('pnpm', args, options)
-}
-
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -39,11 +32,11 @@ function toolClass(name, meta) {
 }
 
 function readCatalog() {
-  runPnpm(['exec', 'turbo', 'run', 'build', '--filter=@deepcrm/api^...', '--concurrency=1'], {
+  execFileSync('pnpm', ['exec', 'turbo', 'run', 'build', '--filter=@deepcrm/api^...'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
-  const output = runPnpm(['exec', 'tsx', 'api/src/mcp/print-catalog.ts'], {
+  const output = execFileSync('pnpm', ['exec', 'tsx', 'api/src/mcp/print-catalog.ts'], {
     cwd: repoRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
