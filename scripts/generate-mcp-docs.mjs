@@ -12,7 +12,7 @@ const summaryPattern = /<!-- tools:summary:start -->\n[\s\S]*?\n<!-- tools:summa
 // These two calls use fixed script arguments. Windows starts pnpm's .cmd through cmd.exe.
 function runPnpm(args, options) {
   return process.platform === 'win32'
-    ? execFileSync('cmd.exe', ['/d', '/s', '/c', `pnpm ${args.join(' ')}`], options)
+    ? execFileSync('cmd.exe', ['/d', '/s', '/c', `pnpm ${args.map(arg => `"${arg}"`).join(' ')}`], options)
     : execFileSync('pnpm', args, options)
 }
 
