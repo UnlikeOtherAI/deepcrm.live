@@ -9,7 +9,7 @@
     "lint": "node scripts/lint-migrations.mjs && node scripts/lint-tenant-where.mjs && turbo run lint",
     "typecheck": "pnpm prisma:generate && turbo run typecheck",
     "build": "pnpm lint && pnpm prisma:generate && turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test --concurrency=2",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "prisma:generate": "pnpm --filter @deepcrm/db prisma:generate",
     "docs:mcp": "node scripts/generate-mcp-docs.mjs"

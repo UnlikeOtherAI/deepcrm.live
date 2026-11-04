@@ -1,6 +1,9 @@
 # Testing
 
-Runner: **vitest 3** in every package (deepsignal pattern). `pnpm test` = `turbo run test` with `env: ["DATABASE_URL"]`, `cache: false`.
+Runner: **vitest 3** in every package (deepsignal pattern). `pnpm test` =
+`turbo run test --concurrency=2` with `env: ["DATABASE_URL"]`, `cache: false`.
+Package suites share the CI PostgreSQL service, so their concurrency is bounded
+at two. Per-file database isolation, assertions and test timeouts are unchanged.
 
 ## Layers
 
