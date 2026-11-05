@@ -31,7 +31,8 @@ async function fixture() {
 }
 const field = (objectType: string, slug = 'review_detail') => ({ objectType, slug,
   name: 'Private label omitted from events', description: 'Private definition omitted from events',
-  type: 'text' as const, config: { maxLength: 80 }, sensitivity: 'restricted' as const })
+  type: 'text' as const, config: { maxLength: 80 }, sensitivity: 'restricted' as const,
+  is_multi: false, is_required: false, is_unique: false, is_indexed: false })
 
 afterAll(async () => {
   for (const organizationId of organizations) await dropTenant(db, organizationId)
@@ -87,7 +88,8 @@ describe('real schema mutation feed', () => {
     const beforeReference = (await changesSince(deps, target.ctx, {})).next_cursor
     await defineSchemaAttribute(deps, target.ctx, { objectType: 'person', slug: 'review_employer',
       name: 'Review employer', description: 'Reference relation watch probe', type: 'record_reference',
-      config: { objectTypes: ['company'] } })
+      config: { objectTypes: ['company'] }, sensitivity: 'internal',
+      is_multi: false, is_required: false, is_unique: false, is_indexed: false })
     for (const recordId of [target.person, target.company])
       expect((await changesSince(deps, target.ctx, { cursor: beforeReference, recordIds: [recordId] })).changes)
         .toHaveLength(1)
