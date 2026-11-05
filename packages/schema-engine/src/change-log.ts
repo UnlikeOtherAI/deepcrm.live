@@ -1,10 +1,10 @@
-import { Prisma, type Db, type TenantRef } from '@deepcrm/db'
+import { Prisma, type AuditTx, type Db, type TenantRef } from '@deepcrm/db'
 import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 
 import type { ChangeIntent } from './records/changes.js'
 import type { JsonValue } from './records/json.js'
 
-export type ChangeLogTx = Pick<Db, '$queryRaw' | 'recordChange'>
+export type ChangeLogTx = Pick<AuditTx, '$queryRaw'> & Pick<Db, 'recordChange'>
 export type ChangeAuthor = {
   tenant: TenantRef
   actor: ActorContext['actor']

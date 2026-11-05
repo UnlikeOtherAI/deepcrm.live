@@ -109,10 +109,12 @@ async function fixture(): Promise<Fixture> {
     ...tenant, relationTypeId: relation.id, fromRecordId: primary.id, toRecordId: related.id,
       data: { role: 'owner' }, activeFrom: now, createdByType: 'system', createdById: 'record_read_fixture',
   } })
+  const feed = await db.team.update({ where: { id: tenant.teamId },
+    data: { feedSeq: { increment: 1 } }, select: { feedSeq: true } })
   await db.recordChange.create({ data: {
     ...tenant, recordId: primary.id, kind: 'set', attributeSlug: 'name', newValue: 'Alice',
     actorType: 'human', actorId: 'read_user', onBehalfOf: 'read_user', requestId: crypto.randomUUID(),
-    resultingVersion: 1, seq: 1n, occurredAt: now,
+    resultingVersion: 1, seq: feed.feedSeq, occurredAt: now,
   } })
   await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: 1 } })
   return {
