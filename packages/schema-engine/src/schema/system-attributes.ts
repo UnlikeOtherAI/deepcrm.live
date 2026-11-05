@@ -2,8 +2,9 @@ import { tenantWhere, type TenantRef } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
 import { TemplateSchema } from '../templates/types.js'
-import { audit, bumpSchemaVersion, defineAttributeBatch, type AuditActor } from './mutate.js'
+import { defineAttributeBatch, type AuditActor } from './mutate.js'
 import type { LoadedObjectType } from './load.js'
+import { audit, bumpSchemaVersion } from './changes.js'
 import type { SchemaTx } from './tx.js'
 
 /** One system attribute as a template defines it. */
@@ -136,7 +137,7 @@ export async function ensureSystemAttributes(
     added += 1
   }
   if (added === 0) return { added }
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [input.objectTypeSlug])
   await audit(tx, tenant, actor, input.auditAction, 'object_type', owner.id)
   return { added }
 }

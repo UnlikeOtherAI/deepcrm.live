@@ -9,13 +9,12 @@ import {
 } from '../derived/index.js'
 import type { AttributeInput, AuditActor } from './mutation-types.js'
 import {
-  audit,
-  bumpSchemaVersion,
   defineAttributeInternal,
   jsonValue,
   object,
   unknownAttribute,
 } from './mutate.js'
+import { audit, bumpSchemaVersion } from './changes.js'
 import type { SchemaTx } from './tx.js'
 
 type StoredJsonValue = Prisma.InputJsonValue | typeof Prisma.JsonNull
@@ -238,7 +237,7 @@ export async function defineDerivedAttribute(
   input: DerivedAttributeDefinition,
 ) {
   return defineDerivedAttributeInternal(tx, tenant, actor, input, async (_objectTypeId, attributeId) => {
-    await bumpSchemaVersion(tx, tenant)
+    await bumpSchemaVersion(tx, tenant, actor, [input.objectType])
     await audit(tx, tenant, actor, 'define', 'attribute', attributeId)
   })
 }
@@ -290,7 +289,7 @@ export async function updateDerivedAttribute(
     },
   })
   await replaceDerivation(tx, tenant, target.id, valueSource, prepared.config, prepared.dependencies)
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [objectSlug])
   await enqueueDerivedBackfill(tx, tenant, objectType.id, target.id, actor)
   await audit(tx, tenant, actor, 'define', 'attribute', target.id)
   return updated

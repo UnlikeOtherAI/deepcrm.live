@@ -1,9 +1,10 @@
-import type { AttributeSpec } from '@deepcrm/schemas'
+import type { ActorContext, AttributeSpec } from '@deepcrm/schemas'
 
 export type AuditActor = {
   type: 'human' | 'agent' | 'system'
   id: string
   onBehalfOf: string | null
+  provenance?: ActorContext['provenance']
   requestId: string
 }
 

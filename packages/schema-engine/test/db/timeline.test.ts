@@ -27,6 +27,7 @@ type Fixture = Readonly<{
   tenant: TenantRef
   ctx: ActorContext
   schema: LoadedSchema
+  feedBaseline: bigint
 }>
 
 type RecordOptions = Readonly<{
@@ -63,7 +64,8 @@ async function fixture(): Promise<Fixture> {
     await applyTemplate(tx, tenant, actor, 'system')
     await applyTemplate(tx, tenant, actor, 'standard_crm')
   })
-  return { tenant, ctx, schema: await loadSchema(db, tenant) }
+  const feedBaseline = (await db.team.findUniqueOrThrow({ where: { id: tenant.teamId } })).feedSeq
+  return { tenant, ctx, schema: await loadSchema(db, tenant), feedBaseline }
 }
 
 function objectType(schema: LoadedSchema, slug: string): LoadedObjectType {
@@ -155,7 +157,7 @@ async function addChange(
     actorId: 'timeline-test',
     requestId: crypto.randomUUID(),
     resultingVersion: Number(seq),
-    seq,
+    seq: value.feedBaseline + seq,
     occurredAt,
   } })
 }

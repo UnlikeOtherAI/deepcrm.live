@@ -101,6 +101,7 @@ function actor(ctx: ActorContext) {
     id: ctx.actor.id,
     onBehalfOf: onBehalfOfUserId(ctx),
     requestId: ctx.requestId,
+    provenance: ctx.provenance,
   }
 }
 

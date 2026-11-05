@@ -4,7 +4,6 @@ import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 import { definePipelineBatch } from '../pipeline/index.js'
 import { defineDerivedAttributeBatch } from '../schema/derived-attributes.js'
 import {
-  bumpSchemaVersion,
   defineAttributeBatch,
   defineObjectTypeBatch,
   defineRelationTypeBatch,
@@ -12,6 +11,7 @@ import {
   updateObjectTypeBatch,
   type AuditActor,
 } from '../schema/mutate.js'
+import { bumpSchemaVersion, relationSchemaObjects } from '../schema/changes.js'
 import type { SchemaTx } from '../schema/tx.js'
 import standardCommerceJson from './standard_commerce.json' with { type: 'json' }
 import standardCrmJson from './standard_crm.json' with { type: 'json' }
@@ -55,6 +55,7 @@ export async function applyTemplateBatch(
   tenant: TenantRef,
   actor: AuditActor,
   slug: string,
+  affected?: Set<string>,
 ): Promise<{ added: TemplateAdded }> {
   const template = templateFor(slug)
   const added = emptyAdded()
@@ -74,6 +75,7 @@ export async function applyTemplateBatch(
       kind: item.kind,
     })
     created.add(item.slug)
+    affected?.add(item.slug)
     added.objectTypes += 1
   }
 
@@ -82,7 +84,7 @@ export async function applyTemplateBatch(
       where: { ...tenantWhere(tenant), slug: item.slug, archivedAt: null },
     })
     if (exists !== null) continue
-    await defineRelationTypeBatch(tx, tenant, actor, {
+    const relation = await defineRelationTypeBatch(tx, tenant, actor, {
       slug: item.slug,
       fromObjectType: item.from_object_type,
       toObjectType: item.to_object_type,
@@ -94,6 +96,7 @@ export async function applyTemplateBatch(
       edgeAttributes: item.edge_attributes,
       isSystem: item.is_system,
     })
+    if (affected) for (const objectType of await relationSchemaObjects(tx, tenant, relation)) affected.add(objectType)
     added.relationTypes += 1
   }
 
@@ -112,6 +115,7 @@ export async function applyTemplateBatch(
         objectType: object.slug,
         isSystem: item.is_system,
       })
+      affected?.add(object.slug)
       added.attributes += 1
     }
   }
@@ -139,6 +143,7 @@ export async function applyTemplateBatch(
         valueSource: item.value_source,
         derivationConfig: item.derivation_config,
       })
+      affected?.add(object.slug)
       added.attributes += 1
     }
   }
@@ -156,6 +161,7 @@ export async function applyTemplateBatch(
       isDefault: item.is_default,
       stages: item.stages,
     })
+    affected?.add(item.object_type)
     added.pipelines += 1
   }
 
@@ -177,9 +183,10 @@ export async function applyTemplate(
   actor: AuditActor,
   slug: string,
 ): Promise<{ added: TemplateAdded }> {
-  const result = await applyTemplateBatch(tx, tenant, actor, slug)
+  const affected = new Set<string>()
+  const result = await applyTemplateBatch(tx, tenant, actor, slug, affected)
   if (total(result.added) === 0) return result
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [...affected])
   await writeAudit(tx, {
     organizationId: tenant.organizationId,
     teamId: tenant.teamId,

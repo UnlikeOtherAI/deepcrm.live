@@ -70,6 +70,12 @@ beforeAll(async () => {
     resourceType: 'schema', action: 'define', effect: 'allow', priority: 100, requiresApproval: false, createdById: 'records-mcp',
     bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }, { actorType: 'role', actorId: 'owner' }] },
   } })
+  await db.policyRule.create({ data: {
+    organizationId: team.organizationId, teamId: team.id, scope: 'team', scopeId: team.id,
+    resourceType: 'schema', action: 'view', effect: 'allow', priority: 100, requiresApproval: false,
+    createdById: 'records-mcp',
+    bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }, { actorType: 'role', actorId: 'owner' }] },
+  } })
   const applied = await call('crm_template_apply', { template: 'standard_crm' })
   const appliedContent = ToolResult.parse(applied).structuredContent
   if (typeof appliedContent === 'object' && appliedContent !== null && !Array.isArray(appliedContent)
@@ -110,6 +116,51 @@ describe('record MCP tools', () => {
     })))
     expect(quiet.changes).toEqual([])
     expect(quiet.next_cursor).toBe(page.next_cursor)
+  })
+
+  it('publishes field add, relabel and archive through the supported watch feed', async () => {
+    const field = `watch_${runKey.replaceAll('-', '')}`
+    const company = z.object({ record: z.object({ id: z.string().uuid() }) })
+      .parse(structured(await call('crm_record_create', {
+        object_type: 'company', data: { name: `Schema watch ${runKey}` },
+      }))).record
+    const Feed = z.object({ changes: z.array(z.object({ kind: z.string(), record: z.unknown().nullable(),
+      new_value: z.object({ object_type: z.string(), schema_version: z.number() }),
+    })), next_cursor: z.string(), has_more: z.boolean() })
+    let cursor = z.object({ next_cursor: z.string() }).parse(structured(await call('crm_changes_since', {
+      record_ids: [company.id],
+    }))).next_cursor
+    const readMutation = async () => {
+      const page = Feed.parse(structured(await call('crm_changes_since', { cursor, record_ids: [company.id] })))
+      expect(page.changes).toHaveLength(1)
+      expect(page.changes[0]).toMatchObject({ kind: 'schema', record: null,
+        new_value: { object_type: 'company' } })
+      expect(BigInt(page.next_cursor)).toBeGreaterThan(BigInt(cursor))
+      expect(page.has_more).toBe(false)
+      cursor = page.next_cursor
+    }
+    structured(await call('crm_attribute_define', { object_type: 'company', slug: field,
+      name: 'Review detail', description: 'Field watch probe', type: 'text', config: { maxLength: 80 } }))
+    await readMutation()
+    structured(await call('crm_attribute_update', { object_type: 'company', attribute: field, name: 'Renamed detail' }))
+    await readMutation()
+    structured(await call('crm_record_update', { id: company.id, data: { [field]: 'Archive probe value' } }))
+    cursor = z.object({ next_cursor: z.string() }).parse(structured(await call('crm_changes_since', {
+      cursor, record_ids: [company.id],
+    }))).next_cursor
+    const args = { object_type: 'company', attribute: field, reason: 'Complete schema watch probe' }
+    const challenge = z.object({ requestState: z.string() }).parse(await call('crm_attribute_archive', args))
+    expect(Feed.parse(structured(await call('crm_changes_since', {
+      cursor, record_ids: [company.id],
+    }))).changes).toEqual([])
+    structured(await client.request({ method: 'tools/call', params: { name: 'crm_attribute_archive', arguments: args,
+      requestState: challenge.requestState,
+      inputResponses: { confirm: { action: 'accept', content: { confirmed: true } } },
+    } }, ToolResult))
+    await readMutation()
+    expect(Feed.parse(structured(await call('crm_changes_since', {
+      cursor, record_ids: [company.id],
+    }))).changes).toEqual([])
   })
 
   it('merges duplicates and resolves a loser id to the survivor', async () => {

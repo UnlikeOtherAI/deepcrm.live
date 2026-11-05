@@ -275,11 +275,13 @@ async function assertFeedAndVersions(tenant: TenantRef, committedSequences: numb
     select: { recordId: true, kind: true, requestId: true, resultingVersion: true, seq: true },
   })
   const sequences = changes.map((change) => Number(change.seq))
-  expect(sequences).toEqual(committedSequences)
+  expect(changes.filter(change => change.recordId !== null).map(change => Number(change.seq)))
+    .toEqual(committedSequences)
   for (let index = 1; index < sequences.length; index += 1) {
     expect(sequences[index]).toBeGreaterThan(sequences[index - 1] ?? 0)
   }
-  expect(changes.every((change) => change.recordId !== null && change.resultingVersion > 0)).toBe(true)
+  expect(changes.every((change) => (change.recordId === null) === (change.kind === 'schema_change')
+    && change.resultingVersion > 0)).toBe(true)
   const records = await db.record.findMany({
     where: scope(tenant), select: { id: true, objectTypeId: true, deletedAt: true, version: true },
   })
