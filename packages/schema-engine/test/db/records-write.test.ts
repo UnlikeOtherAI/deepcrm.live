@@ -198,8 +198,7 @@ describe('record write engine', () => {
       data: { attributeSlugs: ['phones'] },
     })
     await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
-    const baseline = (await db.team.findUniqueOrThrow({ where: { id: tenant.teamId } })).feedSeq
-  const schema = await loadSchema(db, tenant)
+    const schema = await loadSchema(db, tenant)
     const first = await db.$transaction((tx) => createRecord(tx, ctx, schema, {
       objectType: 'person', data: { name: { full: 'Ada Lovelace' }, emails: ['ada-one@example.com'], phones: ['+44 20 7946 0958'] },
     }, noLinks))
@@ -253,7 +252,7 @@ describe('record write engine', () => {
       throw new ServiceError(ErrorCode.POLICY_DENIED, 'Create denied')
     }))).rejects.toMatchObject({ code: ErrorCode.POLICY_DENIED })
     expect(rowsAtDecision).toBe(0)
-    expect(await db.record.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId, kind: { not: 'schema_change' } } })).toBe(0)
+    expect(await db.record.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(0)
     expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId, kind: { not: 'schema_change' } } })).toBe(0)
   })
 })

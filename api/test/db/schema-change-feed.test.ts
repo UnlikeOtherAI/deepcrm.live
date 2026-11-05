@@ -84,6 +84,13 @@ describe('real schema mutation feed', () => {
       toObjectType: null, forwardName: 'relates to', inverseName: 'related from', cardinality: 'many_to_many' })
     expect((await changesSince(deps, target.ctx, { cursor: page.next_cursor, recordIds: [target.company] })).changes)
       .toHaveLength(1)
+    const beforeReference = (await changesSince(deps, target.ctx, {})).next_cursor
+    await defineSchemaAttribute(deps, target.ctx, { objectType: 'person', slug: 'review_employer',
+      name: 'Review employer', description: 'Reference relation watch probe', type: 'record_reference',
+      config: { objectTypes: ['company'] } })
+    for (const recordId of [target.person, target.company])
+      expect((await changesSince(deps, target.ctx, { cursor: beforeReference, recordIds: [recordId] })).changes)
+        .toHaveLength(1)
   })
 
   it('rolls back the schema, version and allocated sequence together; committed writes remain ordered', async () => {
