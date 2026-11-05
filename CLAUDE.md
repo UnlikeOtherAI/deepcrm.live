@@ -22,6 +22,7 @@ Headless, agent-native CRM. The only product surface is a **stateless MCP server
 - **API** (`api/`, port **5656** local dev) — Fastify; `/mcp` (MCP streamable HTTP, stateless, built per request), `/.well-known/oauth-protected-resource`, `/health`. Routes/tools parse input, call a service, translate errors.
 - **Worker** (`worker/`) — Postgres-queue consumer: search reindex + embeddings, dedup scans, bulk import/export Tasks, change delivery (webhooks), retention.
 - **Packages** (`packages/`) — `schemas` (zod contracts, shared types), `db` (Prisma client + migrations helpers), `schema-engine` (metadata, validation, normalisation, write path, query compiler, merge), `mcp-inbound` (auth seam), `queue`.
+- Schema metadata writes and saved record writes share commit-ordered change events; schema-watch contracts and probes are in [events](docs/spec/events.md) and [testing](docs/testing.md#schema-watches).
 - **No** `admin/`, `web/`, `desktop/`, `mobile/`. If something needs a screen, it lives in Nessie.
 
 ## Tech

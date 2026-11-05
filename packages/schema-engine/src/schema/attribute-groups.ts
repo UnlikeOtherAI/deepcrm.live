@@ -1,8 +1,9 @@
 import { tenantWhere, type TenantRef } from '@deepcrm/db'
 import { ErrorCode, ServiceError } from '@deepcrm/schemas'
 
-import { audit, bumpSchemaVersion, object, type AuditActor } from './mutate.js'
+import { object, type AuditActor } from './mutate.js'
 import type { AttributeGroupInput } from './mutation-types.js'
+import { audit, bumpSchemaVersion } from './changes.js'
 import type { SchemaTx } from './tx.js'
 
 function schemaConflict(detail: string): ServiceError {
@@ -63,7 +64,7 @@ export async function defineAttributeGroup(
     })
     if (updated.count !== new Set(attributes).size) throw schemaConflict('unknown_attribute')
   }
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [input.objectType])
   await audit(tx, tenant, actor, 'define', 'attribute_group', created.id)
   return created
 }
@@ -94,7 +95,7 @@ export async function reorderAttributeGroups(
     if (group === undefined) throw schemaConflict('attribute_group_order_mismatch')
     ordered.push(await tx.attributeGroup.update({ where: { id: group.id }, data: { position } }))
   }
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [objectSlug])
   await audit(tx, tenant, actor, 'define', 'attribute_group', objectType.id)
   return ordered
 }
@@ -111,7 +112,7 @@ export async function archiveAttributeGroup(
   const group = await activeGroup(tx, tenant, objectType.id, slug)
   const archived = await tx.attributeGroup.update({ where: { id: group.id }, data: { archivedAt: new Date() } })
   await tx.attribute.updateMany({ where: { ...tenantWhere(tenant), groupId: group.id }, data: { groupId: null } })
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [objectSlug])
   await audit(tx, tenant, actor, 'archive', 'attribute_group', archived.id, reason ?? null)
   return archived
 }

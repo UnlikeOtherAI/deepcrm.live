@@ -1,5 +1,6 @@
-import { Prisma } from '@deepcrm/db'
-import { ErrorCode, ServiceError, onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
+import { onBehalfOfUserId, type ActorContext } from '@deepcrm/schemas'
+
+import { writeChangeRows } from '../change-log.js'
 
 import type { RecordTx } from '../schema/tx.js'
 import { canonicalJson, type JsonValue } from './json.js'
@@ -19,10 +20,6 @@ export type ChangeIntent = {
 }
 
 type DiffInput = Record<string, JsonValue>
-
-function json(value: JsonValue | null): Prisma.InputJsonValue | typeof Prisma.JsonNull {
-  return value === null ? Prisma.JsonNull : value
-}
 
 export function diffChanges(
   before: DiffInput, after: DiffInput, recordId: string, resultingVersion: number,
@@ -62,46 +59,8 @@ export async function writeChanges(
   ctx: ActorContext,
   changes: readonly ChangeIntent[],
 ): Promise<number[]> {
-  if (changes.length === 0) return []
-  const advanced = await tx.team.updateMany({
-    where: { id: ctx.tenant.teamId, organizationId: ctx.tenant.organizationId },
-    data: { feedSeq: { increment: changes.length } },
-  })
-  if (advanced.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
-  const team = await tx.team.findFirst({
-    where: { id: ctx.tenant.teamId, organizationId: ctx.tenant.organizationId },
-    select: { feedSeq: true },
-  })
-  if (team === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
-  const first = Number(team.feedSeq) - changes.length + 1
-  const sequences = changes.map((_, index) => first + index)
-  for (const [index, change] of changes.entries()) {
-    const seq = sequences[index]
-    if (seq === undefined) throw new ServiceError(ErrorCode.INTERNAL, 'Missing change sequence')
-    await tx.recordChange.create({
-      data: {
-        organizationId: ctx.tenant.organizationId,
-        teamId: ctx.tenant.teamId,
-        recordId: change.recordId,
-        kind: change.kind,
-        attributeSlug: change.attributeSlug,
-        relationTypeId: change.relationTypeId,
-        linkId: change.linkId,
-        groupId: change.groupId,
-        oldValue: json(change.oldValue),
-        newValue: json(change.newValue),
-        snapshot: json(change.snapshot),
-        actorType: ctx.actor.type,
-        actorId: ctx.actor.id,
-        onBehalfOf: onBehalfOfUserId(ctx),
-        runId: ctx.provenance?.runId ?? null,
-        toolCallId: ctx.provenance?.toolCallId ?? null,
-        requestId: ctx.requestId,
-        reason: change.reason,
-        resultingVersion: change.resultingVersion,
-        seq: BigInt(seq),
-      },
-    })
-  }
-  return sequences
+  return writeChangeRows(tx, {
+    tenant: ctx.tenant, actor: ctx.actor, onBehalfOf: onBehalfOfUserId(ctx),
+    requestId: ctx.requestId, provenance: ctx.provenance,
+  }, changes)
 }

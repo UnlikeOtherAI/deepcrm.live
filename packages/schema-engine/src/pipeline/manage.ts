@@ -6,7 +6,7 @@ import { lockRecords } from '../records/locks.js'
 import { writeChanges } from '../records/changes.js'
 import type { LoadedObjectType, LoadedSchema } from '../schema/load.js'
 import type { AuditActor } from '../schema/mutation-types.js'
-import { bumpSchemaVersion } from '../schema/mutate.js'
+import { bumpSchemaVersion } from '../schema/changes.js'
 import type { RecordTx, SchemaTx } from '../schema/tx.js'
 
 export type PipelineStageInput = {
@@ -160,7 +160,7 @@ async function definePipelineInternal(
     })
   }
   if (finalize) {
-    await bumpSchemaVersion(tx, tenant)
+    await bumpSchemaVersion(tx, tenant, actor, [input.objectType])
     await auditSchema(tx, tenant, actor, 'define', pipeline.id)
   }
   return listPipeline(tx, tenant, input.objectType, input.slug)
@@ -206,7 +206,7 @@ export async function updatePipeline(
       isDefault: input.isDefault,
     },
   })
-  await bumpSchemaVersion(tx, tenant)
+  await bumpSchemaVersion(tx, tenant, actor, [input.objectType])
   await auditSchema(tx, tenant, actor, 'update', updated.id)
   return listPipeline(tx, tenant, input.objectType, input.pipeline)
 }

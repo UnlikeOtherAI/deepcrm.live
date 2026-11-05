@@ -315,6 +315,7 @@ async function feed(
       where: tenantWhere(ctx.tenant), select: { id: true, slug: true, edgeAttributes: true },
     }),
     loadPolicyEvaluator(deps.db, ctx, [
+      { resourceType: 'schema', action: 'view', scopes: [{ scope: 'team', id: ctx.tenant.teamId }] },
       { resourceType: 'record', action: 'view', scopes: [{ scope: 'team', id: ctx.tenant.teamId }] },
       { resourceType: 'attribute', action: 'view', scopes: [{ scope: 'team', id: ctx.tenant.teamId }] },
     ]),
@@ -361,6 +362,8 @@ async function feed(
       record.id, redactForActor(ctx, schema, record, matrix),
     ]))
     for (const row of rows) {
+      if (row.kind === 'schema_change' && !visibleDecision(evaluator, { resourceType: 'schema', action: 'view',
+        scopes: [{ scope: 'team', id: ctx.tenant.teamId }] })) continue
       const record = row.recordId === null ? undefined : byId.get(row.recordId)
       if (row.recordId !== null && record === undefined) continue
       if (!matchesObjectFilter(row, record, input)) continue

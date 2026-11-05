@@ -34,6 +34,7 @@ async function setup() {
   await db.$transaction((tx) => applyTemplate(tx, tenant, {
     type: 'system', id: 'test', onBehalfOf: null, requestId: crypto.randomUUID(),
   }, 'standard_crm'))
+  const baseline = (await db.team.findUniqueOrThrow({ where: { id: tenant.teamId } })).feedSeq
   const schema = await loadSchema(db, tenant)
   const ctx: ActorContext = {
     tenant: { organizationId: tenant.organizationId, teamId: tenant.teamId },
@@ -41,7 +42,7 @@ async function setup() {
     onBehalfOf: { uoaUserId: 'uoa_test', role: 'owner' }, provenance: null,
     actChain: [], requestId: crypto.randomUUID(), now: new Date(),
   }
-  return { tenant, schema, ctx }
+  return { tenant, schema, ctx, baseline }
 }
 
 afterAll(async () => {
@@ -51,7 +52,7 @@ afterAll(async () => {
 
 describe('record write engine', () => {
   it('writes a create marker then sorted sets with v1 and feed sequence', async () => {
-    const { tenant, schema, ctx } = await setup()
+    const { tenant, schema, ctx, baseline } = await setup()
     const result = await db.$transaction((tx) => createRecord(tx, ctx, schema, {
       objectType: 'person', data: { name: { full: 'Ada' }, emails: ['Ada <ADA@Example.COM>'] }, reason: 'import',
     }, noLinks))
@@ -65,7 +66,7 @@ describe('record write engine', () => {
       .toEqual(['create:null', 'set:emails', 'set:marketing_consent', 'set:name'])
     expect(changes.every((change) => change.resultingVersion === 1)).toBe(true)
     expect(changes.every((change) => change.reason === 'import')).toBe(true)
-    expect(changes.map((change) => Number(change.seq))).toEqual([1, 2, 3, 4])
+    expect(changes.map((change) => Number(change.seq - baseline))).toEqual([1, 2, 3, 4])
   })
 
   it('updates with optimistic versioning and does not write normalized no-ops', async () => {
@@ -85,7 +86,7 @@ describe('record write engine', () => {
     }, noLinks))
     expect(updated.record.version).toBe(2)
     expect(updated.changes.map((change) => change.attributeSlug)).toEqual(['name'])
-    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(5)
+    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId, recordId: created.record.id } })).toBe(5)
   })
 
   it('enforces unique keys and releases them on delete while restore detects conflict', async () => {
@@ -197,7 +198,8 @@ describe('record write engine', () => {
       data: { attributeSlugs: ['phones'] },
     })
     await db.team.update({ where: { id: tenant.teamId }, data: { schemaVersion: { increment: 1 } } })
-    const schema = await loadSchema(db, tenant)
+    const baseline = (await db.team.findUniqueOrThrow({ where: { id: tenant.teamId } })).feedSeq
+  const schema = await loadSchema(db, tenant)
     const first = await db.$transaction((tx) => createRecord(tx, ctx, schema, {
       objectType: 'person', data: { name: { full: 'Ada Lovelace' }, emails: ['ada-one@example.com'], phones: ['+44 20 7946 0958'] },
     }, noLinks))
@@ -251,7 +253,7 @@ describe('record write engine', () => {
       throw new ServiceError(ErrorCode.POLICY_DENIED, 'Create denied')
     }))).rejects.toMatchObject({ code: ErrorCode.POLICY_DENIED })
     expect(rowsAtDecision).toBe(0)
-    expect(await db.record.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(0)
-    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId } })).toBe(0)
+    expect(await db.record.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId, kind: { not: 'schema_change' } } })).toBe(0)
+    expect(await db.recordChange.count({ where: { organizationId: tenant.organizationId, teamId: tenant.teamId, kind: { not: 'schema_change' } } })).toBe(0)
   })
 })

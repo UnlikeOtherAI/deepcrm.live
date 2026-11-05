@@ -61,3 +61,13 @@ Jobs: `lint` (root `pnpm lint` incl. migrations + tenant-where lints), `typechec
 - Timestamps: set explicit `occurred_at` when order matters; Postgres rounds `timestamp(3)`.
 - Tests call services through the same `deps` object the app uses; no direct Prisma writes to CRM tables except in seed helpers.
 - No network: embeddings use `FakeEmbedder` (deterministic hash → vector), webhooks use an in-process Fastify receiver.
+
+## Schema watches
+
+`api/test/db/schema-change-feed.test.ts` performs real metadata mutations and
+checks field add/relabel/archive, both relation endpoints and wildcard types,
+transaction rollback, concurrent commit ordering, template no-ops and current
+schema/record/tenant policy. `api/test/mcp/records.test.ts` adds a field, relabels
+it and confirms its archive through the discovered MCP tools, reading the
+record-scoped feed after each mutation. These tests do not manufacture schema
+change rows. Run them with PostgreSQL through the normal Turbo API test task.
