@@ -70,6 +70,12 @@ beforeAll(async () => {
     resourceType: 'schema', action: 'define', effect: 'allow', priority: 100, requiresApproval: false, createdById: 'records-mcp',
     bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }, { actorType: 'role', actorId: 'owner' }] },
   } })
+  await db.policyRule.create({ data: {
+    organizationId: team.organizationId, teamId: team.id, scope: 'team', scopeId: team.id,
+    resourceType: 'schema', action: 'view', effect: 'allow', priority: 100, requiresApproval: false,
+    createdById: 'records-mcp',
+    bindings: { create: [{ actorType: 'agent', actorId: 'agent:dev:agent_dev' }, { actorType: 'role', actorId: 'owner' }] },
+  } })
   const applied = await call('crm_template_apply', { template: 'standard_crm' })
   const appliedContent = ToolResult.parse(applied).structuredContent
   if (typeof appliedContent === 'object' && appliedContent !== null && !Array.isArray(appliedContent)
