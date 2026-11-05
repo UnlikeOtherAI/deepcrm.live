@@ -61,6 +61,9 @@ Compose has no build configuration. See [deployment.md](docs/deployment.md).
 
 ## Docs discipline
 
+JSON attributes accept the `date` format for real Gregorian dates through
+`crm_attribute_define`; see the [schema engine contract](docs/schema-engine.md).
+
 Record watches consume `crm_changes_since` with explicit `record_ids`; save every
 returned cursor, including empty pages, and drain `has_more`. The native event
 and recovery contract is in [events.md](docs/spec/events.md#2-pull--crm_changes_since).
