@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 
 import { changesSince } from '../../src/services/io.js'
 import { seedDefaultPolicies } from '../../src/services/policy.js'
-import { createRecord } from '../../src/services/records.js'
+import { createRecord, updateRecord } from '../../src/services/records.js'
 import { archiveSchemaAttribute, archiveSchemaRelation, defineSchemaAttribute, defineSchemaRelation,
   updateSchemaAttribute, updateSchemaRelation } from '../../src/services/schema.js'
 import { linkContext, linkDeps } from './link-fixture.js'
@@ -105,11 +105,16 @@ describe('real schema mutation feed', () => {
     expect(await db.team.findUniqueOrThrow({ where: { id: target.tenant.teamId } }))
       .toMatchObject({ schemaVersion: before.schemaVersion, feedSeq: before.feedSeq })
     expect(await db.attribute.count({ where: { ...target.tenant, slug: 'review_detail' } })).toBe(0)
-    await Promise.all(['review_one', 'review_two'].map(slug => defineSchemaAttribute(deps, target.ctx, field('company', slug))))
+    await Promise.all([
+      ...['review_one', 'review_two'].map(slug => defineSchemaAttribute(deps, target.ctx, field('company', slug))),
+      updateRecord(deps, target.ctx, { recordId: target.company, expectedVersion: 1, data: { name: 'Updated company' } }),
+    ])
     const events = await db.recordChange.findMany({ where: { ...target.tenant, seq: { gt: before.feedSeq } },
       orderBy: { seq: 'asc' } })
-    expect(events.map(event => event.seq)).toEqual([before.feedSeq + 1n, before.feedSeq + 2n])
-    expect(events.map(event => event.resultingVersion)).toEqual([before.schemaVersion + 1, before.schemaVersion + 2])
+    expect(events.map(event => event.seq)).toEqual([before.feedSeq + 1n, before.feedSeq + 2n, before.feedSeq + 3n])
+    expect(events.filter(event => event.kind === 'schema_change').map(event => event.resultingVersion))
+      .toEqual([before.schemaVersion + 1, before.schemaVersion + 2])
+    expect(events.filter(event => event.recordId !== null)).toMatchObject([{ kind: 'set', recordId: target.company }])
     const after = await db.team.findUniqueOrThrow({ where: { id: target.tenant.teamId } })
     await db.$transaction(tx => applyTemplate(tx, target.tenant, target.author, 'standard_crm'))
     expect(await db.team.findUniqueOrThrow({ where: { id: target.tenant.teamId } }))
