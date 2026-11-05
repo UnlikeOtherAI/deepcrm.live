@@ -115,6 +115,15 @@ describe('real schema mutation feed', () => {
     expect(events.filter(event => event.kind === 'schema_change').map(event => event.resultingVersion))
       .toEqual([before.schemaVersion + 1, before.schemaVersion + 2])
     expect(events.filter(event => event.recordId !== null)).toMatchObject([{ kind: 'set', recordId: target.company }])
+    const concurrent = await db.$transaction(tx => Promise.all(['same_tx_one', 'same_tx_two'].map(slug =>
+      defineAttribute(tx, target.tenant, target.author, field('company', slug)))))
+    expect(concurrent).toHaveLength(2)
+    const sameTransactionEvents = await db.recordChange.findMany({
+      where: { ...target.tenant, seq: { gt: before.feedSeq + 3n } }, orderBy: { seq: 'asc' },
+    })
+    expect(sameTransactionEvents.map(event => event.seq)).toEqual([before.feedSeq + 4n, before.feedSeq + 5n])
+    expect(sameTransactionEvents.map(event => event.resultingVersion).sort((a, b) => a - b))
+      .toEqual([before.schemaVersion + 3, before.schemaVersion + 4])
     const after = await db.team.findUniqueOrThrow({ where: { id: target.tenant.teamId } })
     await db.$transaction(tx => applyTemplate(tx, target.tenant, target.author, 'standard_crm'))
     expect(await db.team.findUniqueOrThrow({ where: { id: target.tenant.teamId } }))

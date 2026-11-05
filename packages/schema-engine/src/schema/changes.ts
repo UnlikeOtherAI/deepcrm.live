@@ -45,14 +45,12 @@ export async function attributeSchemaObjects(
 export async function bumpSchemaVersion(
   tx: SchemaTx, tenant: TenantRef, actor: AuditActor, objectTypes: readonly string[],
 ): Promise<void> {
-  const result = await tx.team.updateMany({
-    where: { id: tenant.teamId, organizationId: tenant.organizationId },
-    data: { schemaVersion: { increment: 1 } },
-  })
-  if (result.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
-  const team = await tx.team.findFirstOrThrow({
-    where: { id: tenant.teamId, organizationId: tenant.organizationId }, select: { schemaVersion: true },
-  })
+  const [team] = await tx.$queryRaw<{ schemaVersion: number }[]>`
+    UPDATE teams SET schema_version = schema_version + 1
+    WHERE id = ${tenant.teamId}::uuid AND organization_id = ${tenant.organizationId}::uuid
+    RETURNING schema_version AS "schemaVersion"
+  `
+  if (team === undefined) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
   const groupId = randomUUID()
   await writeChangeRows(tx, { tenant, actor, onBehalfOf: actor.onBehalfOf,
     requestId: actor.requestId, provenance: actor.provenance }, [...new Set(objectTypes)].sort().map(objectType => ({

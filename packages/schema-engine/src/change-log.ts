@@ -4,7 +4,7 @@ import { ErrorCode, ServiceError, type ActorContext } from '@deepcrm/schemas'
 import type { ChangeIntent } from './records/changes.js'
 import type { JsonValue } from './records/json.js'
 
-export type ChangeLogTx = Pick<Db, 'team' | 'recordChange'>
+export type ChangeLogTx = Pick<Db, '$queryRaw' | 'recordChange'>
 export type ChangeAuthor = {
   tenant: TenantRef
   actor: ActorContext['actor']
@@ -28,16 +28,12 @@ export async function writeChangeRows(
   changes: readonly (ChangeIntent | SchemaChangeIntent)[],
 ): Promise<number[]> {
   if (changes.length === 0) return []
-  const advanced = await tx.team.updateMany({
-    where: { id: author.tenant.teamId, organizationId: author.tenant.organizationId },
-    data: { feedSeq: { increment: changes.length } },
-  })
-  if (advanced.count !== 1) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
-  const team = await tx.team.findFirst({
-    where: { id: author.tenant.teamId, organizationId: author.tenant.organizationId },
-    select: { feedSeq: true },
-  })
-  if (team === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
+  const [team] = await tx.$queryRaw<{ feedSeq: bigint }[]>`
+    UPDATE teams SET feed_seq = feed_seq + ${changes.length}::bigint
+    WHERE id = ${author.tenant.teamId}::uuid AND organization_id = ${author.tenant.organizationId}::uuid
+    RETURNING feed_seq AS "feedSeq"
+  `
+  if (team === undefined) throw new ServiceError(ErrorCode.NOT_FOUND, 'Tenant team not found')
   const first = Number(team.feedSeq) - changes.length + 1
   const sequences = changes.map((_, index) => first + index)
   for (const [index, change] of changes.entries()) {
