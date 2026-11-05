@@ -138,8 +138,15 @@ describe('record MCP tools', () => {
     await readMutation()
     structured(await call('crm_attribute_update', { object_type: 'company', attribute: field, name: 'Renamed detail' }))
     await readMutation()
+    structured(await call('crm_record_update', { id: company.id, data: { [field]: 'Archive probe value' } }))
+    cursor = z.object({ next_cursor: z.string() }).parse(structured(await call('crm_changes_since', {
+      cursor, record_ids: [company.id],
+    }))).next_cursor
     const args = { object_type: 'company', attribute: field, reason: 'Complete schema watch probe' }
     const challenge = z.object({ requestState: z.string() }).parse(await call('crm_attribute_archive', args))
+    expect(Feed.parse(structured(await call('crm_changes_since', {
+      cursor, record_ids: [company.id],
+    }))).changes).toEqual([])
     structured(await client.request({ method: 'tools/call', params: { name: 'crm_attribute_archive', arguments: args,
       requestState: challenge.requestState,
       inputResponses: { confirm: { action: 'accept', content: { confirmed: true } } },
