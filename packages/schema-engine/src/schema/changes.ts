@@ -46,7 +46,7 @@ export async function bumpSchemaVersion(
   tx: SchemaTx, tenant: TenantRef, actor: AuditActor, objectTypes: readonly string[],
 ): Promise<void> {
   const [team] = await tx.$queryRaw<{ schemaVersion: number }[]>`
-    UPDATE teams SET schema_version = schema_version + 1
+    UPDATE teams SET schema_version = schema_version + 1, updated_at = CURRENT_TIMESTAMP
     WHERE id = ${tenant.teamId}::uuid AND organization_id = ${tenant.organizationId}::uuid
     RETURNING schema_version AS "schemaVersion"
   `

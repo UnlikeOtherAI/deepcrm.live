@@ -29,7 +29,7 @@ export async function writeChangeRows(
 ): Promise<number[]> {
   if (changes.length === 0) return []
   const [team] = await tx.$queryRaw<{ feedSeq: bigint }[]>`
-    UPDATE teams SET feed_seq = feed_seq + ${changes.length}::bigint
+    UPDATE teams SET feed_seq = feed_seq + ${changes.length}::bigint, updated_at = CURRENT_TIMESTAMP
     WHERE id = ${author.tenant.teamId}::uuid AND organization_id = ${author.tenant.organizationId}::uuid
     RETURNING feed_seq AS "feedSeq"
   `
