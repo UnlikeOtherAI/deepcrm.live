@@ -2,6 +2,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import type { ValidateFunction } from 'ajv'
 import { z } from 'zod'
 
+import { GregorianDateSchema } from './date.js'
 import { instanceOf } from './json-example.js'
 import { type AttributeTypeDef, type ExampleValue } from './types.js'
 
@@ -127,6 +128,7 @@ function schemaHasExternalReference(schema: JsonValue): boolean {
 
 function createAjv(): Ajv2020 {
   return new Ajv2020({ allErrors: true, strict: true, loadSchema: undefined })
+    .addFormat('date', (value: string) => GregorianDateSchema.safeParse(value).success)
 }
 
 function compiledValidator(canonical: string): ValidateFunction {

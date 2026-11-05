@@ -224,7 +224,7 @@ export function registerSchemaTools(server: Parameters<typeof defineTool>[0], ct
 
   defineTool(server, {
     name: 'crm_attribute_define', title: 'Define attribute', group: 'schema', access: 'explicit',
-    description: 'Add an attribute (field) to an object type. Use record_reference to relate to other object types. Unique attributes enable crm_record_assert.',
+    description: 'Add an attribute (field) to an object type. Use record_reference to relate to other object types. Unique attributes enable crm_record_assert. JSON schemas support format: date for real Gregorian dates.',
     input: CrmAttributeDefine.in.shape,
     handler: withApproval(deps, ctx, 'crm_attribute_define', CrmAttributeDefine.in.shape, {
       resourceType: 'schema',

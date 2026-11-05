@@ -3,26 +3,15 @@ import { z } from 'zod'
 import { orderedFilterOps, type AttributeTypeDef } from './types.js'
 
 const configSchema = z.object({}).strict()
-const datePattern = /^(\d{4})-(\d{2})-(\d{2})$/u
-
-function isGregorianDate(value: string): boolean {
-  const match = datePattern.exec(value)
-  if (match === null) return false
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  if (month < 1 || month > 12 || day < 1) return false
-  const days = new Date(Date.UTC(year, month, 0)).getUTCDate()
-  return day <= days
-}
+export const GregorianDateSchema = z.string().date('must be a real Gregorian YYYY-MM-DD date')
 
 export const date: AttributeTypeDef = {
   type: 'date',
   configSchema,
-  valueSchema: () => z.string().refine(isGregorianDate, 'must be a real Gregorian YYYY-MM-DD date'),
+  valueSchema: () => GregorianDateSchema,
   example: () => '2026-01-15',
-  normalize: (value) => z.string().refine(isGregorianDate).parse(value),
-  toSearchText: (value) => z.string().refine(isGregorianDate).parse(value),
+  normalize: (value) => GregorianDateSchema.parse(value),
+  toSearchText: (value) => GregorianDateSchema.parse(value),
   supportsMulti: true,
   supportsUnique: true,
   supportsIndexed: true,

@@ -86,6 +86,19 @@ describe('json attribute hardening', () => {
     expect(jsonValidatorCacheStats().size).toBe(100)
   })
 
+  it('accepts date in nested JSON schemas and validates real calendar dates', () => {
+    const schema = valueSchema({
+      type: 'object', required: ['exceptions'],
+      properties: { exceptions: { type: 'array', items: { type: 'object', required: ['date'],
+        properties: { date: { type: 'string', format: 'date' } } } } },
+    })
+    expect(schema.safeParse({ exceptions: [{ date: '2024-02-29' }] }).success).toBe(true)
+    for (const date of ['2026-02-29', '2026-04-31', '2026-11-05T00:00:00Z'])
+      expect(schema.safeParse({ exceptions: [{ date }] }).success).toBe(false)
+    expect(json.configSchema.safeParse({ schema: { type: 'string', format: 'unknown-format' } }).success)
+      .toBe(false)
+  })
+
   it('keeps JSON opaque to the filter grammar', () => {
     expect(json.filterOps).toEqual([])
   })
