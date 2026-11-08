@@ -120,6 +120,7 @@ equivalent capability shape.
 <!-- tools:start:3 -->
 | Tool | Title | Group | Access | Description | Input | Output |
 |---|---|---|---|---|---|---|
+| `crm_record_create_admission` | Check record creation | `records` | `standard` | Check whether the current caller may start creating records of one object type. Returns allowed, approval_required or denied. Requires schema view. This is not a grant: create still checks current policy, fields and links. Unknown/archived types return UNKNOWN_OBJECT_TYPE. | `{ object_type: string }` | `{ object_type_id, schema_version, create, observed_at }` |
 | `crm_record_create` | Create record | `records` | `standard` | Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. source names the form, widget or import it came from (stored as first_source_*). Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. Refused values return VALIDATION_FAILED. | `{ object_type: string, data: object, links?: array, owner?: object, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, source?: object, reason?: string, idempotency_key?: string }` | `{ record, duplicates?: Candidate[] }` |
 | `crm_record_update` | Update record | `records` | `standard` | Patch attributes; null clears an attribute. Supply expected_version for concurrency protection. Metadata changes are policy enforced. | `{ id: string, data: object, owner?: object \| null, visibility?: "team" \| "users" \| "private", visible_to?: array, origin?: string, expected_version?: integer, reason?: string, idempotency_key?: string }` | `{ record }` |
 | `crm_record_assert` | Create or update record | `records` | `standard` | Create or patch by a unique attribute for sync/import writes. Multiple multi-value matches return DUPLICATE_FOUND. Inline links are atomic. | `{ object_type: string, match_attribute: string, data: object, links?: array, owner?: object, reason?: string, idempotency_key?: string }` | `{ record, created: boolean, duplicates?: Candidate[] }` |
@@ -258,12 +259,12 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 Every tool carries its group and access class in `tools/list` (§0.1); the table and list below are regenerated from the registrations by `pnpm docs:mcp`, and `api/test/mcp/surface.test.ts` pins the per-group counts, the explicit set, and that every tool has a unique title of at most 40 characters. A group's id never changes when its label does. The explicit set is the destructive and structural tools, plus `crm_intake_submit`, which no delegated caller may use; every read a granted mutator needs to resolve its ids is standard.
 
 <!-- tools:summary:start -->
-82 tools in 8 groups, 29 explicit and 53 standard.
+83 tools in 8 groups, 29 explicit and 54 standard.
 
 | Order | Group | Label | Tools | Explicit |
 |---|---|---|---|---|
 | 1 | `schema` | Schema | 18 | 16 |
-| 2 | `records` | Records | 17 | 2 |
+| 2 | `records` | Records | 18 | 2 |
 | 3 | `links` | Links | 3 | 0 |
 | 4 | `lists-views` | Lists and views | 9 | 0 |
 | 5 | `activity` | Activities, tasks and pipelines | 14 | 3 |

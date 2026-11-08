@@ -111,7 +111,7 @@ describe('schema MCP tools and resources', () => {
   it('lists schema tool input descriptions', async () => {
     const tools = await client.listTools()
     const schemaTools = tools.tools.filter((tool) => tool.name.startsWith('crm_'))
-    expect(schemaTools).toHaveLength(82)
+    expect(schemaTools).toHaveLength(83)
     for (const tool of schemaTools) {
       const parsed = z.object({ properties: z.record(z.object({ description: z.string().min(1) })) })
         .parse(tool.inputSchema)
@@ -135,7 +135,8 @@ describe('schema MCP tools and resources', () => {
     expect(JSON.parse(text.text)).toEqual(applied)
 
     const schema = structured(await call('crm_schema_get', {}))
-    const snapshot = z.object({ schema_version: z.number().int(), object_types: z.array(z.object({ slug: z.string() })) })
+    const snapshot = z.object({ schema_version: z.number().int(),
+      object_types: z.array(z.object({ slug: z.string() })) })
       .parse(schema)
     expect(snapshot.object_types.map((objectType) => objectType.slug)).toEqual(expect.arrayContaining([
       'person', 'company', 'deal',

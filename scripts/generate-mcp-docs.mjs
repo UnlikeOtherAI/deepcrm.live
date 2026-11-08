@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+const pnpmCli = process.env.npm_execpath
+if (!pnpmCli) throw new Error('Run documentation generation with pnpm docs:mcp')
 const surfacePath = fileURLToPath(new URL('../docs/mcp-surface.md', import.meta.url))
 const markerSections = ['2', '3', '4', '5', '6', '7', '7a', '8']
 const groupMetaKey = 'live.deepcrm/group'
@@ -32,11 +34,11 @@ function toolClass(name, meta) {
 }
 
 function readCatalog() {
-  execFileSync('pnpm', ['exec', 'turbo', 'run', 'build', '--filter=@deepcrm/api^...'], {
+  execFileSync(process.execPath, [pnpmCli, 'exec', 'turbo', 'run', 'build', '--filter=@deepcrm/api^...'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
-  const output = execFileSync('pnpm', ['exec', 'tsx', 'api/src/mcp/print-catalog.ts'], {
+  const output = execFileSync(process.execPath, [pnpmCli, 'exec', 'tsx', 'api/src/mcp/print-catalog.ts'], {
     cwd: repoRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -250,7 +252,7 @@ for (const tool of catalog) {
   catalogByName.set(tool.name, tool)
 }
 
-const markdown = readFileSync(surfacePath, 'utf8')
+const markdown = readFileSync(surfacePath, 'utf8').replaceAll('\r\n', '\n')
 const blocks = markerBlocks(markdown)
 const documentedNames = new Set()
 for (const section of markerSections) {

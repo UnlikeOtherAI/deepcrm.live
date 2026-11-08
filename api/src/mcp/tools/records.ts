@@ -1,5 +1,5 @@
 import {
-  CrmRecordAssert, CrmRecordAt, CrmRecordCreate, CrmRecordDelete, CrmRecordGetInput,
+  CrmRecordAssert, CrmRecordAt, CrmRecordCreate, CrmRecordCreateAdmission, CrmRecordDelete, CrmRecordGetInput,
   CrmRecordHistory, CrmRecordRestore, CrmRecordsQueryToolInput, CrmRecordUpdate, Filter,
   CrmRecordsBulkAssert, CrmRecordsCountToolInput, CrmRecordsGetMany,
   type ActorContext,
@@ -7,6 +7,7 @@ import {
 
 import type { AppDeps } from '../../deps.js'
 import { getManyRecords } from '../../services/record-collection.js'
+import { readRecordCreateAdmission } from '../../services/record-create-admission.js'
 import { getRecord } from '../../services/record-read.js'
 import { countRecords, queryRecords } from '../../services/record-query.js'
 import { enqueueBulkAssert } from '../../services/bulk-assert.js'
@@ -37,6 +38,12 @@ function inlineLinks(links: readonly ToolLink[] | undefined) {
 export function registerRecordTools(
   server: Parameters<typeof defineTool>[0], ctx: ActorContext, deps: AppDeps,
 ): void {
+  defineTool(server, {
+    name: 'crm_record_create_admission', title: 'Check record creation', group: 'records', access: 'standard',
+    description: 'Check whether the current caller may start creating records of one object type. Returns allowed, approval_required or denied. Requires schema view. This is not a grant: create still checks current policy, fields and links. Unknown/archived types return UNKNOWN_OBJECT_TYPE.',
+    input: CrmRecordCreateAdmission.in.shape,
+    handler: async (args) => jsonResult(await readRecordCreateAdmission(deps, ctx, args.object_type)),
+  })
   defineTool(server, {
     name: 'crm_record_create', title: 'Create record', group: 'records', access: 'standard',
     description: 'Create one record. Use crm_record_assert for sync-safe upserts. Inline links are atomic. source names the form, widget or import it came from (stored as first_source_*). Unique or block collisions return DUPLICATE_FOUND; warn matches return duplicates. Refused values return VALIDATION_FAILED.',
