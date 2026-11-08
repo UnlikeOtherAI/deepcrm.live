@@ -69,3 +69,7 @@ returned cursor, including empty pages, and drain `has_more`. The native event
 and recovery contract is in [events.md](docs/spec/events.md#2-pull--crm_changes_since).
 
 Behaviour, contract or topology change ⇒ the matching `docs/*.md` changes in the same commit. Finished plan files move to `docs/done/`. A change to the MCP surface updates `docs/mcp-surface.md` **and** the tool's description in code — the description is the spec agents read.
+
+Record creation visibility uses the read-only `crm_record_create_admission` tool,
+not schema readability or tool discovery. Its current decision never replaces
+actual create/field/link policy checks; see [the admission contract](docs/plans/2026-11-08-record-create-admission.md).
