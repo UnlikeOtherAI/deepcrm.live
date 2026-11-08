@@ -42,8 +42,9 @@ describe('compliance MCP tools', () => {
       where: { externalTeamId: 'team_dev' },
       select: { id: true, organizationId: true },
     })
-    await db.auditLog.deleteMany({
+    const existingAudit = await db.auditLog.findMany({
       where: { organizationId: team.organizationId, teamId: team.id, action: 'crm_write_guard_set' },
+      select: { id: true },
     })
 
     const result = CrmWriteGuardSet.out.parse(structured(await client.callTool({
@@ -69,7 +70,8 @@ describe('compliance MCP tools', () => {
       teamVisibilityOnlyApps: ['dev'],
     })
     await expect(db.auditLog.findFirstOrThrow({
-      where: { organizationId: team.organizationId, teamId: team.id, action: 'crm_write_guard_set' },
+      where: { organizationId: team.organizationId, teamId: team.id, action: 'crm_write_guard_set',
+        id: { notIn: existingAudit.map(entry => entry.id) } },
       orderBy: { createdAt: 'desc' },
     })).resolves.toMatchObject({
       action: 'crm_write_guard_set',

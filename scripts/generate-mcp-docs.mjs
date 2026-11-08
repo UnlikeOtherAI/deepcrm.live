@@ -252,7 +252,7 @@ for (const tool of catalog) {
   catalogByName.set(tool.name, tool)
 }
 
-const markdown = readFileSync(surfacePath, 'utf8')
+const markdown = readFileSync(surfacePath, 'utf8').replaceAll('\r\n', '\n')
 const blocks = markerBlocks(markdown)
 const documentedNames = new Set()
 for (const section of markerSections) {
