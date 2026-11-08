@@ -9,6 +9,7 @@ import { parseEnv } from '../../src/env.js'
 import { buildMcpServer } from '../../src/mcp/server.js'
 import { readRecordCreateAdmission } from '../../src/services/record-create-admission.js'
 import { createRecord } from '../../src/services/records.js'
+import { seedDefaultPolicies } from '../../src/services/policy.js'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) throw new Error('DATABASE_URL is required for record creation admission tests')
@@ -20,8 +21,10 @@ const deps = createAppDeps(parseEnv({ DATABASE_URL: databaseUrl, NODE_ENV: 'test
 const db = deps.db
 const organizations: string[] = []
 async function fixture() {
-  const tenant = await seedTenant(db)
+  const seeded = await seedTenant(db)
+  const tenant = { organizationId: seeded.organizationId, teamId: seeded.teamId }
   organizations.push(tenant.organizationId)
+  await db.$transaction(tx => seedDefaultPolicies(tx, tenant))
   const userId = 'admission-' + randomUUID()
   const ctx: ActorContext = { tenant, app: 'test', actChain: [], actor: { type: 'human', id: userId },
     onBehalfOf: { uoaUserId: userId, role: 'member' }, provenance: null,
