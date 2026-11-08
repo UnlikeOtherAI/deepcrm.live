@@ -25,13 +25,13 @@ const EXPLICIT_TOOLS = [
 
 // Every granted mutator ships with the read that resolves its ids.
 const RESOLVING_READS = [
-  'crm_schema_get', 'crm_record_get', 'crm_records_query', 'crm_links_list', 'crm_list_entries',
+  'crm_schema_get', 'crm_record_create_admission', 'crm_record_get', 'crm_records_query', 'crm_links_list', 'crm_list_entries',
   'crm_view_run', 'crm_tasks_list', 'crm_suppression_list', 'crm_webhook_list', 'crm_file_list',
   'crm_pipeline_stages_list', 'crm_derived_refresh_status',
 ]
 
 const GROUP_COUNTS = {
-  schema: 18, records: 17, links: 3, 'lists-views': 9,
+  schema: 18, records: 18, links: 3, 'lists-views': 9,
   activity: 14, 'search-quality': 5, compliance: 8, io: 8,
 }
 
@@ -112,7 +112,7 @@ describe('documented MCP tool surface', () => {
     const tools = (await client.listTools()).tools.map((tool) => ({
       name: tool.name, ...ToolClassMeta.parse(tool._meta),
     }))
-    expect(tools).toHaveLength(82)
+    expect(tools).toHaveLength(83)
 
     for (const tool of tools) {
       const group = tool['live.deepcrm/group']
@@ -129,7 +129,7 @@ describe('documented MCP tool surface', () => {
 
     const explicit = tools.filter((tool) => tool['live.deepcrm/access'] === 'explicit').map((tool) => tool.name)
     expect(sorted(explicit)).toEqual(sorted(EXPLICIT_TOOLS))
-    expect(tools.length - explicit.length).toBe(53)
+    expect(tools.length - explicit.length).toBe(54)
 
     const access = new Map(tools.map((tool) => [tool.name, tool['live.deepcrm/access']]))
     for (const read of RESOLVING_READS) expect(access.get(read), `${read} is a resolving read`).toBe('standard')
@@ -137,7 +137,7 @@ describe('documented MCP tool surface', () => {
 
   it('gives every listed tool a unique, trimmed title of at most 40 characters', async () => {
     const tools = (await client.listTools()).tools
-    expect(tools).toHaveLength(82)
+    expect(tools).toHaveLength(83)
     const titles = new Map<string, string>()
     for (const tool of tools) {
       const title = tool.title ?? ''
@@ -148,6 +148,7 @@ describe('documented MCP tool surface', () => {
     }
     const byName = new Map(tools.map((tool) => [tool.name, tool.title]))
     expect(byName.get('crm_record_create')).toBe('Create record')
+    expect(byName.get('crm_record_create_admission')).toBe('Check record creation')
     expect(byName.get('crm_records_query')).toBe('Query records')
     expect(byName.get('crm_schema_get')).toBe('Read workspace model')
   })

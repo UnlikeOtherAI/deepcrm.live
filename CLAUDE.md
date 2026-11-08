@@ -73,3 +73,5 @@ Behaviour, contract or topology change ⇒ the matching `docs/*.md` changes in t
 Record creation visibility uses the read-only `crm_record_create_admission` tool,
 not schema readability or tool discovery. Its current decision never replaces
 actual create/field/link policy checks; see [the admission contract](docs/plans/2026-11-08-record-create-admission.md).
+
+Run MCP documentation generation through pnpm docs:mcp. The generator reuses that pnpm CLI through Node on every platform, including Windows; it does not launch a platform-dependent pnpm executable.
