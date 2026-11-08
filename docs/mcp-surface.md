@@ -259,12 +259,12 @@ Prompts are text scaffolds referencing tool names; they contain no logic. Each s
 Every tool carries its group and access class in `tools/list` (§0.1); the table and list below are regenerated from the registrations by `pnpm docs:mcp`, and `api/test/mcp/surface.test.ts` pins the per-group counts, the explicit set, and that every tool has a unique title of at most 40 characters. A group's id never changes when its label does. The explicit set is the destructive and structural tools, plus `crm_intake_submit`, which no delegated caller may use; every read a granted mutator needs to resolve its ids is standard.
 
 <!-- tools:summary:start -->
-82 tools in 8 groups, 29 explicit and 53 standard.
+83 tools in 8 groups, 29 explicit and 54 standard.
 
 | Order | Group | Label | Tools | Explicit |
 |---|---|---|---|---|
 | 1 | `schema` | Schema | 18 | 16 |
-| 2 | `records` | Records | 17 | 2 |
+| 2 | `records` | Records | 18 | 2 |
 | 3 | `links` | Links | 3 | 0 |
 | 4 | `lists-views` | Lists and views | 9 | 0 |
 | 5 | `activity` | Activities, tasks and pipelines | 14 | 3 |
