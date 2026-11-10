@@ -11,6 +11,7 @@ export type ListLinksInput = {
   relationType?: string
   direction?: LinkDirection
   includeHistory?: boolean
+  includeDeletedRecord?: boolean
 }
 export type LinkOut = {
   id: string
@@ -29,22 +30,25 @@ export type LinkOut = {
 }
 export type ListedLink = { link: LinkOut; relatedRecordId: string }
 
-async function anchor(tx: RecordTx, ctx: ActorContext, recordId: string): Promise<string> {
+async function anchor(tx: RecordTx, ctx: ActorContext, recordId: string, includeDeleted: boolean): Promise<string> {
   const record = await tx.record.findFirst({
     where: { ...tenantWhere(ctx.tenant), id: recordId },
-    select: { id: true, deletedAt: true, mergedIntoId: true },
+    select: { id: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
   })
-  if (record === null)
+  if (record === null || record.erasedAt !== null)
     throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
   if (record.mergedIntoId === null) {
-    if (record.deletedAt !== null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
+    if (record.deletedAt !== null && !includeDeleted) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
     return recordId
   }
   const survivor = await tx.record.findFirst({
     where: { ...tenantWhere(ctx.tenant), id: record.mergedIntoId },
-    select: { id: true, deletedAt: true, mergedIntoId: true },
+    select: { id: true, deletedAt: true, mergedIntoId: true, erasedAt: true },
   })
-  if (survivor === null || survivor.deletedAt !== null || survivor.mergedIntoId !== null) {
+  if (
+    survivor === null || survivor.erasedAt !== null
+    || survivor.deletedAt !== null || survivor.mergedIntoId !== null
+  ) {
     throw new ServiceError(ErrorCode.MERGED, 'Merged record survivor is unavailable', {
       redirect_to: record.mergedIntoId,
     })
@@ -66,7 +70,7 @@ export async function listLinks(
   schema: LoadedSchema,
   input: ListLinksInput,
 ): Promise<readonly ListedLink[]> {
-  const anchorId = await anchor(tx, ctx, input.recordId)
+  const anchorId = await anchor(tx, ctx, input.recordId, input.includeDeletedRecord === true)
   const direction = input.direction ?? 'both'
   const relationId = relationTypeId(schema, input.relationType)
   const links = await tx.recordLink.findMany({

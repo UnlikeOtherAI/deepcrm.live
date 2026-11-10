@@ -71,3 +71,15 @@ schema/record/tenant policy. `api/test/mcp/records.test.ts` adds a field, relabe
 it and confirms its archive through the discovered MCP tools, reading the
 record-scoped feed after each mutation. These tests do not manufacture schema
 change rows. Run them with PostgreSQL through the normal Turbo API test task.
+
+## Deleted record recovery reads
+
+`api/test/db/deleted-records.test.ts` uses actual PostgreSQL and the record
+services to check active defaults, explicit deleted UUID reads, deleted-only
+pages, tenant/team/private visibility, read denial and approval, attribute
+redaction, filter/sort/projection/limits, state-bound cursors, erased/merged
+exclusion, restore conflicts and restored links. Unrecoverable lifecycle states
+are seeded fixtures; tests do not erase real records.
+`api/test/mcp/records.test.ts` discovers the inputs and performs delete, opted-in
+get with links, deleted query and restore over Streamable HTTP MCP. Run through
+Turbo with `DATABASE_URL` set; these suites deliberately require PostgreSQL.

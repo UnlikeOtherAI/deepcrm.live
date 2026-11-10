@@ -113,13 +113,17 @@ function assertTenant(tenant: TenantRef, ctx: ActorContext): void {
   }
 }
 
-export function rowAccess(tenant: TenantRef, ctx: ActorContext, objectType: LoadedObjectType): Prisma.Sql {
+export function rowAccess(
+  tenant: TenantRef, ctx: ActorContext, objectType: LoadedObjectType,
+  recordState: 'active' | 'deleted' = 'active',
+): Prisma.Sql {
   assertTenant(tenant, ctx)
   if (ctx.onBehalfOf === null) return Prisma.sql`false`
   const userId = ctx.onBehalfOf.uoaUserId
   return Prisma.sql`r.organization_id = ${tenant.organizationId}::uuid
     AND r.team_id = ${tenant.teamId}::uuid AND r.object_type_id = ${objectType.id}::uuid
-    AND r.deleted_at IS NULL AND r.merged_into_id IS NULL
+    AND ${recordState === 'deleted' ? Prisma.sql`r.deleted_at IS NOT NULL` : Prisma.sql`r.deleted_at IS NULL`}
+    AND r.merged_into_id IS NULL AND r.erased_at IS NULL
     AND (r.visibility = 'team' OR r.created_on_behalf_of = ${userId}
       OR (r.visibility = 'users' AND EXISTS (SELECT 1 FROM record_visibility_grants g
         WHERE g.record_id = r.id AND g.uoa_user_id = ${userId})))

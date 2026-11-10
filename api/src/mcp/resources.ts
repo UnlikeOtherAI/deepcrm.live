@@ -129,7 +129,7 @@ export function registerResources(server: McpServer, ctx: ActorContext, deps: Ap
 
   server.registerResource('schema', 'crm://schema', {
     title: 'Workspace schema',
-    description: 'Current object types, relation types, and matching rules for this workspace.',
+    description: 'Current object types, relation types, and matching rules for this workspace. For recovery, discover crm_records_query record_state=deleted and crm_record_get include_deleted=true (UUID only) in tools/list; current read policy and visibility still apply.',
     mimeType: 'application/json',
   }, async (uri) => {
     const [schema, lists, views] = await Promise.all([getSchema(deps, ctx), listLists(deps, ctx), listViews(deps, ctx)])

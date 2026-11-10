@@ -33,6 +33,7 @@ export type GetRecordInput = {
   objectType?: string
   matchAttribute?: string
   value?: unknown
+  includeDeleted?: boolean
   includeLinks?: boolean
   includeTimeline?: number
 }
@@ -67,6 +68,12 @@ function invalid(path: string, message: string): never {
 }
 
 function lookup(input: GetRecordInput): Lookup {
+  if (input.includeDeleted !== undefined && typeof input.includeDeleted !== 'boolean') {
+    invalid('/include_deleted', 'Include deleted must be boolean')
+  }
+  if (input.includeDeleted === true && input.id === undefined) {
+    invalid('/id', 'Include deleted requires UUID id')
+  }
   const id = input.id !== undefined
   const objectType = input.objectType !== undefined
   const matchAttribute = input.matchAttribute !== undefined
@@ -166,7 +173,7 @@ export function asQueryRecord(row: {
   id: string; objectTypeId: string; data: unknown; displayName: string
   ownerType: QueryRecord['ownerType']; ownerId: string | null
   visibility: QueryRecord['visibility']; createdOnBehalfOf: string | null; origin: string | null
-  version: number; lastActivityAt: Date | null; createdAt: Date; updatedAt: Date
+  version: number; lastActivityAt: Date | null; createdAt: Date; updatedAt: Date; deletedAt?: Date | null
 }): QueryRecord {
   if (!isJsonObject(row.data)) {
     throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Record data is invalid')
@@ -175,7 +182,7 @@ export function asQueryRecord(row: {
 }
 
 async function visibleRecord(
-  deps: AppDeps, ctx: ActorContext, id: string,
+  deps: AppDeps, ctx: ActorContext, id: string, includeDeleted: boolean,
 ): Promise<{ record: QueryRecord; redirectedFrom?: string }> {
   const resolved = await resolveVisibleRecord(deps.db, ctx, id)
   const state = await deps.db.record.findFirst({
@@ -188,12 +195,12 @@ async function visibleRecord(
   const row = await deps.db.record.findFirst({
     where: {
       ...tenantWhere(ctx.tenant), id: resolved.record.id,
-      deletedAt: null, mergedIntoId: null, erasedAt: null,
+      ...(includeDeleted ? {} : { deletedAt: null }), mergedIntoId: null, erasedAt: null,
     },
     select: {
       id: true, objectTypeId: true, data: true, displayName: true, ownerType: true, ownerId: true,
       visibility: true, createdOnBehalfOf: true, origin: true, version: true, lastActivityAt: true,
-      createdAt: true, updatedAt: true,
+      createdAt: true, updatedAt: true, deletedAt: true,
     },
   })
   if (row === null) throw new ServiceError(ErrorCode.NOT_FOUND, 'Record not found')
@@ -308,14 +315,16 @@ export async function getRecord(
     const recordId = target.kind === 'id'
       ? target.id
       : await resolveUnique(deps, ctx, schema, target)
-    const resolved = await visibleRecord(deps, ctx, recordId)
+    const resolved = await visibleRecord(deps, ctx, recordId, input.includeDeleted === true)
     const primary = resolved.record
     const objectType = schema.objectTypesById.get(primary.objectTypeId)
     if (objectType === undefined || objectType.archivedAt !== null) {
       throw new ServiceError(ErrorCode.SCHEMA_CONFLICT, 'Record object type is not active')
     }
     const entries = input.includeLinks === true
-      ? await listLinks(deps.db, ctx, schema, { recordId: primary.id })
+      ? await listLinks(deps.db, ctx, schema, {
+        recordId: primary.id, includeDeletedRecord: input.includeDeleted === true,
+      })
       : []
     const relatedIds = entries.map((entry) => entry.relatedRecordId)
     const visibleRelated = await findVisibleLiveRecords(deps.db, ctx, relatedIds)
@@ -328,7 +337,7 @@ export async function getRecord(
       select: {
         id: true, objectTypeId: true, data: true, displayName: true, ownerType: true, ownerId: true,
         visibility: true, createdOnBehalfOf: true, origin: true, version: true, lastActivityAt: true,
-        createdAt: true, updatedAt: true,
+        createdAt: true, updatedAt: true, deletedAt: true,
       },
     })
     const related = relatedRows.map(asQueryRecord)

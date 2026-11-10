@@ -337,6 +337,30 @@ describe('record MCP tools', () => {
     const at = structured(await call('crm_record_at', { id: personId, at: new Date().toISOString() }))
     expect(z.object({ record_at: z.object({ version_at: z.number().int() }) }).parse(at).record_at.version_at).toBeGreaterThan(0)
     expect(structured(await call('crm_record_delete', { id: personId })).deleted).toBe(true)
+    const tools = (await client.listTools()).tools
+    expect(tools.find((tool) => tool.name === 'crm_record_get')?.inputSchema.properties)
+      .toHaveProperty('include_deleted')
+    expect(tools.find((tool) => tool.name === 'crm_records_query')?.inputSchema.properties)
+      .toHaveProperty('record_state')
+    expect(ToolResult.parse(await call('crm_record_get', { id: personId })).structuredContent)
+      .toMatchObject({ code: 'NOT_FOUND' })
+    const recovery = structured(await call('crm_record_get', {
+      id: personId, include_deleted: true, include_links: true,
+    }))
+    expect(recovery).toMatchObject({ record: { id: personId, deleted_at: expect.any(String) }, links: {} })
+    const deleted = structured(await call('crm_records_query', {
+      object_type: 'person', record_state: 'deleted', include_total: true,
+    }))
+    expect(deleted).toMatchObject({ records: [expect.objectContaining({ id: personId })], total: 1 })
+    expect(ToolResult.parse(await call('crm_record_get', {
+      object_type: 'person', match_attribute: 'emails', value: 'recovery@example.test', include_deleted: true,
+    })).structuredContent).toMatchObject({ code: 'VALIDATION_FAILED' })
+
     expect(z.object({ record: z.object({ id: z.string() }) }).parse(structured(await call('crm_record_restore', { id: personId }))).record.id).toBe(personId)
+    expect(structured(await call('crm_records_query', { object_type: 'person', record_state: 'deleted' })))
+      .toMatchObject({ records: [] })
+    expect(structured(await call('crm_record_get', { id: personId })))
+      .toMatchObject({ record: { id: personId, deleted_at: null } })
+
   })
 })

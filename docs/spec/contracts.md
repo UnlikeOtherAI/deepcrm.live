@@ -327,6 +327,7 @@ export const RecordOut = RecordSummary.extend({
   created_at: IsoDateTime, updated_at: IsoDateTime, last_activity_at: IsoDateTime.nullable(),
   redacted_attributes: z.array(Slug).describe('attributes hidden by policy'),
   redirected_from: Uuid.optional().describe('present when the requested id was merged into this record'),
+  deleted_at: IsoDateTime.nullable().optional().describe('soft-deletion time; null when active'),
 })
 export type RecordOut = z.infer<typeof RecordOut>
 
@@ -547,13 +548,16 @@ export const CrmRecordAssert = { in: z.object({ object_type: Slug,
     duplicates: z.array(Candidate).optional() }) }
 export const CrmRecordGet = { in: z.object({ id: Uuid.optional(), object_type: Slug.optional(),
   match_attribute: Slug.optional(), value: z.unknown().optional(),
+  include_deleted: z.boolean().default(false).describe('include recoverable deleted UUID; requires id'),
   include_links: z.boolean().default(false), include_timeline: z.number().int().min(0).max(50).default(0)
     .describe('number of recent timeline items to include') })
   .refine(a => a.id || (a.object_type && a.match_attribute && a.value !== undefined),
-    'id, or object_type + match_attribute + value'),
+    'id, or object_type + match_attribute + value')
+  .refine(a => !a.include_deleted || a.id !== undefined, 'include_deleted requires UUID id'),
   out: z.object({ record: RecordOut, links: z.record(Slug, z.array(z.object({ link: LinkOut,
     related: RecordSummary }))).optional(), timeline: z.array(TimelineItem).optional() }) }
-export const CrmRecordsQuery = { in: z.object({ object_type: Slug, filter: Filter.optional(),
+export const CrmRecordsQuery = { in: z.object({ object_type: Slug,
+  record_state: z.enum(['active', 'deleted']).default('active').describe('exclusive recoverable record state'), filter: Filter.optional(),
   sort: Sort.optional(), attributes: z.array(Slug).max(50).optional().describe('project only these'),
   include_total: z.boolean().default(false), cursor: Cursor, limit: Limit }),
   out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(),

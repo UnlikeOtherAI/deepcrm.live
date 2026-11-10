@@ -32,6 +32,7 @@ import {
 import { buildRedactionMatrix, redactForActor, type RecordOut } from './redact.js'
 
 export type RecordQueryInput = {
+  recordState?: 'active' | 'deleted'
   objectType: string
   filter?: Filter
   sort?: Sort
@@ -48,6 +49,7 @@ export type RecordQueryResult = {
 }
 
 type NormalizedQuery = {
+  recordState: 'active' | 'deleted'
   objectType: string
   filter?: Filter
   sort: Sort
@@ -72,6 +74,9 @@ function invalidQuery(path: string, message: string): never {
 }
 
 function parseQuery(input: RecordQueryInput, maxLimit = 200): NormalizedQuery {
+  if (input.recordState !== undefined && input.recordState !== 'active' && input.recordState !== 'deleted') {
+    invalidQuery('/record_state', 'Record state must be active or deleted')
+  }
   if (input.includeTotal !== undefined && typeof input.includeTotal !== 'boolean') {
     invalidQuery('/include_total', 'Include total must be boolean')
   }
@@ -109,6 +114,7 @@ function parseQuery(input: RecordQueryInput, maxLimit = 200): NormalizedQuery {
     invalidQuery('/limit', `Limit must be an integer from 1 to ${maxLimit}`)
   }
   return {
+    recordState: input.recordState ?? 'active',
     objectType: objectType.data,
     ...(parsedFilter === undefined ? {} : { filter: parsedFilter }),
     sort: parsedSort,
@@ -121,6 +127,7 @@ function parseQuery(input: RecordQueryInput, maxLimit = 200): NormalizedQuery {
 function recordCursorArguments(query: NormalizedQuery): Record<string, unknown> {
   return {
     object_type: query.objectType,
+    record_state: query.recordState,
     filter: query.filter ?? null,
     sort: query.sort,
     attributes: query.attributes ?? null,
@@ -178,6 +185,7 @@ async function queryRecordsOperation(
       ? undefined
       : deps.queryCursor.open(input.cursor, cursorBinding)
     const engineInput: QueryInput = {
+      recordState: query.recordState,
       ...(query.filter === undefined ? {} : { filter: query.filter }),
       sort: query.sort,
       ...(after === undefined ? {} : { after }),
