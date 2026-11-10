@@ -11,6 +11,7 @@ import type { QueryCursorState, QueryFilter, QueryInput, QueryOperator, QuerySor
 
 export type CompiledQuery = { sql: Prisma.Sql; countSql: Prisma.Sql }
 export type RecordSetInput = {
+  recordState?: 'active' | 'deleted'
   filter?: QueryFilter
   attributes?: readonly LoadedAttribute[]
 }
@@ -415,6 +416,9 @@ export function compileRecordSet(
   objectType: LoadedObjectType,
   input: RecordSetInput,
 ): Prisma.Sql {
+  if (input.recordState !== undefined && input.recordState !== 'active' && input.recordState !== 'deleted') {
+    failure('record_state')
+  }
   const attributes = new Map<string, LoadedAttribute>()
   for (const attribute of filterAttributes(schema, objectType, input.filter)) {
     attributes.set(attribute.id, attribute)
@@ -428,7 +432,7 @@ export function compileRecordSet(
   const filter = input.filter === undefined
     ? Prisma.empty
     : Prisma.sql` AND ${filters(schema, objectType, input.filter, ctx)}`
-  return Prisma.sql`${rowAccess(tenant, ctx, objectType)}${
+  return Prisma.sql`${rowAccess(tenant, ctx, objectType, input.recordState)}${
     attributeReadAccess(tenant, ctx, objectType, [...attributes.values()])
   }${filter}`
 }
@@ -445,8 +449,9 @@ export function compileQuery(
   const keys = sortKeys(schema, objectType, input.sort)
   const base = compileRecordSet(tenant, ctx, schema, objectType, {
     ...(input.filter === undefined ? {} : { filter: input.filter }),
+    ...(input.recordState === undefined ? {} : { recordState: input.recordState }),
     attributes: keys.flatMap((key) => key.attribute === undefined ? [] : [key.attribute]),
   })
-  const fields = Prisma.sql`r.id, r.object_type_id AS "objectTypeId", r.data, r.display_name AS "displayName", r.owner_type AS "ownerType", r.owner_id AS "ownerId", r.visibility, r.created_on_behalf_of AS "createdOnBehalfOf", r.origin, r.version, r.last_activity_at AS "lastActivityAt", r.created_at AS "createdAt", r.updated_at AS "updatedAt"`
+  const fields = Prisma.sql`r.id, r.object_type_id AS "objectTypeId", r.data, r.display_name AS "displayName", r.owner_type AS "ownerType", r.owner_id AS "ownerId", r.visibility, r.created_on_behalf_of AS "createdOnBehalfOf", r.origin, r.version, r.last_activity_at AS "lastActivityAt", r.created_at AS "createdAt", r.updated_at AS "updatedAt", r.deleted_at AS "deletedAt"`
   return { sql: Prisma.sql`SELECT ${fields}, ${cursorSelect(keys)} FROM records r WHERE ${base}${afterPredicate(keys, input.after)} ORDER BY ${order(keys)} LIMIT ${limit + 1}`, countSql: Prisma.sql`SELECT count(*)::int AS total FROM records r WHERE ${base}` }
 }

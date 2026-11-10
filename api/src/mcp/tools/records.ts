@@ -93,19 +93,19 @@ export function registerRecordTools(
   })
   defineTool(server, {
     name: 'crm_record_get', title: 'Read record', group: 'records', access: 'standard',
-    description: 'Fetch one visible record by id or a unique attribute. include_links groups active related records; include_timeline returns recent activity.',
+    description: 'Read visible active records by id/unique value. Recovery: include_deleted requires UUID id; returns deleted_at. Same policy/redaction. include_links shows active visible links. Errors: NOT_FOUND, ERASED, MERGED, POLICY_DENIED, APPROVAL_REQUIRED, VALIDATION_FAILED. Use query for lists.',
     input: CrmRecordGetInput.shape,
     handler: async (args) => jsonResult(await getRecord(deps, ctx, {
       id: args.id, objectType: args.object_type, matchAttribute: args.match_attribute, value: args.value,
-      includeLinks: args.include_links, includeTimeline: args.include_timeline,
+      includeDeleted: args.include_deleted, includeLinks: args.include_links, includeTimeline: args.include_timeline,
     })),
   })
   defineTool(server, {
     name: 'crm_records_query', title: 'Query records', group: 'records', access: 'standard',
-    description: 'List visible records with exact structured filters, sort and opaque cursor. Use crm_record_get for a known record and crm_search for fuzzy text.',
+    description: 'List active or record_state=deleted recoverable rows; excludes merged/erased. Same visibility/policy/redaction. Exact filters/sort/projection and bounded cursors. Changed state/scope/args: VALIDATION_FAILED. Read gates: POLICY_DENIED/APPROVAL_REQUIRED. Use get for UUIDs, search for fuzzy text.',
     input: CrmRecordsQueryToolInput.shape,
     handler: async (args) => jsonResult(await queryRecords(deps, ctx, {
-      objectType: args.object_type,
+      objectType: args.object_type, recordState: args.record_state,
       filter: args.filter === undefined ? undefined : Filter.parse(args.filter),
       sort: args.sort, attributes: args.attributes, includeTotal: args.include_total,
       cursor: args.cursor, limit: args.limit,

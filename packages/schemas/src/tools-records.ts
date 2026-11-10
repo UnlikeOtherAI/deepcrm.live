@@ -13,6 +13,7 @@ export const RecordOut = RecordSummary.extend({
   owner: Actor.nullable(), created_at: IsoDateTime, updated_at: IsoDateTime,
   last_activity_at: IsoDateTime.nullable(), redacted_attributes: z.array(Slug),
   redirected_from: Uuid.optional(),
+  deleted_at: IsoDateTime.nullable().optional().describe('soft-deletion timestamp; null for active records'),
 })
 export const LinkInput = z.object({
   relation_type: Slug.describe('active relation slug from the new record to to_record_id'),
@@ -65,11 +66,12 @@ export const CrmRecordAssert = { in: z.object({
 export const CrmRecordGetInput = z.object({
   id: Uuid.optional().describe('record id'), object_type: Slug.optional().describe('object type for unique lookup'),
   match_attribute: Slug.optional().describe('unique attribute for lookup'), value: z.unknown().optional().describe('unique attribute value'),
+  include_deleted: z.boolean().default(false).describe('allow a soft-deleted record by UUID id only; current read policy still applies'),
   include_links: z.boolean().default(false).describe('group active visible links by relation'),
   include_timeline: z.number().int().min(0).max(50).default(0).describe('recent timeline item count'),
 })
-export const CrmRecordGet = { in: CrmRecordGetInput.refine((value) => value.id !== undefined || (value.object_type !== undefined && value.match_attribute !== undefined && value.value !== undefined), 'id, or object_type + match_attribute + value'), out: z.object({ record: RecordOut, links: z.record(Slug, z.array(z.object({ link: LinkOut, related: RecordSummary }))).optional(), timeline: z.array(TimelineItem).optional() }) }
-export const CrmRecordsQuery = { in: z.object({ object_type: Slug.describe('object type slug'), filter: Filter.optional().describe('structured exact filter'), sort: Sort.optional().describe('ordered sort keys'), attributes: z.array(Slug).max(50).optional().describe('attributes to project'), include_total: z.boolean().default(false).describe('include exact total'), cursor: Cursor, limit: Limit }), out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(), total: z.number().int().optional() }) }
+export const CrmRecordGet = { in: CrmRecordGetInput.refine((value) => value.id !== undefined || (value.object_type !== undefined && value.match_attribute !== undefined && value.value !== undefined), 'id, or object_type + match_attribute + value').refine((value) => !value.include_deleted || value.id !== undefined, 'include_deleted requires UUID id'), out: z.object({ record: RecordOut, links: z.record(Slug, z.array(z.object({ link: LinkOut, related: RecordSummary }))).optional(), timeline: z.array(TimelineItem).optional() }) }
+export const CrmRecordsQuery = { in: z.object({ object_type: Slug.describe('object type slug'), record_state: z.enum(['active', 'deleted']).default('active').describe('list only active or only recoverable soft-deleted records; excludes erased and merged rows'), filter: Filter.optional().describe('structured exact filter'), sort: Sort.optional().describe('ordered sort keys'), attributes: z.array(Slug).max(50).optional().describe('attributes to project'), include_total: z.boolean().default(false).describe('include exact total'), cursor: Cursor, limit: Limit }), out: z.object({ records: z.array(RecordOut), next_cursor: z.string().nullable(), total: z.number().int().optional() }) }
 // The MCP SDK's JSON-schema exporter cannot traverse z.lazy(Filter). The service parses this
 // field again with Filter, while discovery receives a bounded opaque JSON argument description.
 export const CrmRecordsQueryToolInput = CrmRecordsQuery.in.extend({

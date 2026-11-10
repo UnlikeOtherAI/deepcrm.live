@@ -21,6 +21,7 @@ export type QueryRecord = {
   version: number
   lastActivityAt: Date | null
   createdAt: Date
+  deletedAt?: Date | null
   updatedAt: Date
 }
 export type QueryPage = { records: readonly QueryRecord[]; next: QueryCursorState | null; total?: number }

@@ -20,6 +20,7 @@ export type RecordOut = {
   origin: string | null
   owner: { type: 'human' | 'agent'; id: string } | null
   created_at: string
+  deleted_at?: string | null
   updated_at: string
   last_activity_at: string | null
   redacted_attributes: string[]
@@ -124,6 +125,7 @@ export function redactForActor(
     owner: owner(record),
     created_at: record.createdAt.toISOString(),
     updated_at: record.updatedAt.toISOString(),
+    ...(record.deletedAt === undefined ? {} : { deleted_at: record.deletedAt?.toISOString() ?? null }),
     last_activity_at: record.lastActivityAt?.toISOString() ?? null,
     redacted_attributes: redacted,
   }

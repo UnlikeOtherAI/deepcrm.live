@@ -75,3 +75,10 @@ not schema readability or tool discovery. Its current decision never replaces
 actual create/field/link policy checks; see [the admission contract](docs/plans/2026-11-08-record-create-admission.md).
 
 Run MCP documentation generation through pnpm docs:mcp. The generator reuses that pnpm CLI through Node on every platform, including Windows; it does not launch a platform-dependent pnpm executable.
+
+Recovery reads use `crm_record_get {id, include_deleted: true}` (UUID only) and
+`crm_records_query {object_type, record_state: "deleted"}`. Both retain current
+read entitlements, visibility and attribute redaction. `RecordOut.deleted_at` is
+an optional nullable ISO timestamp. Query cursors bind the selected state;
+default reads, counts, saved views and exports remain active-only. See
+[the recovery contract](docs/schema-engine.md#recovery-reads).

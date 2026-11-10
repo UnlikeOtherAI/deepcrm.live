@@ -1865,3 +1865,37 @@ Sales/service template notes:
 ## 10. Error codes (`@deepcrm/schemas/errors.ts`)
 
 `POLICY_DENIED`, `APPROVAL_REQUIRED`, `UNKNOWN_OBJECT_TYPE`, `UNKNOWN_ATTRIBUTE`, `ATTRIBUTE_ARCHIVED`, `ATTRIBUTE_READ_ONLY`, `VALIDATION_FAILED {issues}`, `VERSION_CONFLICT {current}`, `DUPLICATE_FOUND {attribute?, record_id?, candidates?}`, `NOT_FOUND`, `MERGED {redirect_to}`, `CARDINALITY_VIOLATION`, `DELETE_RESTRICTED`, `SCHEMA_CONFLICT {detail}`, `IDEMPOTENCY_MISMATCH`, `IDEMPOTENCY_IN_PROGRESS`, `RESTORE_CONFLICT {attribute, held_by}`, `UNKNOWN_TEMPLATE {available}`, `TENANT_MISMATCH`, `TENANT_REPARENTING` (retryable — UOA re-parented the team and reconciliation is running), `ORIGIN_REJECTED {origin}`, `VISIBILITY_REJECTED`, `ERASED`, `LIMIT_EXCEEDED {limit}`, `INTERNAL {correlation_id}`, `TENANT_NOT_FOUND` (a subject-attested call for a team with no workspace; auth-and-tenancy §3). **`ErrorCode` is append-only** — codes are never renamed or removed, so consumers may treat unknown codes as fatal-and-surface (R8). Error messages are templates and never echo submitted values; `VALIDATION_FAILED.issues[].path` is an RFC 6901 JSON Pointer, and op/type-mismatch issues name the ops valid for the attribute's type. An issue that refuses an attribute value for its type (record and list-entry data, link edge data, a `crm_record_get` match value) adds `type` and `expected` — the attribute's type and its example value (§3), array-wrapped for a multi attribute; stored-data integrity issues (a slug with no stored attribute) carry neither.
+
+## Recovery reads
+
+`crm_record_get` defaults to active records. Set `include_deleted: true` with a
+UUID `id` to inspect a recoverable soft-deleted record before restore. This
+option rejects unique-value lookups with `VALIDATION_FAILED`: deletion releases
+unique keys, so several deleted records can share a value. Existing visible
+merge-loser redirects still return the active survivor with `redirected_from`;
+an unavailable survivor returns `MERGED`. Erased records return `ERASED` only
+after tenant and visibility checks, and never return record data.
+
+`crm_records_query` accepts `record_state: "active" | "deleted"` (default
+`"active"`). Each page contains only that state; deleted pages exclude merged
+and erased rows. Exact filters, sort, projection, totals and limits are shared
+with active queries. The opaque authenticated cursor binds the state, tenant,
+filter, sort, projection, total flag and limit. Reusing it with changed arguments
+returns `VALIDATION_FAILED {detail: "cursor_mismatch"}`. Previously issued query
+cursors must be restarted after this contract release.
+
+Both reads use current organisation/team scope, record visibility, read policy,
+approval gates and attribute redaction. Owner/admin roles never bypass private
+visibility. No delete, restore or erase entitlement changes. `RecordOut` adds
+optional nullable `deleted_at`: an ISO timestamp on deleted reads and null on
+active get/query reads. Existing response envelopes are unchanged.
+
+`include_links: true` works on an opted-in deleted UUID and returns only current
+active, visible, policy-readable links. Deletion ends links; ended recoverable
+links are absent until restore succeeds. `RESTORE_CONFLICT` leaves the record in
+the deleted set; a successful restore removes it from that set. Notes remain
+independent records with the existing unlink relation defaults.
+
+Release verification is machine-only: exercise discovered MCP tools against a
+local migrated PostgreSQL backend, then check the exact deployed revision and
+tool schemas. No product screen or native build is part of this contract.

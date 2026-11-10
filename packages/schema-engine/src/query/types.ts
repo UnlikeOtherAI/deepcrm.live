@@ -20,6 +20,7 @@ export type QueryCursorState = {
 }
 
 export type QueryInput = {
+  recordState?: 'active' | 'deleted'
   filter?: QueryFilter
   sort?: QuerySort
   after?: QueryCursorState
